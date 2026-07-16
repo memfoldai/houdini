@@ -28,27 +28,40 @@ pub struct AppConfig {
     /// OpenTelemetry `service.instance.id` recommendation). Carried in every
     /// extract so lines from different machines are distinguishable. Random —
     /// derived from nothing, reveals nothing.
+    #[serde(default = "generate_uuid_v4")]
     pub install_id: String,
+    // Every tunable below carries a `serde(default)` so a config.json written by
+    // an OLDER version — which lacks fields added later — still loads (the
+    // missing field takes its default) instead of failing. `load_or_init` then
+    // rewrites the file so it gains the new fields. Adding a field here WITHOUT
+    // a default would crash every existing install on upgrade.
     /// Sampling cadence while armed, in milliseconds.
+    #[serde(default = "d_sample_interval_ms")]
     pub sample_interval_ms: u64,
     /// Every Nth tick is a FULL sweep over all windows (all displays, Spaces,
     /// background); other ticks sample only the frontmost app. Bounds the OCR
     /// cost of watching everything.
+    #[serde(default = "d_full_sweep_every_ticks")]
     pub full_sweep_every_ticks: u32,
     /// Windows smaller than this (points²) are skipped — a surface too small to
     /// host a conversation (status items, palettes). Tunable, not hardcoded.
+    #[serde(default = "d_min_surface_area")]
     pub min_surface_area: f64,
     /// At most this many OCR captures per full sweep; the rest are logged as
     /// skipped (no silent truncation) and picked up next sweep.
+    #[serde(default = "d_max_ocr_per_sweep")]
     pub max_ocr_per_sweep: usize,
     /// Minimum time between OCR captures of the SAME window (ms). OCR is the
     /// expensive path (a screenshot + Vision pass); this decouples its cost
     /// from the sample rate so a frontmost browser is not OCR'd several times a
     /// second. The detector still confirms streaming within a few of these.
+    #[serde(default = "d_ocr_min_interval_ms")]
     pub ocr_min_interval_ms: u64,
     /// How long (ms) of no growth ends an active AI session.
+    #[serde(default = "d_session_idle_gap_ms")]
     pub session_idle_gap_ms: u64,
     /// Detector thresholds (see `DetectorConfig`).
+    #[serde(default)]
     pub detector: DetectorConfigSerde,
     /// Optional directory holding a provisioned token-mode GLiNER-PII model
     /// (tokenizer.json + model.onnx). When set AND the binary is built with the
@@ -98,18 +111,39 @@ impl Default for DetectorConfigSerde {
     }
 }
 
+// Field defaults — the single source of truth for both `fresh()` and the
+// per-field `serde(default)`s, so an old config missing a field and a
+// first-run config agree on the value.
+fn d_sample_interval_ms() -> u64 {
+    350 // ~3 Hz on the frontmost app
+}
+fn d_full_sweep_every_ticks() -> u32 {
+    6 // full multi-window sweep ~every 2.1 s
+}
+fn d_min_surface_area() -> f64 {
+    40_000.0 // ~250×160 pt — smallest plausible chat window
+}
+fn d_max_ocr_per_sweep() -> usize {
+    6
+}
+fn d_ocr_min_interval_ms() -> u64 {
+    800 // OCR any one window at most ~1.25×/s
+}
+fn d_session_idle_gap_ms() -> u64 {
+    4_000
+}
+
 impl AppConfig {
     fn fresh(salt: String, install_id: String) -> Self {
         Self {
             salt,
             install_id,
-            sample_interval_ms: 350, // ~3 Hz on the frontmost app
-            full_sweep_every_ticks: 6, // full multi-window sweep ~every 2.1 s
-            min_surface_area: 40_000.0, // ~250×160 pt — smallest plausible chat window
-            max_ocr_per_sweep: 6,
-            ocr_min_interval_ms: 800, // OCR any one window at most ~1.25×/s
-
-            session_idle_gap_ms: 4_000,
+            sample_interval_ms: d_sample_interval_ms(),
+            full_sweep_every_ticks: d_full_sweep_every_ticks(),
+            min_surface_area: d_min_surface_area(),
+            max_ocr_per_sweep: d_max_ocr_per_sweep(),
+            ocr_min_interval_ms: d_ocr_min_interval_ms(),
+            session_idle_gap_ms: d_session_idle_gap_ms(),
             detector: DetectorConfigSerde::default(),
             ner_model_dir: None,
         }
@@ -147,19 +181,41 @@ impl Paths {
     }
 }
 
-/// Load config, creating it (with a fresh random salt) on first run.
+/// Load config, or create it (with a fresh random salt) on first run.
+///
+/// Upgrade-safe: a file written by an older version is loaded with missing
+/// fields defaulted (see the `serde(default)`s), then REWRITTEN so it gains the
+/// new fields. A file that is genuinely unparseable (corrupt JSON, not merely
+/// missing fields) is backed up and replaced with a fresh one rather than
+/// crashing the app — a monitor that won't launch is worse than a reset salt.
 pub fn load_or_init(config_file: &Path) -> std::io::Result<AppConfig> {
     if config_file.exists() {
         let bytes = fs::read(config_file)?;
-        let cfg: AppConfig = serde_json::from_slice(&bytes)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        return Ok(cfg);
+        match serde_json::from_slice::<AppConfig>(&bytes) {
+            Ok(cfg) => {
+                // Rewrite so any field the old file lacked is now persisted.
+                write_config(config_file, &cfg)?;
+                return Ok(cfg);
+            }
+            Err(e) => {
+                let bad = config_file.with_extension("json.bad");
+                let _ = fs::rename(config_file, &bad);
+                log::error!(
+                    "config unparseable ({e}); backed up to {} and starting fresh",
+                    bad.display()
+                );
+            }
+        }
     }
     let cfg = AppConfig::fresh(generate_salt(), generate_uuid_v4());
-    let bytes = serde_json::to_vec_pretty(&cfg)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    fs::write(config_file, bytes)?;
+    write_config(config_file, &cfg)?;
     Ok(cfg)
+}
+
+fn write_config(config_file: &Path, cfg: &AppConfig) -> std::io::Result<()> {
+    let bytes = serde_json::to_vec_pretty(cfg)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    fs::write(config_file, bytes)
 }
 
 /// 32 random bytes as hex.
@@ -200,6 +256,38 @@ mod tests {
         assert_eq!(a.salt, b.salt, "salt must persist across runs");
         assert_eq!(a.salt.len(), 64);
         assert_eq!(a.install_id, b.install_id, "install id must persist across runs");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn old_config_missing_new_fields_still_loads_and_upgrades() {
+        // A config.json written by an EARLIER version (only the v0.1 fields,
+        // salt present) must load — the newer fields take their defaults — and
+        // be rewritten so it gains them. This is the exact upgrade crash guarded.
+        let dir = std::env::temp_dir().join(format!("aum-oldcfg-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let cf = dir.join("config.json");
+        let old = r#"{
+            "salt": "deadbeef",
+            "sample_interval_ms": 350,
+            "session_idle_gap_ms": 4000,
+            "detector": {
+                "min_growth_steps": 3, "min_step_growth_chars": 2,
+                "max_step_growth_chars": 1200, "exclude_typing_steps": true,
+                "min_prose_score": 0.55, "window": 24
+            }
+        }"#;
+        fs::write(&cf, old).unwrap();
+
+        let cfg = load_or_init(&cf).expect("old config must load, not crash");
+        assert_eq!(cfg.salt, "deadbeef", "existing salt is preserved");
+        assert_eq!(cfg.ocr_min_interval_ms, 800, "missing field takes its default");
+        assert!(!cfg.install_id.is_empty(), "missing install id is generated");
+
+        // Rewritten with all current fields → a second load is a clean reload.
+        let reread = fs::read_to_string(&cf).unwrap();
+        assert!(reread.contains("ocr_min_interval_ms"), "file upgraded on load");
+        assert_eq!(load_or_init(&cf).unwrap().install_id, cfg.install_id, "stable after upgrade");
         fs::remove_dir_all(&dir).ok();
     }
 

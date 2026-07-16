@@ -5,6 +5,16 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.2.1] — 2026-07-16
+
+### Fixed
+- **App would not launch after upgrading.** 0.2.0 added a config field without a
+  default, so an existing `config.json` (written by an earlier version) failed to
+  parse and the app aborted on startup. Every config field now has a default, the
+  file is rewritten on load so it gains new fields, and a genuinely corrupt config
+  is backed up and reset instead of crashing. Added an upgrade regression test.
+  0.2.1 supersedes 0.2.0, which could not start.
+
 ## [0.2.0] — 2026-07-16
 
 ### Added
@@ -46,5 +56,6 @@ include behavior changes.
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.2.1]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.1
 [0.2.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.0
 [0.1.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.1.0

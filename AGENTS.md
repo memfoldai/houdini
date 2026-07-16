@@ -43,6 +43,10 @@ even if it compiles.
    may make a network call.
 4. **No cheap fallbacks.** No hardcoded names/ids/log strings in prod code to
    fix an observed case. Fix it with a general rule or say it is unfixed.
+4b. **Config fields are upgrade-sensitive.** Every field in `AppConfig` MUST
+   carry a `serde(default)` — a new required field crashes every existing
+   install on load (this shipped once as the 0.2.0 launch crash). `load_or_init`
+   rewrites the file on load to add new fields; keep it that way.
 5. **Fail closed.** If a layer cannot do its job (e.g. the NER model fails its
    self-test), disable it loudly — never silently claim coverage it lacks.
 
