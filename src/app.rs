@@ -66,6 +66,10 @@ struct Runtime {
     full_sweep_every_ticks: u32,
     sweep_limits: SweepLimits,
     tick_count: Cell<u64>,
+    /// Last INFO heartbeat (monotonic ms) — a periodic, content-free "is it
+    /// working" line in the activity log so the user can tell capture apart from
+    /// detection without turning on debug logging.
+    heartbeat_at: Cell<i64>,
     /// `None` = active; `Some(t)` = paused until monotonic ms `t` (i64::MAX =
     /// until the user resumes).
     paused_until: Cell<Option<i64>>,
@@ -208,6 +212,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
             ocr_min_interval_ms: cfg.ocr_min_interval_ms as i64,
         },
         tick_count: Cell::new(0),
+        heartbeat_at: Cell::new(0),
         paused_until: Cell::new(None),
         start: Instant::now(),
         tray: RefCell::new(None),
@@ -333,6 +338,26 @@ fn tick(rt: &Rc<Runtime>) {
     };
 
     let samples = rt.capture.borrow_mut().sweep(clock.mono_ms, scope, &rt.sweep_limits);
+
+    // Heartbeat (~every 30s, INFO): how many windows are being read and the most
+    // text seen this tick. If reads=0, capture/permissions are the problem; if
+    // reads>0 but no sessions appear, it's detection — this splits the two
+    // without the user needing RUST_LOG=debug.
+    if clock.mono_ms - rt.heartbeat_at.get() > 30_000 {
+        rt.heartbeat_at.set(clock.mono_ms);
+        let peak = samples
+            .iter()
+            .map(|s| ai_usage_monitor::detector::prose_len(&s.output_text))
+            .max()
+            .unwrap_or(0);
+        log::info!(
+            "heartbeat: reading {} window(s) this tick (most prose seen: {} chars); \
+             open ChatGPT/Claude and send a message to test",
+            samples.len(),
+            peak
+        );
+    }
+
     let state = match rt.monitor.borrow_mut().tick(clock, samples) {
         Ok(state) => state,
         // A store failure must not kill the loop — log and keep sampling.

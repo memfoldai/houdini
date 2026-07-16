@@ -144,10 +144,18 @@ pub fn app_windows(pid: i32) -> Vec<CFRetained<AXUIElement>> {
     out
 }
 
-/// The candidate OUTPUT text of one window: its largest NON-input text region.
-/// The composer (an input role) is excluded so the user's own typing there is
-/// never mistaken for streamed output. `None` when the window has no usable
-/// text (the caller then considers OCR for its app).
+/// The window's visible text: ALL non-input text regions concatenated in
+/// document order (mirroring what OCR reads for the whole window).
+///
+/// It deliberately does NOT pick the single largest region: in a chat app each
+/// message is its own element, so a newly-streaming reply is small and would
+/// never be "the largest" until it overtook prior messages — meaning the
+/// monitored region stayed static while a DIFFERENT region grew, and the reply
+/// went undetected (the "detects the app but not the message" bug). Summing all
+/// regions makes any growing region raise the total, and the detector's
+/// prose-growth model handles the surrounding chrome. Input regions (the
+/// composer) are excluded so the user's own typing isn't counted as output.
+/// `None` when the window has no usable text (the caller then considers OCR).
 pub fn window_output_text(window: &AXUIElement) -> Option<String> {
     let mut regions: Vec<Region> = Vec::new();
     let mut budget = MAX_NODES;
@@ -155,8 +163,9 @@ pub fn window_output_text(window: &AXUIElement) -> Option<String> {
     let output = regions
         .iter()
         .filter(|r| !is_input_role(&r.role))
-        .max_by_key(|r| r.text.chars().count())
-        .map(|r| r.text.clone())?;
+        .map(|r| r.text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n");
     if output.trim().is_empty() {
         return None;
     }

@@ -5,6 +5,27 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.2.5] — 2026-07-16
+
+### Fixed
+- **Native apps: "detects the app but not the message."** The Accessibility path
+  monitored only the single LARGEST text region of a window. In a chat app each
+  message is its own element, so a newly-streaming reply is small and never the
+  largest — the monitored region stayed static while a *different* region grew,
+  and the reply went undetected. It now concatenates ALL non-input text regions
+  (what OCR already does for the whole window), so any growing region raises the
+  total. Measured against the live Claude desktop app: the window read jumped
+  from 5041 chars (a chrome-heavy block, prose score 0.40) to **63535 chars of
+  the actual conversation (prose score 0.95)** — and a new message now moves that
+  number. Verified end-to-end via Accessibility on the real app (reads the full
+  conversation; correctly idle when nothing is streaming).
+
+### Added
+- A periodic INFO **heartbeat** in the activity log ("reading N window(s) this
+  tick; most prose seen: X chars"). Opening the log now tells capture apart from
+  detection without turning on debug: `reads = 0` → permissions/capture;
+  `reads > 0` but no sessions while an AI streams → detection.
+
 ## [0.2.4] — 2026-07-16
 
 ### Fixed
@@ -140,6 +161,7 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.2.5]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.5
 [0.2.4]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.4
 [0.2.3]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.3
 [0.2.2]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.2
