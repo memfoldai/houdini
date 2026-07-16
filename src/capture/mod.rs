@@ -55,6 +55,17 @@ pub enum SweepScope {
     AllWindows,
 }
 
+/// A window queued for OCR, with the signals used to prioritize it (visible +
+/// large windows are read before the per-sweep budget runs out).
+struct OcrCandidate {
+    on_screen: bool,
+    area: f64,
+    win_id: u32,
+    app_id: String,
+    user_typing: bool,
+    window: objc2::rc::Retained<SCWindow>,
+}
+
 /// One registered AX window: an assigned stable slot id plus the held handle.
 struct AxSlot {
     id: u64,
@@ -104,7 +115,9 @@ impl CaptureEngine {
 
         // Candidate windows from the system-level enumeration; also the source
         // of each app's id for the OCR path.
+        log::debug!("sweep {scope:?}: enumerating windows…");
         let windows = screen::shareable_windows();
+        log::debug!("sweep {scope:?}: enumerated {} window(s)", windows.len());
         let mut apps: Vec<(i32, String, Vec<objc2::rc::Retained<SCWindow>>)> = Vec::new();
         for w in windows {
             let Some(owner) = (unsafe { w.owningApplication() }) else {
@@ -141,49 +154,76 @@ impl CaptureEngine {
 
         let app_count = apps.len();
         let mut samples = Vec::new();
-        let mut ocr_budget = limits.max_ocr;
-        let mut ocr_skipped = 0usize;
         let mut live_windows: Vec<u32> = Vec::new();
+
+        // Pass 1: AX for every app (cheap). Apps with no AX-readable text
+        // (browsers, Electron apps) become OCR candidates.
+        let mut ocr_candidates: Vec<OcrCandidate> = Vec::new();
         for (pid, app_id, sc_windows) in apps {
             let user_typing = typing && Some(pid) == front_pid;
             let ax_samples = self.sample_ax_windows(pid, &app_id, user_typing);
+            log::debug!(
+                "  app {app_id} pid={pid}: {} sc-window(s), {} ax-sample(s)",
+                sc_windows.len(),
+                ax_samples.len()
+            );
             if !ax_samples.is_empty() {
                 samples.extend(ax_samples);
                 continue;
             }
-            // App has no AX-readable text (e.g. a browser): OCR its windows,
-            // throttled per window so a frontmost browser isn't OCR'd every tick.
             for w in sc_windows {
                 let win_id = unsafe { w.windowID() };
                 live_windows.push(win_id);
-                let last = self.ocr_last.get(&win_id).copied().unwrap_or(i64::MIN);
-                if now_ms - last < limits.ocr_min_interval_ms {
-                    continue; // throttled — not due yet
-                }
-                if ocr_budget == 0 {
-                    ocr_skipped += 1;
-                    continue;
-                }
-                ocr_budget -= 1;
-                self.ocr_last.insert(win_id, now_ms);
-                let Some(image) = screen::capture_window_image(&w) else {
-                    continue;
-                };
-                let text = ocr::recognize_text(&image);
-                if text.trim().is_empty() {
-                    continue;
-                }
-                samples.push(SurfaceSample {
-                    surface: SurfaceId(format!("win:{win_id}")),
+                let frame = unsafe { w.frame() };
+                ocr_candidates.push(OcrCandidate {
+                    on_screen: unsafe { w.isOnScreen() },
+                    area: frame.size.width * frame.size.height,
+                    win_id,
                     app_id: app_id.clone(),
-                    output_text: text,
                     user_typing,
-                    via_ocr: true,
+                    window: w,
                 });
             }
         }
+
+        // Pass 2: OCR the most promising candidates first — VISIBLE (on-screen)
+        // and LARGEST — so the window the user is actually looking at (the AI
+        // chat) is read before the per-sweep budget runs out. Arbitrary
+        // enumeration order let a background editor's empty windows starve it.
+        ocr_candidates.sort_by(|a, b| {
+            b.on_screen.cmp(&a.on_screen).then(b.area.total_cmp(&a.area))
+        });
+        let mut ocr_budget = limits.max_ocr;
+        let mut ocr_skipped = 0usize;
+        for c in ocr_candidates {
+            if !ocr_due(self.ocr_last.get(&c.win_id).copied(), now_ms, limits.ocr_min_interval_ms) {
+                continue; // throttled — not due yet
+            }
+            if ocr_budget == 0 {
+                ocr_skipped += 1;
+                continue;
+            }
+            ocr_budget -= 1;
+            self.ocr_last.insert(c.win_id, now_ms);
+            let Some(image) = screen::capture_window_image(&c.window) else {
+                log::debug!("OCR: capture_window_image({}) returned none", c.win_id);
+                continue;
+            };
+            let text = ocr::recognize_text(&image);
+            log::debug!("OCR: window {} ({}) → {} chars", c.win_id, c.app_id, text.chars().count());
+            if text.trim().is_empty() {
+                continue;
+            }
+            samples.push(SurfaceSample {
+                surface: SurfaceId(format!("win:{}", c.win_id)),
+                app_id: c.app_id,
+                output_text: text,
+                user_typing: c.user_typing,
+                via_ocr: true,
+            });
+        }
         if ocr_skipped > 0 {
-            log::warn!("sweep OCR budget hit: {ocr_skipped} window(s) deferred to the next sweep");
+            log::debug!("sweep OCR budget hit: {ocr_skipped} window(s) deferred to next sweep");
         }
 
         if matches!(scope, SweepScope::AllWindows) {
@@ -235,5 +275,37 @@ impl CaptureEngine {
         self.next_slot += 1;
         self.ax_slots.push(AxSlot { id, pid, element, seen: true });
         id
+    }
+}
+
+/// Whether a window is due for another OCR pass. A window never OCR'd
+/// (`last_ms == None`) is ALWAYS due — handled explicitly rather than with an
+/// `i64::MIN` "never" sentinel, whose subtraction (`now - i64::MIN`) overflows
+/// and, in release builds, wraps to a large negative, making every window read
+/// as throttled so OCR never ran at all (the v0.2 "nothing is detected" bug).
+fn ocr_due(last_ms: Option<i64>, now_ms: i64, interval_ms: i64) -> bool {
+    match last_ms {
+        None => true,
+        Some(last) => now_ms - last >= interval_ms,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ocr_due;
+
+    #[test]
+    fn ocr_due_never_seen_is_due_no_overflow() {
+        // The regression: a never-OCR'd window must be due even at a tiny now_ms,
+        // with no overflow (the i64::MIN sentinel wrapped negative → always
+        // "throttled" → OCR never ran).
+        assert!(ocr_due(None, 5, 800), "never-seen window must be due immediately");
+        assert!(ocr_due(None, i64::MAX, 800));
+    }
+
+    #[test]
+    fn ocr_due_respects_interval() {
+        assert!(!ocr_due(Some(1_000), 1_500, 800), "seen 500ms ago, interval 800 → not due");
+        assert!(ocr_due(Some(1_000), 1_900, 800), "seen 900ms ago, interval 800 → due");
     }
 }

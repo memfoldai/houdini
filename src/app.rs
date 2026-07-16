@@ -244,10 +244,13 @@ fn load_ner(cfg: &AppConfig) -> Option<ai_usage_monitor::ner::NerRedactor> {
 /// way; capture yields nothing until the grants land. Screen Recording only
 /// takes effect after a relaunch (Apple's behavior), noted in VERIFICATION.
 fn request_permissions() {
-    if !permissions::accessibility_trusted() {
+    let ax = permissions::accessibility_trusted();
+    let sr = permissions::screen_recording_granted();
+    log::info!("permissions at launch: accessibility={ax} screen_recording={sr}");
+    if !ax {
         permissions::accessibility_prompt();
     }
-    if !permissions::screen_recording_granted() {
+    if !sr {
         permissions::screen_recording_request();
     }
 }

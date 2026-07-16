@@ -1,6 +1,6 @@
 [package]
 name = "ai-usage-monitor"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "Internal, consenting-only macOS monitor that detects AI-inference sessions on screen (world-model streaming detection, no per-app rules) and stores redacted, reviewable extracts for the AI-research usage study."
 license = "MIT"

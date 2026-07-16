@@ -17,10 +17,17 @@ mod permissions;
 #[cfg(target_os = "macos")]
 mod app;
 #[cfg(target_os = "macos")]
+mod diagnose;
+#[cfg(target_os = "macos")]
 mod tray_glyph;
 
 #[cfg(target_os = "macos")]
 fn main() {
+    // `--diagnose`: one-shot capture probe to stdout (no menu bar, no run loop).
+    if std::env::args().any(|a| a == "--diagnose") {
+        diagnose::run();
+        return;
+    }
     // Logging is initialized inside app::run once the data-dir paths resolve
     // (it writes to a file under the data dir; see logging::init).
     app::run();

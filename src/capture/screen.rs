@@ -61,11 +61,35 @@ pub fn capture_window_image(window: &SCWindow) -> Option<CFRetained<CGImage>> {
         SCContentFilter::initWithDesktopIndependentWindow(SCContentFilter::alloc(), window)
     };
     let config = unsafe { SCStreamConfiguration::new() };
+    // SCStreamConfiguration defaults to 0×0 output, which yields no image — the
+    // capture MUST be sized. Use the window's point dimensions at 2× so text is
+    // captured crisply enough for OCR (over-samples a non-retina display, which
+    // is harmless). A zero-area window is skipped by the caller's area filter.
+    let frame = unsafe { window.frame() };
+    let w = (frame.size.width * 2.0) as usize;
+    let h = (frame.size.height * 2.0) as usize;
+    if w == 0 || h == 0 {
+        return None;
+    }
+    unsafe {
+        config.setWidth(w);
+        config.setHeight(h);
+        // Still-image capture only: disable the audio path (a stream that tries
+        // to start audio without the entitlement fails with SCStreamError -3811,
+        // "audio/video capture failure") and the cursor (not wanted in OCR).
+        config.setCapturesAudio(false);
+        config.setShowsCursor(false);
+    }
 
     let (tx, rx) = mpsc::channel::<Option<CFRetained<CGImage>>>();
-    let handler = RcBlock::new(move |image: *mut CGImage, _err: *mut NSError| {
+    let handler = RcBlock::new(move |image: *mut CGImage, err: *mut NSError| {
         // CGImage is a CoreFoundation type; the block hands us a +0 borrowed
         // pointer, retained here into an owned CFRetained past the block scope.
+        if image.is_null() {
+            if let Some(e) = unsafe { err.as_ref() } {
+                log::debug!("SCScreenshotManager error: {}", e.localizedDescription());
+            }
+        }
         let out = NonNull::new(image).map(|p| unsafe { CFRetained::retain(p) });
         let _ = tx.send(out);
     });

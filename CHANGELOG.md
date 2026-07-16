@@ -5,6 +5,34 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.2.2] — 2026-07-16
+
+### Fixed
+Nothing was ever captured from browser/Electron AI apps (ChatGPT web, ChatGPT
+and Claude desktop). Four stacked bugs in the OCR path, each found by
+instrumenting the real capture stack against a live screen (`--diagnose` and the
+debug log), not by guessing:
+
+- **OCR never ran at all.** The per-window OCR throttle used an `i64::MIN` "never
+  captured" sentinel; `now - i64::MIN` overflowed and, in release builds, wrapped
+  negative, so every window read as "throttled" forever. Replaced with an
+  explicit, tested `ocr_due` (regression test included).
+- **Empty screenshots.** `SCStreamConfiguration` defaults to 0×0 output; the
+  capture is now sized to the window (2× for OCR-legible text).
+- **SCStreamError -3811 ("audio/video capture failure").** `SCScreenshotManager`
+  starts an internal stream that tried the audio path; `setCapturesAudio(false)`
+  (and `setShowsCursor(false)`) fixes it.
+- **The AI window was starved of the OCR budget.** Windows were OCR'd in
+  arbitrary enumeration order, so a background editor's empty windows used up the
+  budget first. Candidates are now prioritized by visible-on-screen and largest
+  area, so the window you're actually looking at is read first.
+
+### Added
+- `ai-usage-monitor --diagnose`: a one-shot probe (permissions, window
+  enumeration, per-app AX text) that prints why capture is or isn't working.
+- Debug-level capture tracing (per-app AX/OCR outcomes, char counts) behind
+  `RUST_LOG=ai_usage_monitor=debug`.
+
 ## [0.2.1] — 2026-07-16
 
 ### Fixed
@@ -56,6 +84,7 @@ include behavior changes.
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.2.2]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.2
 [0.2.1]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.1
 [0.2.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.0
 [0.1.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.1.0

@@ -99,6 +99,18 @@ other machines verifying it. The bundled app's Info.plist MUST keep
 `NSScreenCaptureUsageDescription` (ScreenCaptureKit terminates a bundled app
 that lacks it) and `LSUIElement` (menu-bar-only).
 
+## Capture gotchas (hard-won — do not regress)
+
+- **OCR screenshots need `SCStreamConfiguration` sized** (`setWidth/setHeight`,
+  defaults 0×0 → empty) AND `setCapturesAudio(false)` (else `SCScreenshotManager`
+  fails with SCStreamError -3811, "audio/video capture failure").
+- **Never compute time deltas against a sentinel like `i64::MIN`** — it overflows
+  and wraps in release. The OCR throttle uses `Option<i64>` + `ocr_due`.
+- OCR budget is scarce; OCR candidates are prioritized on-screen + largest-area
+  so the visible AI window is read first. Keep that ordering.
+- To debug capture: `RUST_LOG=ai_usage_monitor=debug`, or `--diagnose` for a
+  one-shot probe. `--diagnose` must NOT screenshot (no run loop → CGS assertion).
+
 ## What you cannot verify here
 
 Capture, permissions, and the tray need a real signed Mac with grants and real
