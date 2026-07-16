@@ -163,15 +163,22 @@ pub fn window_output_text(window: &AXUIElement) -> Option<String> {
     Some(output)
 }
 
-/// True when the current system-wide AX-focused UI element is an editable input
-/// (the user's caret is in a text field). Best-effort; false on any AX miss.
-pub fn system_focused_is_input() -> bool {
+/// The TEXT of the system-wide focused editable input, or `None` if the focused
+/// element isn't an editable input. Returns `Some("")` for a focused-but-empty
+/// field.
+///
+/// The caller diffs this across samples: "the user is typing" is the input's
+/// text CHANGING, not merely being focused. This matters because chat apps keep
+/// the composer focused while the model streams its reply — treating "focused"
+/// as "typing" would suppress detection for the entire response (the real bug
+/// that made ChatGPT/Claude undetectable). Best-effort; `None` on any AX miss,
+/// which the caller reads as "not typing" so it never suppresses.
+pub fn focused_input_value() -> Option<String> {
     let sys = unsafe { AXUIElement::new_system_wide() };
-    let Some(focused) = copy_attr(&sys, AX_FOCUSED_UI_ELEMENT) else {
-        return false;
-    };
-    let Some(el) = focused.downcast_ref::<AXUIElement>() else {
-        return false;
-    };
-    is_input_role(&role_of(el))
+    let focused = copy_attr(&sys, AX_FOCUSED_UI_ELEMENT)?;
+    let el = focused.downcast_ref::<AXUIElement>()?;
+    if !is_input_role(&role_of(el)) {
+        return None;
+    }
+    Some(attr_string(el, AX_VALUE).unwrap_or_default())
 }

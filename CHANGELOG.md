@@ -5,6 +5,30 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.2.3] — 2026-07-16
+
+### Fixed
+- **Chat replies weren't detected because the composer stays focused.** The
+  "user is typing" signal treated *any focused text input* as typing — but chat
+  apps (ChatGPT, Claude, …) keep the message box focused while the model streams
+  its reply, so every frame of the reply was excluded and no session was ever
+  created. Typing now means the focused input's **text is changing** (an actual
+  keystroke), not merely that it is focused. Verified end-to-end against a real
+  streaming page with the composer focused: the session is now captured.
+
+### Validated
+- The streaming-signature approach is confirmed correct end-to-end by driving a
+  real browser through the live capture path: OCR/AX text grows, the detector
+  fires `Streaming`, and a session is created and persisted. It works for any
+  surface that streams prose — no per-provider logic.
+
+### Added
+- [docs/grouping.md](docs/grouping.md): how sessions are grouped by provider and
+  surface (web/app/CLI) at analysis time — without hardcoding providers and
+  without adding any network/LLM call to the local-only daemon.
+- Content-free per-surface detection tracing (`RUST_LOG=ai_usage_monitor=debug`):
+  text length + verdict, no captured text — for tuning and support.
+
 ## [0.2.2] — 2026-07-16
 
 ### Fixed
@@ -84,6 +108,7 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.2.3]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.3
 [0.2.2]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.2
 [0.2.1]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.1
 [0.2.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.0

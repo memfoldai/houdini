@@ -141,6 +141,16 @@ impl Monitor {
             text: sample.output_text.clone(),
             user_typing: sample.user_typing,
         });
+        // Content-free per-surface trace for tuning: text length + verdict, no text.
+        if log::log_enabled!(log::Level::Debug) && sample.output_text.chars().count() > 40 {
+            log::debug!(
+                "detect: app={} len={} typing={} verdict={:?}",
+                tracker.app_id,
+                sample.output_text.chars().count(),
+                sample.user_typing,
+                verdict
+            );
+        }
         if let Verdict::Streaming { .. } = verdict {
             tracker.last_growth_mono = clock.mono_ms;
             tracker.latest_output = sample.output_text;

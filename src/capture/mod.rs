@@ -82,11 +82,19 @@ pub struct CaptureEngine {
     next_slot: u64,
     /// Last OCR time (monotonic ms) per window id, for the cost throttle.
     ocr_last: std::collections::HashMap<u32, i64>,
+    /// Text of the focused input on the previous sweep — diffed to tell actual
+    /// typing (text changing) from a merely-focused idle composer.
+    last_focused_input: Option<String>,
 }
 
 impl CaptureEngine {
     pub fn new() -> Self {
-        Self { ax_slots: Vec::new(), next_slot: 0, ocr_last: std::collections::HashMap::new() }
+        Self {
+            ax_slots: Vec::new(),
+            next_slot: 0,
+            ocr_last: std::collections::HashMap::new(),
+            last_focused_input: None,
+        }
     }
 
     /// Observe the system once. Returns one sample per window with readable
@@ -96,8 +104,15 @@ impl CaptureEngine {
     pub fn sweep(&mut self, now_ms: i64, scope: SweepScope, limits: &SweepLimits) -> Vec<SurfaceSample> {
         let front = frontmost::frontmost();
         let front_pid = front.as_ref().map(|f| f.pid);
-        let typing = ax::system_focused_is_input();
         let own_pid = std::process::id() as i32;
+
+        // Typing = the focused input's TEXT changed since last sweep (a keystroke),
+        // NOT merely that an input is focused — a chat composer stays focused
+        // while the model streams, and treating that as typing suppressed the
+        // whole reply. Focus-in (None→Some) is not typing; only Some→Some-changed.
+        let focused = ax::focused_input_value();
+        let typing = is_typing(focused.as_deref(), self.last_focused_input.as_deref());
+        self.last_focused_input = focused;
 
         // Fast path: on a frontmost-only tick, if the frontmost app is
         // AX-readable, sample it via AX and skip enumerating every window on the
@@ -290,6 +305,15 @@ fn ocr_due(last_ms: Option<i64>, now_ms: i64, interval_ms: i64) -> bool {
     }
 }
 
+/// The user is typing iff the focused input's TEXT changed between samples.
+/// A merely-focused input (`Some→Some` unchanged, e.g. a chat composer sitting
+/// idle while the model streams) is NOT typing, and focus-in/blur
+/// (`None→Some`/`Some→None`) is not typing either — only an actual keystroke
+/// (`Some→Some` with different text) counts.
+fn is_typing(cur: Option<&str>, prev: Option<&str>) -> bool {
+    matches!((cur, prev), (Some(c), Some(p)) if c != p)
+}
+
 #[cfg(test)]
 mod tests {
     use super::ocr_due;
@@ -307,5 +331,19 @@ mod tests {
     fn ocr_due_respects_interval() {
         assert!(!ocr_due(Some(1_000), 1_500, 800), "seen 500ms ago, interval 800 → not due");
         assert!(ocr_due(Some(1_000), 1_900, 800), "seen 900ms ago, interval 800 → due");
+    }
+
+    #[test]
+    fn is_typing_only_on_changing_input() {
+        use super::is_typing;
+        // A chat composer focused-but-idle while the model streams: NOT typing
+        // (this is the bug that suppressed detection for the whole reply).
+        assert!(!is_typing(Some(""), Some("")), "idle focused composer is not typing");
+        assert!(!is_typing(Some("draft"), Some("draft")), "unchanged text is not typing");
+        assert!(!is_typing(Some("x"), None), "focus-in is not typing");
+        assert!(!is_typing(None, Some("x")), "blur is not typing");
+        assert!(!is_typing(None, None), "no input focused is not typing");
+        // An actual keystroke changes the text.
+        assert!(is_typing(Some("hell"), Some("hello")), "changed text is typing");
     }
 }

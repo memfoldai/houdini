@@ -144,6 +144,8 @@ machine.
 - **[SECURITY.md](SECURITY.md)** — data-handling guarantees, dependency audit,
   memory/CPU posture.
 - **[CHANGELOG.md](CHANGELOG.md)** — what changed in each version.
+- **[docs/grouping.md](docs/grouping.md)** — how sessions are grouped by
+  provider/surface at analysis time (no hardcoding, no LLM in the daemon).
 - **[docs/NER.md](docs/NER.md)** — the optional NER redaction layer.
 - **[AGENTS.md](AGENTS.md)** — for coding agents: commands, non-negotiables,
   architecture invariants.
