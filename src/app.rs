@@ -21,8 +21,8 @@ use objc2::{define_class, msg_send, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate};
 use objc2_foundation::{MainThreadMarker, NSNotification, NSTimer};
 
-use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem};
-use tray_icon::{Icon, TrayIcon, TrayIconBuilder};
+use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem};
+use tray_icon::{TrayIcon, TrayIconBuilder};
 
 use ai_usage_monitor::config::{self, AppConfig, Paths};
 use ai_usage_monitor::detector::DetectorConfig;
@@ -32,6 +32,14 @@ use ai_usage_monitor::store::Store;
 
 use crate::capture::{CaptureEngine, SweepLimits, SweepScope};
 use crate::permissions;
+use crate::tray_glyph;
+
+/// How often the status line's counts/relative-times are refreshed (in addition
+/// to on every state change), so an open menu reads fresh without churning the
+/// item text at the full sample rate.
+const STATUS_REFRESH_EVERY_TICKS: u64 = 3;
+/// Window for the "sessions recently captured" status count.
+const RECENT_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 
 /// Shared, main-thread-only runtime state. Every field the timer or a menu
 /// action touches lives here behind a `RefCell`/`Cell`; nothing crosses threads.
@@ -57,6 +65,12 @@ struct Runtime {
     timer: RefCell<Option<Retained<NSTimer>>>,
     /// Last painted state, so the icon is only rebuilt on a transition.
     painted: Cell<Option<MonitorState>>,
+    /// Disabled menu rows that show live status (state, recent count, last
+    /// capture) so the user can confirm detection is working. Held here so the
+    /// tick loop can update their text.
+    status_item: MenuItem,
+    sessions_item: MenuItem,
+    last_item: MenuItem,
     export_id: MenuId,
     quit_id: MenuId,
     /// Optional NER redactor for the export sweep (feature `ner`). Loaded once
@@ -149,6 +163,12 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
     let export_id = MenuId::new("export");
     let quit_id = MenuId::new("quit");
 
+    // Disabled info rows (created on the main thread, before the run loop). Text
+    // is filled in on the first tick.
+    let status_item = MenuItem::new("Starting…", false, None);
+    let sessions_item = MenuItem::new("", false, None);
+    let last_item = MenuItem::new("", false, None);
+
     Rc::new(Runtime {
         monitor: RefCell::new(monitor),
         capture: RefCell::new(CaptureEngine::new()),
@@ -162,6 +182,9 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
             max_ocr: cfg.max_ocr_per_sweep,
         },
         tick_count: Cell::new(0),
+        status_item,
+        sessions_item,
+        last_item,
         start: Instant::now(),
         tray: RefCell::new(None),
         timer: RefCell::new(None),
@@ -207,13 +230,19 @@ fn install_tray(rt: &Rc<Runtime>) {
     let menu = Menu::new();
     let export_item = MenuItem::with_id(rt.export_id.clone(), "Export extract for review…", true, None);
     let quit_item = MenuItem::with_id(rt.quit_id.clone(), "Quit", true, None);
+    // Live status block, then the actions.
+    menu.append(&rt.status_item).expect("append status");
+    menu.append(&rt.sessions_item).expect("append sessions");
+    menu.append(&rt.last_item).expect("append last");
+    menu.append(&PredefinedMenuItem::separator()).expect("append sep");
     menu.append(&export_item).expect("append export item");
     menu.append(&quit_item).expect("append quit item");
 
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_tooltip(tooltip_for(MonitorState::Idle))
-        .with_icon(icon_for(MonitorState::Idle))
+        .with_icon(tray_glyph::template_icon(MonitorState::Idle))
+        .with_icon_as_template(true) // monochrome template — macOS tints it
         .build()
         .expect("build tray icon");
 
@@ -248,10 +277,21 @@ fn tick(rt: &Rc<Runtime>) {
     };
 
     let samples = rt.capture.borrow_mut().sweep(scope, &rt.sweep_limits);
-    match rt.monitor.borrow_mut().tick(clock, samples) {
-        Ok(state) => repaint(rt, state),
+    let state = match rt.monitor.borrow_mut().tick(clock, samples) {
+        Ok(state) => state,
         // A store failure must not kill the loop — log and keep sampling.
-        Err(e) => log::error!("tick store error: {e}"),
+        Err(e) => {
+            log::error!("tick store error: {e}");
+            drain_menu_events(rt);
+            return;
+        }
+    };
+    let changed = rt.painted.get() != Some(state);
+    repaint(rt, state);
+    // Refresh the status rows on state changes and on a slow cadence, so an
+    // opened menu always reads fresh without churning at the sample rate.
+    if changed || n % STATUS_REFRESH_EVERY_TICKS == 0 {
+        refresh_status(rt, state, clock.wall_ms);
     }
 
     drain_menu_events(rt);
@@ -263,7 +303,8 @@ fn repaint(rt: &Rc<Runtime>, state: MonitorState) {
         return;
     }
     if let Some(tray) = rt.tray.borrow().as_ref() {
-        let _ = tray.set_icon(Some(icon_for(state)));
+        // Keep the template flag on every swap, else macOS stops tinting it.
+        let _ = tray.set_icon_with_as_template(Some(tray_glyph::template_icon(state)), true);
         let _ = tray.set_tooltip(Some(tooltip_for(state)));
     }
     rt.painted.set(Some(state));
@@ -328,34 +369,48 @@ fn tooltip_for(state: MonitorState) -> &'static str {
     }
 }
 
-/// State color for the status-bar dot.
-fn icon_for(state: MonitorState) -> Icon {
-    let (r, g, b) = match state {
-        MonitorState::Idle => (150, 150, 150),   // gray: nothing tracked
-        MonitorState::Armed => (60, 120, 255),   // blue: watching, no AI yet
-        MonitorState::Capturing => (40, 200, 90), // green: capturing now
+/// Update the three status rows so opening the menu answers "is it working?":
+/// current state (or a permissions warning), sessions captured recently, and
+/// when the last capture was.
+fn refresh_status(rt: &Rc<Runtime>, state: MonitorState, now_ms: i64) {
+    // The most important thing to surface: without grants, nothing captures.
+    let status = if !permissions::screen_recording_granted() {
+        "⚠ Enable Screen Recording in System Settings".to_string()
+    } else if !permissions::accessibility_trusted() {
+        "⚠ Enable Accessibility in System Settings".to_string()
+    } else {
+        match state {
+            MonitorState::Idle => "Idle — no windows to watch".to_string(),
+            MonitorState::Armed => {
+                format!("Watching {} window(s)", rt.monitor.borrow().surface_count())
+            }
+            MonitorState::Capturing => "● Capturing an AI session".to_string(),
+        }
     };
-    render_dot(r, g, b)
+    rt.status_item.set_text(status);
+
+    match rt.store.session_stats(now_ms - RECENT_WINDOW_MS) {
+        Ok(stats) => {
+            rt.sessions_item.set_text(format!("Sessions (24h): {}", stats.recent));
+            rt.last_item.set_text(format!("Last capture: {}", relative_time(stats.last_capture_ms, now_ms)));
+        }
+        Err(e) => log::error!("status stats error: {e}"),
+    }
 }
 
-/// A filled circle on a transparent background, as an RGBA `Icon`. Small and
-/// dependency-free — the status bar scales it to fit.
-fn render_dot(r: u8, g: u8, b: u8) -> Icon {
-    const N: i32 = 18;
-    let c = (N - 1) as f32 / 2.0;
-    let radius = c; // touch the edges
-    let mut rgba = Vec::with_capacity((N * N * 4) as usize);
-    for y in 0..N {
-        for x in 0..N {
-            let dx = x as f32 - c;
-            let dy = y as f32 - c;
-            let inside = dx * dx + dy * dy <= radius * radius;
-            if inside {
-                rgba.extend_from_slice(&[r, g, b, 255]);
-            } else {
-                rgba.extend_from_slice(&[0, 0, 0, 0]);
-            }
-        }
+/// Human "N ago" for a past unix-ms instant, or "none yet".
+fn relative_time(then_ms: Option<i64>, now_ms: i64) -> String {
+    let Some(then) = then_ms else {
+        return "none yet".to_string();
+    };
+    let secs = ((now_ms - then).max(0)) / 1000;
+    if secs < 60 {
+        "just now".to_string()
+    } else if secs < 3600 {
+        format!("{}m ago", secs / 60)
+    } else if secs < 86_400 {
+        format!("{}h ago", secs / 3600)
+    } else {
+        format!("{}d ago", secs / 86_400)
     }
-    Icon::from_rgba(rgba, N as u32, N as u32).expect("valid rgba icon")
 }

@@ -88,6 +88,12 @@ impl Monitor {
         Self { store, salt, det_cfg, idle_gap_ms, retention_ms, surfaces: HashMap::new() }
     }
 
+    /// How many windows are currently being tracked (for the status line —
+    /// a non-zero count is proof the capture path is seeing windows).
+    pub fn surface_count(&self) -> usize {
+        self.surfaces.len()
+    }
+
     /// Current tray-facing state: capturing if ANY surface has an open session,
     /// armed if any surface is being watched.
     pub fn state(&self) -> MonitorState {

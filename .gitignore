@@ -1,3 +1,7 @@
 target/
 /data/
 *.sqlite*
+# Build/distribution artifacts (produced by packaging/bundle.sh)
+/dist/
+# Generated iconset scratch
+*.iconset/

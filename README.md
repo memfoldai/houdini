@@ -66,30 +66,48 @@ observation carry role `"unknown"`; and attributes the convention defines for
 in-process instrumentation (model name, token counts) are **absent** — they are
 not observable from a screen, and inventing them would be fabrication.
 
-## Quick start
+## Install
+
+To install the finished app (or hand it to a teammate), build the signed
+`.app`/`.dmg` and follow **[INSTALL.md](INSTALL.md)**:
+
+```bash
+packaging/bundle.sh        # → dist/AI Usage Monitor.app + a .dmg installer
+```
+
+Open the `.dmg`, drag to Applications, grant **Accessibility** + **Screen
+Recording**, relaunch. A dot appears in the menu bar; click it for live status.
+INSTALL.md covers the one-time signing certificate and the notarization path for
+zero-friction install on other machines.
+
+## Menu bar & status
+
+The icon is a monochrome template glyph whose **shape** shows state (macOS tints
+it for you): a hollow ring when idle, a ring-with-dot while watching, a solid
+disc while capturing an AI session. Click it for a live status readout — current
+state, sessions captured in the last 24 h, and time since the last capture —
+which is how you confirm detection is working. The menu also has *Export extract
+for review…* and *Quit*.
+
+## Develop
 
 Requires a recent stable Rust toolchain and macOS 14+.
 
 ```bash
 cargo test                 # portable core (runs anywhere)
 cargo build --release
-scripts/sign.sh            # stable self-signed identity — REQUIRED, see below
+scripts/sign.sh            # sign the bare binary with a stable identity
 ./target/release/ai-usage-monitor
 ```
 
-A dot appears in the menu bar: **gray** = idle, **blue** = watching, **green** =
-capturing an AI session right now. Its menu has two items — *Export extract for
-review…* and *Quit*.
+**Signing is not optional**, even in dev: macOS keys the Accessibility and
+Screen Recording grants to the code identity, so an unsigned rebuild silently
+loses both and captures nothing. `scripts/sign.sh` (bare binary) and
+`packaging/bundle.sh` (app) both handle it; see INSTALL.md for the certificate.
 
-**Signing is not optional for real use.** macOS keys the Accessibility and
-Screen Recording grants to the binary's code identity, so an unsigned rebuild
-silently loses both and captures nothing. `scripts/sign.sh` gives it a stable
-identity; see the script header for the one-time certificate setup.
-
-Then run **[VERIFICATION.md](VERIFICATION.md)** — the checklist that proves the
-app actually works on your machine (grants, real capture, concurrent/background
-windows, the redaction audit, and the false-positive gate). Do not trust or
-share data before it passes.
+Before trusting or sharing any data, run **[VERIFICATION.md](VERIFICATION.md)** —
+the checklist that proves capture, concurrent/background windows, the redaction
+audit, and the false-positive gate.
 
 ## Configuration
 
@@ -111,16 +129,17 @@ machine.
 
 ## Documentation
 
-- **[AGENTS.md](AGENTS.md)** — for coding agents: commands, non-negotiables,
-  architecture invariants.
+- **[INSTALL.md](INSTALL.md)** — build the app, distribute it, install it.
 - **[VERIFICATION.md](VERIFICATION.md)** — the human-gated proof checklist.
 - **[docs/NER.md](docs/NER.md)** — the optional NER redaction layer.
+- **[AGENTS.md](AGENTS.md)** — for coding agents: commands, non-negotiables,
+  architecture invariants.
 
 Per-module design and rationale live in the doc comment at the top of each file
 in `src/`, next to the code they explain.
 
 ## Scope
 
-The study's observation instrument, nothing more: internal, consenting
-participants only. Not for monitoring end-users, not for distribution, not
-notarized.
+The study's observation instrument, nothing more: for internal, consenting
+participants only. Distributed privately to the team's own machines — not for
+monitoring end-users, and not published.

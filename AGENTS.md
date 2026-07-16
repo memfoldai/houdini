@@ -10,7 +10,8 @@ Rust, no framework. Read this before changing code.
 cargo test                       # portable core; runs on any platform
 cargo build && cargo build --release
 cargo check --features ner       # optional NER layer (needs onnxruntime to link)
-scripts/sign.sh                  # REQUIRED after every release build (see Signing)
+scripts/sign.sh                  # sign the bare dev binary (REQUIRED, see Signing)
+packaging/bundle.sh              # build the signed .app + .dmg (see INSTALL.md)
 ```
 
 There is no lint/format config beyond rustfmt defaults. Keep builds at
@@ -79,9 +80,14 @@ comment.
 
 ## Signing
 
-macOS TCC keys the Accessibility + Screen Recording grants to the binary's code
-identity. An unsigned rebuild silently loses both and the app captures nothing.
-Always `scripts/sign.sh` after building, and never suggest `codesign -s -`.
+macOS TCC keys the Accessibility + Screen Recording grants to the code identity.
+An unsigned rebuild silently loses both and captures nothing. Always sign after
+building (`scripts/sign.sh` for the bare binary, `packaging/bundle.sh` for the
+app), and never suggest `codesign -s -` (ad-hoc changes identity every build).
+A self-signed cert shows as untrusted but signs fine — trust only matters for
+other machines verifying it. The bundled app's Info.plist MUST keep
+`NSScreenCaptureUsageDescription` (ScreenCaptureKit terminates a bundled app
+that lacks it) and `LSUIElement` (menu-bar-only).
 
 ## What you cannot verify here
 
@@ -93,6 +99,7 @@ from a green build — route it to VERIFICATION.md and say what is unproven.
 
 - [VERIFICATION.md](VERIFICATION.md) — the human-gated checklist (permissions,
   real capture, redaction audit, false-positive gate). Run before trusting data.
+- [INSTALL.md](INSTALL.md) — build/sign/notarize the .app, distribute, install.
 - [docs/NER.md](docs/NER.md) — optional GLiNER-PII layer: provisioning, labels,
   self-test.
 - [README.md](README.md) — what this is and why, for humans.

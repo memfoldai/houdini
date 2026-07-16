@@ -20,8 +20,10 @@ scripts/sign.sh            # stable self-signed identity (see the script header)
 ./target/release/ai-usage-monitor
 ```
 
-**Pass:** a dot appears in the menu bar. Gray = idle. Clicking it shows
-“Export extract for review…” and “Quit”.
+**Pass:** an icon appears in the menu bar — a hollow ring (idle). Clicking it
+shows a status readout plus “Export extract for review…” and “Quit”. (The icon
+is a monochrome template glyph; its **shape** is the state — ring = idle,
+ring-with-dot = watching, solid disc = capturing.)
 
 > Why signing matters: TCC keys the grants below on the binary's code identity.
 > An unsigned/ad-hoc build loses every grant on the next rebuild. Re-run
@@ -34,16 +36,17 @@ scripts/sign.sh            # stable self-signed identity (see the script header)
 On first launch the app prompts for **Accessibility** and **Screen Recording**.
 If you miss the prompts, grant them manually:
 
-- System Settings → Privacy & Security → **Accessibility** → enable
-  `ai-usage-monitor`.
-- System Settings → Privacy & Security → **Screen Recording** → enable
-  `ai-usage-monitor`.
+- System Settings → Privacy & Security → **Accessibility** → enable it.
+- System Settings → Privacy & Security → **Screen Recording** → enable it.
+
+(Listed as **AI Usage Monitor** for the bundled app, or `ai-usage-monitor` for
+the bare dev binary.)
 
 Screen Recording only takes effect after a relaunch (Apple's behavior). Quit and
 relaunch.
 
-**Pass:** with any windows open, the menu-bar dot turns **blue** (armed —
-watching open windows).
+**Pass:** with any windows open, the icon becomes a **ring with a center dot**
+(armed — watching). The status line in the menu reads “Watching N window(s)”.
 
 ---
 
@@ -53,9 +56,10 @@ watching open windows).
    streams in as prose (e.g. “Explain regenerative agriculture in a paragraph”).
 2. Watch the dot while the answer streams.
 
-**Pass:** the dot turns **green** (capturing) while the answer streams, then
-returns to blue a few seconds after it stops. Click **Export extract for
-review…**, then inspect the newest file under the export dir:
+**Pass:** the icon fills to a **solid disc** (capturing) while the answer
+streams, then returns to the ring-with-dot a few seconds after it stops. Click
+**Export extract for review…**, then inspect the newest file under the export
+dir:
 
 ```
 ~/Library/Application Support/ai.memfold.ai-usage-monitor/exports/extract-*.jsonl
@@ -105,7 +109,7 @@ Before ANY real extract is shared, prove redaction catches planted values.
    call +1 415-555-0132.
    ```
 
-2. Let it get captured (dot goes green), then Export.
+2. Let it get captured (icon fills to a solid disc), then Export.
 
 **Pass:** in the exported JSONL, none of `AKIAIOSFODNN7EXAMPLE`,
 `jane.doe@example.com`, or `415-555-0132` appear as raw text; each is replaced by
@@ -126,9 +130,10 @@ The detector must not fire on text that merely grows. Test each:
   install`, a CI tail).
 - **Scrolling** a long article or code file.
 
-**Pass:** in all three the dot stays **blue** (never green), and after Export
-there is **no** session for them. Typing is excluded because the caret is in an
-input; logs are excluded because they read as structured output, not prose.
+**Pass:** in all three the icon stays a **ring-with-dot** (never fills to a
+solid disc), and after Export there is **no** session for them. Typing is
+excluded because the caret is in an input; logs are excluded because they read
+as structured output, not prose.
 
 If any of these produce a session, the detector thresholds need tuning — adjust
 `detector` in `config.json` (see README) and re-run this step. This gate is the

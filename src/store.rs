@@ -139,6 +139,21 @@ impl Store {
         self.conn.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
     }
 
+    /// Live capture stats for the menu status line: how many sessions started
+    /// since `since_ms`, and when the most recent capture activity was (its
+    /// end, or start if still open). Lets the user confirm at a glance that
+    /// detection is actually happening.
+    pub fn session_stats(&self, since_ms: i64) -> rusqlite::Result<SessionStats> {
+        self.conn.query_row(
+            "SELECT
+                 COALESCE(SUM(CASE WHEN started_at >= ?1 THEN 1 ELSE 0 END), 0),
+                 MAX(COALESCE(ended_at, started_at))
+             FROM sessions",
+            params![since_ms],
+            |r| Ok(SessionStats { recent: r.get(0)?, last_capture_ms: r.get(1)? }),
+        )
+    }
+
     /// All sessions, oldest first — for export.
     pub fn all_sessions(&self) -> rusqlite::Result<Vec<SessionRow>> {
         let mut stmt = self.conn.prepare(
@@ -166,6 +181,15 @@ impl Store {
         })?;
         rows.collect()
     }
+}
+
+/// Live capture stats for the status line.
+#[derive(Debug, Clone)]
+pub struct SessionStats {
+    /// Sessions started in the recent window (see `session_stats`).
+    pub recent: i64,
+    /// Most recent capture activity (unix ms), or `None` if nothing captured.
+    pub last_capture_ms: Option<i64>,
 }
 
 /// One session row as read back for export/analytics.

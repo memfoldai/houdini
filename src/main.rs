@@ -16,6 +16,8 @@ mod permissions;
 
 #[cfg(target_os = "macos")]
 mod app;
+#[cfg(target_os = "macos")]
+mod tray_glyph;
 
 #[cfg(target_os = "macos")]
 fn main() {

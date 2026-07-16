@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 #
-# Sign the ai-usage-monitor binary with a STABLE self-signed identity.
+# Sign the bare ai-usage-monitor binary with a STABLE self-signed identity, for
+# the DEVELOPMENT workflow (running ./target/release/ai-usage-monitor directly).
+# For a distributable app, use packaging/bundle.sh instead.
 #
 # Why this exists: macOS TCC (the Accessibility + Screen Recording grants this
-# app needs) keys its grants on the binary's code-signing identity / CDHash. An
-# unsigned or ad-hoc-signed (`codesign -s -`) binary gets a NEW hash on every
+# app needs) keys its grants on the binary's code-signing identity. An unsigned
+# or ad-hoc-signed (`codesign -s -`) binary gets a NEW identity/hash on every
 # rebuild, so every rebuild silently drops the grants and the app captures
-# nothing. Signing with a stable self-signed certificate gives the binary a
-# constant identity, so a grant made once survives rebuilds.
-#
-# This is for INTERNAL, consenting installs only (the study's own team machines).
-# It is NOT notarized and NOT for distribution.
+# nothing. A stable self-signed certificate gives the binary a constant
+# identity, so a grant made once survives rebuilds.
 #
 # Usage:
 #   scripts/sign.sh                 # build --release, then sign
@@ -18,16 +17,18 @@
 #
 # One-time: create the self-signed cert in Keychain Access:
 #   Keychain Access → Certificate Assistant → Create a Certificate…
-#     Name:            AI Usage Monitor Self-Signed
-#     Identity Type:   Self Signed Root
+#     Name:             AI Usage Monitor Self-Signed
+#     Identity Type:    Self Signed Root
 #     Certificate Type: Code Signing
-#   (Leave it in the login keychain; trust defaults are fine for local use.)
-# Then keep CERT_NAME below in sync with that certificate's name.
+# Leave it in the login keychain. It does NOT need to be "trusted": a self-signed
+# root shows as untrusted (CSSMERR_TP_NOT_TRUSTED) and is excluded from
+# `security find-identity -v`, but `codesign` signs with it fine and TCC keys on
+# it fine — trust only matters for OTHER machines verifying the signature.
 
 set -euo pipefail
 
 CERT_NAME="${AUM_SIGN_IDENTITY:-AI Usage Monitor Self-Signed}"
-ENTITLEMENTS="$(cd "$(dirname "$0")/.." && pwd)/scripts/entitlements.plist"
+ENTITLEMENTS="$(cd "$(dirname "$0")/.." && pwd)/packaging/entitlements.plist"
 
 BIN="${1:-}"
 if [[ -z "$BIN" ]]; then
@@ -41,17 +42,22 @@ if [[ ! -f "$BIN" ]]; then
   exit 1
 fi
 
-if ! security find-identity -v -p codesigning | grep -q "$CERT_NAME"; then
-  echo "error: code-signing identity '$CERT_NAME' not found in your keychain." >&2
-  echo "       Create it first (see the header of this script), or set" >&2
-  echo "       AUM_SIGN_IDENTITY to the name of an existing code-signing cert." >&2
+# Match against ALL code-signing identities, not just `-v` (valid/trusted) ones:
+# a self-signed root is untrusted by design, so `-v` would hide it even though
+# codesign can use it. `find-identity -p codesigning` lists untrusted certs too.
+if ! security find-identity -p codesigning | grep -qF "$CERT_NAME"; then
+  echo "error: no code-signing certificate named '$CERT_NAME' in your keychain." >&2
+  echo "       Create it (see this script's header), or set AUM_SIGN_IDENTITY to" >&2
+  echo "       the name of an existing code-signing certificate." >&2
+  echo >&2
+  echo "       Certificates currently available for signing:" >&2
+  security find-identity -p codesigning | sed 's/^/         /' >&2
   exit 1
 fi
 
 echo "Signing $BIN with '$CERT_NAME'…"
-# --force so re-signing a rebuilt binary replaces the previous signature.
-# --options runtime enables the hardened runtime; entitlements declare the
-# capabilities the app actually uses.
+# --force replaces a prior signature on rebuild; --options runtime enables the
+# hardened runtime; entitlements declare the capabilities the app uses.
 codesign --force --options runtime \
   --entitlements "$ENTITLEMENTS" \
   --sign "$CERT_NAME" \
@@ -59,9 +65,8 @@ codesign --force --options runtime \
 
 echo "Verifying signature…"
 codesign --verify --verbose=2 "$BIN"
-codesign --display --entitlements - "$BIN" >/dev/null
 
 echo
-echo "Signed. Because the identity is stable, the Accessibility and Screen"
-echo "Recording grants you make for this binary will persist across rebuilds"
-echo "(as long as you re-run this script after each build)."
+echo "Signed with a stable identity — the Accessibility and Screen Recording"
+echo "grants you make for this binary now persist across rebuilds (re-run this"
+echo "after each build)."
