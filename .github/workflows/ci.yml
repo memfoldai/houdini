@@ -1,0 +1,39 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+
+# Cancel superseded runs on the same ref.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build & test (macOS)
+    runs-on: macos-14 # Apple silicon; matches the app's macOS 14+ target
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build (lib + native bin)
+        run: cargo build --verbose
+      - name: Test (portable core)
+        run: cargo test --lib --verbose
+      - name: Release build
+        run: cargo build --release --verbose
+
+  audit:
+    name: cargo audit (RustSec)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@cargo-audit
+      # Fails only on vulnerabilities; unmaintained/unsound advisories for the
+      # Linux-only GTK stack (not in the macOS build) are warnings. See SECURITY.md.
+      - run: cargo audit

@@ -10,6 +10,7 @@
 pub mod config;
 pub mod detector;
 pub mod export;
+pub mod logging;
 pub mod monitor;
 pub mod redact;
 pub mod session;

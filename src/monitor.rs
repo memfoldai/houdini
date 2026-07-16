@@ -148,6 +148,7 @@ impl Monitor {
             if tracker.session.is_none() {
                 let hash = app_hash(&self.salt, &tracker.app_id);
                 let source = if sample.via_ocr { SourceKind::Ocr } else { SourceKind::Ax };
+                log::info!("AI session started (source={source:?}, app_hash={hash})");
                 tracker.session =
                     Some(SessionRecorder::begin(&self.store, clock.wall_ms, source, &hash)?);
             }
@@ -196,7 +197,9 @@ fn finalize(store: &Store, tracker: &mut SurfaceTracker, wall_ms: i64) -> rusqli
                 ts_ms: wall_ms,
             })?;
         }
+        let turns = rec.stored_turns();
         rec.finish(store, wall_ms)?;
+        log::info!("AI session ended ({turns} turn(s) captured)");
     }
     tracker.streaming = false;
     tracker.latest_output.clear();

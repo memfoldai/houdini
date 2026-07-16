@@ -41,6 +41,11 @@ pub struct AppConfig {
     /// At most this many OCR captures per full sweep; the rest are logged as
     /// skipped (no silent truncation) and picked up next sweep.
     pub max_ocr_per_sweep: usize,
+    /// Minimum time between OCR captures of the SAME window (ms). OCR is the
+    /// expensive path (a screenshot + Vision pass); this decouples its cost
+    /// from the sample rate so a frontmost browser is not OCR'd several times a
+    /// second. The detector still confirms streaming within a few of these.
+    pub ocr_min_interval_ms: u64,
     /// How long (ms) of no growth ends an active AI session.
     pub session_idle_gap_ms: u64,
     /// Detector thresholds (see `DetectorConfig`).
@@ -102,6 +107,8 @@ impl AppConfig {
             full_sweep_every_ticks: 6, // full multi-window sweep ~every 2.1 s
             min_surface_area: 40_000.0, // ~250×160 pt — smallest plausible chat window
             max_ocr_per_sweep: 6,
+            ocr_min_interval_ms: 800, // OCR any one window at most ~1.25×/s
+
             session_idle_gap_ms: 4_000,
             detector: DetectorConfigSerde::default(),
             ner_model_dir: None,
@@ -115,6 +122,10 @@ pub struct Paths {
     pub db_file: PathBuf,
     pub export_dir: PathBuf,
     pub data_dir: PathBuf,
+    /// Diagnostics log (a named product artifact — allowed on disk). Capped +
+    /// rotated by `logging`; the menu can reveal it so the user can confirm
+    /// what the app is seeing.
+    pub log_file: PathBuf,
 }
 
 impl Paths {
@@ -130,6 +141,7 @@ impl Paths {
             config_file: data_dir.join("config.json"),
             db_file: data_dir.join("sessions.sqlite"),
             export_dir,
+            log_file: data_dir.join("ai-usage-monitor.log"),
             data_dir,
         })
     }

@@ -6,51 +6,62 @@
 //! linked from tray-icon's `set_icon_as_template`). So these carry no color —
 //! state is conveyed by SHAPE, not hue (the old colored dot broke both rules):
 //!
-//!   Idle       hollow ring        — present, nothing to watch
-//!   Armed      ring + center dot  — an aperture/eye; watching windows
-//!   Capturing  filled disc        — the universal "recording" cue
+//!   Idle       hollow ring         — running, nothing to watch
+//!   Watching   ring + center dot   — an aperture/eye; watching windows
+//!   Capturing  filled disc         — the universal "recording" cue
+//!   Paused     two bars            — the universal "paused" cue
 //!
 //! Rendered at 36 px (retina @2x of the 18 pt the status bar draws) with 4×4
-//! supersampled coverage, so edges are smooth rather than the stair-stepped
-//! octagon a single inside/outside test produced. Output is black RGB with the
+//! supersampled coverage, so edges are smooth. Output is black RGB with the
 //! coverage in alpha — exactly what a template image consumes.
 
-use ai_usage_monitor::monitor::MonitorState;
 use tray_icon::Icon;
 
 const PX: usize = 36;
 const SS: usize = 4; // supersamples per axis
-
-// Geometry in 36 px canvas units (center at 17.5).
 const CENTER: f32 = (PX as f32 - 1.0) / 2.0;
+
+// Ring/disc geometry (36 px canvas units).
 const R_OUTER: f32 = 15.0;
 const RING_WIDTH: f32 = 3.2;
 const DOT_RADIUS: f32 = 4.6;
 const DISC_RADIUS: f32 = 13.0;
 
-/// The template `Icon` for a state. Pair with `is_template = true` when handing
-/// it to tray-icon.
-pub fn template_icon(state: MonitorState) -> Icon {
+// Pause-bars geometry.
+const BAR_HALF_H: f32 = 9.5; // half height
+const BAR_HALF_W: f32 = 2.4; // half width
+const BAR_GAP: f32 = 4.0; // center-to-inner-edge offset
+
+/// What the menu-bar icon should show. A display concern (includes Paused),
+/// kept separate from the monitor's domain `MonitorState`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Glyph {
+    Idle,
+    Watching,
+    Capturing,
+    Paused,
+}
+
+/// The template `Icon` for a glyph. Pair with `is_template = true`.
+pub fn icon(glyph: Glyph) -> Icon {
     let mut rgba = vec![0u8; PX * PX * 4];
     for y in 0..PX {
         for x in 0..PX {
-            let alpha = coverage(state, x, y);
             // Template image: black content, shape carried entirely in alpha.
-            rgba[(y * PX + x) * 4 + 3] = alpha;
+            rgba[(y * PX + x) * 4 + 3] = coverage(glyph, x, y);
         }
     }
     Icon::from_rgba(rgba, PX as u32, PX as u32).expect("valid rgba icon")
 }
 
-/// Supersampled coverage (0–255) of the state's shape at one output pixel.
-fn coverage(state: MonitorState, x: usize, y: usize) -> u8 {
+/// Supersampled coverage (0–255) of the glyph at one output pixel.
+fn coverage(glyph: Glyph, x: usize, y: usize) -> u8 {
     let mut hits = 0u32;
     for sy in 0..SS {
         for sx in 0..SS {
             let px = x as f32 + (sx as f32 + 0.5) / SS as f32 - 0.5;
             let py = y as f32 + (sy as f32 + 0.5) / SS as f32 - 0.5;
-            let d = ((px - CENTER).powi(2) + (py - CENTER).powi(2)).sqrt();
-            if shape_contains(state, d) {
+            if contains(glyph, px, py) {
                 hits += 1;
             }
         }
@@ -58,12 +69,20 @@ fn coverage(state: MonitorState, x: usize, y: usize) -> u8 {
     ((hits * 255) / (SS * SS) as u32) as u8
 }
 
-/// Whether the glyph for `state` covers a point at distance `d` from center.
-fn shape_contains(state: MonitorState, d: f32) -> bool {
+/// Whether the glyph covers a subpixel point.
+fn contains(glyph: Glyph, px: f32, py: f32) -> bool {
+    let d = ((px - CENTER).powi(2) + (py - CENTER).powi(2)).sqrt();
     let on_ring = d <= R_OUTER && d >= R_OUTER - RING_WIDTH;
-    match state {
-        MonitorState::Idle => on_ring,
-        MonitorState::Armed => on_ring || d <= DOT_RADIUS,
-        MonitorState::Capturing => d <= DISC_RADIUS,
+    match glyph {
+        Glyph::Idle => on_ring,
+        Glyph::Watching => on_ring || d <= DOT_RADIUS,
+        Glyph::Capturing => d <= DISC_RADIUS,
+        Glyph::Paused => in_bar(px, py, -1.0) || in_bar(px, py, 1.0),
     }
+}
+
+/// Whether the point is inside one pause bar (`side` = -1 left, +1 right).
+fn in_bar(px: f32, py: f32, side: f32) -> bool {
+    let bar_center_x = CENTER + side * (BAR_GAP + BAR_HALF_W);
+    (px - bar_center_x).abs() <= BAR_HALF_W && (py - CENTER).abs() <= BAR_HALF_H
 }

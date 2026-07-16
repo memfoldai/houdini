@@ -21,7 +21,8 @@ mod tray_glyph;
 
 #[cfg(target_os = "macos")]
 fn main() {
-    env_logger::init();
+    // Logging is initialized inside app::run once the data-dir paths resolve
+    // (it writes to a file under the data dir; see logging::init).
     app::run();
 }
 

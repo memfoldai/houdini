@@ -59,7 +59,11 @@ impl Default for DetectorConfig {
         Self {
             min_growth_steps: 3,
             min_step_growth_chars: 2,
-            max_step_growth_chars: 1200,
+            // Wide enough for a fast model's burst between OCR frames (throttled
+            // to ~800 ms, so a step can be several hundred chars), yet a single
+            // whole-screen paint is still excluded because it is ONE jump, not
+            // the required 3 consecutive growth steps.
+            max_step_growth_chars: 2500,
             exclude_typing_steps: true,
             min_prose_score: 0.55,
             window: 24,
@@ -158,25 +162,42 @@ impl StreamingDetector {
     }
 }
 
-/// If `cur` is `prev` with text APPENDED at the tail (prev is a prefix of cur,
-/// ignoring pure trailing-whitespace churn), return the number of added
-/// non-trivial chars. `None` when `cur` is not a tail-append of `prev` (a
-/// replace, a shrink, an unrelated repaint) — those are not autoregressive
-/// growth. Whitespace-tolerant so a trailing-space reflow between frames isn't
-/// mistaken for a new token.
+/// Fraction of `prev` that must survive as a common prefix of `cur` for the
+/// step to count as append-growth. Real capture is noisy — OCR re-reads the
+/// whole window each frame with small differences, UI chrome shifts — so a
+/// byte-perfect prefix (`cur.starts_with(prev)`) essentially never holds on
+/// screen text. Requiring MOST of `prev` to match as a prefix tolerates the
+/// jitter at the growing tail (where new tokens and cursors live) while still
+/// rejecting a scroll or a scene change, which diverge early and drop most of
+/// `prev`. Tuned via VERIFICATION.md; see `append_growth`.
+const PREFIX_MATCH_MIN: f32 = 0.80;
+
+/// If `cur` is a NOISY tail-append of `prev` — most of `prev` reappears as a
+/// common prefix of `cur`, and `cur` is longer — return the number of chars in
+/// the newly-appended tail. `None` when `cur` is a replace, a shrink, a scroll,
+/// or an unrelated repaint (those are not autoregressive growth).
+///
+/// Growth is measured by longest common prefix (LCP) rather than exact prefix:
+/// let `lcp` be the shared leading chars. `cur` grew if it is longer than
+/// `prev` and the common prefix still covers at least `PREFIX_MATCH_MIN` of
+/// `prev` (only a little of `prev`'s tail diverged — capture jitter, not a
+/// scene change). The appended tail is everything in `cur` past the LCP.
 pub fn append_growth(prev: &str, cur: &str) -> Option<usize> {
-    let p = prev.trim_end();
-    if cur.len() < p.len() {
-        return None;
+    let p: Vec<char> = prev.trim().chars().collect();
+    let c: Vec<char> = cur.trim().chars().collect();
+    if p.is_empty() {
+        // Growing from nothing: the whole of `cur` is new (the caller's
+        // max-step bound rejects a full-screen instant paint).
+        return Some(c.len());
     }
-    if !cur.starts_with(p) {
-        return None;
+    if c.len() <= p.len() {
+        return None; // not longer → static, shrink, or replace, never growth
     }
-    let added = cur[p.len()..].trim();
-    if added.is_empty() {
-        return Some(0);
+    let lcp = p.iter().zip(&c).take_while(|(a, b)| a == b).count();
+    if (lcp as f32) < PREFIX_MATCH_MIN * p.len() as f32 {
+        return None; // diverged too early → a scroll/replace, not an append
     }
-    Some(added.chars().count())
+    Some(c.len() - lcp)
 }
 
 /// Form score in [0,1]: how much the text reads as natural-language prose /
@@ -317,13 +338,29 @@ mod tests {
 
     #[test]
     fn append_growth_detects_tail_append() {
-        assert_eq!(append_growth("Hello", "Hello world"), Some("world".chars().count()));
-        // trailing-whitespace churn is not growth
-        assert_eq!(append_growth("Hello", "Hello   "), Some(0));
-        // replace / divergence is not append growth
+        // Clean append: the tail past the common prefix (" world") is the growth.
+        assert_eq!(append_growth("Hello", "Hello world"), Some(" world".chars().count()));
+        // Trailing-whitespace churn only → not longer → not growth.
+        assert_eq!(append_growth("Hello", "Hello   "), None);
+        // Replace / early divergence is not append growth.
         assert_eq!(append_growth("Hello world", "Goodbye world"), None);
-        // shrink is not growth
+        // Shrink is not growth.
         assert_eq!(append_growth("Hello world", "Hello"), None);
+    }
+
+    #[test]
+    fn append_growth_tolerates_ocr_tail_jitter() {
+        // OCR re-reads the whole region each frame; the already-rendered body is
+        // stable but the growing tail jitters. A misread near the tail must not
+        // hide the growth (the body still matches as a prefix).
+        let prev = "The mitochondria is the powerhouse of the cel";
+        let cur = "The mitochondria is the powerhouse of the cell, producing ATP.";
+        assert!(append_growth(prev, cur).is_some(), "tail jitter must still read as growth");
+
+        // But an early divergence (a scroll shifting the whole view) is NOT
+        // append-growth even though the result is longer.
+        let scrolled = "...much later text entirely different from before, longer overall too";
+        assert_eq!(append_growth(prev, scrolled), None);
     }
 
     #[test]

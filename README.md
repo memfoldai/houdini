@@ -84,10 +84,19 @@ zero-friction install on other machines.
 
 The icon is a monochrome template glyph whose **shape** shows state (macOS tints
 it for you): a hollow ring when idle, a ring-with-dot while watching, a solid
-disc while capturing an AI session. Click it for a live status readout — current
-state, sessions captured in the last 24 h, and time since the last capture —
-which is how you confirm detection is working. The menu also has *Export extract
-for review…* and *Quit*.
+disc while recording an AI chat, two bars when paused. A small **"Recording"**
+label appears next to it only while a chat is actively being captured.
+
+Click it for a plain-language readout ("Watching for AI use", "Recording an AI
+chat", how many were captured recently, when the last one was) — that is how you
+confirm it is working. The menu also has:
+
+- **Pause watching** — for 15 minutes, 1 hour, or until you resume. While paused
+  nothing is captured (handy before typing something sensitive). Global by
+  design: it protects whatever you're doing, in any window.
+- **Export for review…** — writes the redacted extract and reveals it in Finder.
+- **Open activity log** — a metadata-only diagnostics log (no captured text).
+- **Quit**.
 
 ## Develop
 
@@ -120,6 +129,7 @@ created on first run with a random salt and install id. Operator knobs:
 | `full_sweep_every_ticks` | 6 | Every Nth tick sweeps *all* windows (≈2.1 s) |
 | `min_surface_area` | 40000 | Skip windows below this pt² (too small to hold a chat) |
 | `max_ocr_per_sweep` | 6 | OCR budget per sweep; excess is logged and retried |
+| `ocr_min_interval_ms` | 800 | Min time between OCR captures of the same window (CPU throttle) |
 | `session_idle_gap_ms` | 4000 | No-growth gap that ends a session |
 | `detector` | — | Streaming thresholds; VERIFICATION.md step 4 is the tuning loop |
 | `ner_model_dir` | unset | Enables the [NER export sweep](docs/NER.md) (`--features ner` build) |
@@ -131,9 +141,18 @@ machine.
 
 - **[INSTALL.md](INSTALL.md)** — build the app, distribute it, install it.
 - **[VERIFICATION.md](VERIFICATION.md)** — the human-gated proof checklist.
+- **[SECURITY.md](SECURITY.md)** — data-handling guarantees, dependency audit,
+  memory/CPU posture.
+- **[CHANGELOG.md](CHANGELOG.md)** — what changed in each version.
 - **[docs/NER.md](docs/NER.md)** — the optional NER redaction layer.
 - **[AGENTS.md](AGENTS.md)** — for coding agents: commands, non-negotiables,
   architecture invariants.
+
+If it seems like it isn't capturing, **Open activity log** from the menu (or
+`tail -f "~/Library/Application Support/ai.memfold.ai-usage-monitor/ai-usage-monitor.log"`).
+It shows, without any captured text, how many windows each sweep saw, the text
+lengths it read, and when sessions start and end — enough to tell whether the
+issue is permissions, capture, or detection tuning.
 
 Per-module design and rationale live in the doc comment at the top of each file
 in `src/`, next to the code they explain.

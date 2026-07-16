@@ -42,6 +42,8 @@ pub struct SweepLimits {
     pub min_surface_area: f64,
     /// Max OCR captures per sweep; the excess is logged and retried next sweep.
     pub max_ocr: usize,
+    /// Minimum ms between OCR captures of the same window (cost throttle).
+    pub ocr_min_interval_ms: i64,
 }
 
 /// How much of the system one sweep covers.
@@ -62,26 +64,43 @@ struct AxSlot {
     seen: bool,
 }
 
-/// Stateful capture engine. Owns the AX identity registry; one instance lives
-/// on the main thread next to the monitor.
+/// Stateful capture engine. Owns the AX identity registry + OCR throttle; one
+/// instance lives on the main thread next to the monitor.
 pub struct CaptureEngine {
     ax_slots: Vec<AxSlot>,
     next_slot: u64,
+    /// Last OCR time (monotonic ms) per window id, for the cost throttle.
+    ocr_last: std::collections::HashMap<u32, i64>,
 }
 
 impl CaptureEngine {
     pub fn new() -> Self {
-        Self { ax_slots: Vec::new(), next_slot: 0 }
+        Self { ax_slots: Vec::new(), next_slot: 0, ocr_last: std::collections::HashMap::new() }
     }
 
     /// Observe the system once. Returns one sample per window with readable
     /// text. `user_typing` is set on the frontmost app's samples when the
     /// system-wide focused element is an editable input (growth there is the
     /// user's own typing, not model output — a per-app approximation).
-    pub fn sweep(&mut self, scope: SweepScope, limits: &SweepLimits) -> Vec<SurfaceSample> {
-        let front_pid = frontmost::frontmost();
+    pub fn sweep(&mut self, now_ms: i64, scope: SweepScope, limits: &SweepLimits) -> Vec<SurfaceSample> {
+        let front = frontmost::frontmost();
+        let front_pid = front.as_ref().map(|f| f.pid);
         let typing = ax::system_focused_is_input();
         let own_pid = std::process::id() as i32;
+
+        // Fast path: on a frontmost-only tick, if the frontmost app is
+        // AX-readable, sample it via AX and skip enumerating every window on the
+        // system (the expensive part). Browsers fall through to the OCR path.
+        if let (SweepScope::FrontmostApp, Some(f)) = (scope, front.as_ref()) {
+            let ax = self.sample_ax_windows(f.pid, &f.app_id, typing);
+            if !ax.is_empty() {
+                if log::log_enabled!(log::Level::Debug) {
+                    let lens: Vec<usize> = ax.iter().map(|s| s.output_text.chars().count()).collect();
+                    log::debug!("sweep FrontmostApp(ax-fast): {} sample(s); lengths={lens:?}", ax.len());
+                }
+                return ax;
+            }
+        }
 
         // Candidate windows from the system-level enumeration; also the source
         // of each app's id for the OCR path.
@@ -120,9 +139,11 @@ impl CaptureEngine {
             }
         }
 
+        let app_count = apps.len();
         let mut samples = Vec::new();
         let mut ocr_budget = limits.max_ocr;
         let mut ocr_skipped = 0usize;
+        let mut live_windows: Vec<u32> = Vec::new();
         for (pid, app_id, sc_windows) in apps {
             let user_typing = typing && Some(pid) == front_pid;
             let ax_samples = self.sample_ax_windows(pid, &app_id, user_typing);
@@ -130,13 +151,21 @@ impl CaptureEngine {
                 samples.extend(ax_samples);
                 continue;
             }
-            // App has no AX-readable text (e.g. a browser): OCR its windows.
+            // App has no AX-readable text (e.g. a browser): OCR its windows,
+            // throttled per window so a frontmost browser isn't OCR'd every tick.
             for w in sc_windows {
+                let win_id = unsafe { w.windowID() };
+                live_windows.push(win_id);
+                let last = self.ocr_last.get(&win_id).copied().unwrap_or(i64::MIN);
+                if now_ms - last < limits.ocr_min_interval_ms {
+                    continue; // throttled — not due yet
+                }
                 if ocr_budget == 0 {
                     ocr_skipped += 1;
                     continue;
                 }
                 ocr_budget -= 1;
+                self.ocr_last.insert(win_id, now_ms);
                 let Some(image) = screen::capture_window_image(&w) else {
                     continue;
                 };
@@ -145,7 +174,7 @@ impl CaptureEngine {
                     continue;
                 }
                 samples.push(SurfaceSample {
-                    surface: SurfaceId(format!("win:{}", unsafe { w.windowID() })),
+                    surface: SurfaceId(format!("win:{win_id}")),
                     app_id: app_id.clone(),
                     output_text: text,
                     user_typing,
@@ -158,9 +187,19 @@ impl CaptureEngine {
         }
 
         if matches!(scope, SweepScope::AllWindows) {
-            // Prune registry entries whose window no longer exists — a full
-            // sweep re-enumerated every app, so unseen means gone.
+            // A full sweep re-enumerated everything: unseen AX slots and OCR
+            // windows that no longer exist are pruned so neither map grows
+            // without bound.
             self.ax_slots.retain(|s| s.seen);
+            self.ocr_last.retain(|id, _| live_windows.contains(id));
+        }
+        // Content-free diagnostics: lengths and counts only, never text.
+        if log::log_enabled!(log::Level::Debug) {
+            let lens: Vec<usize> = samples.iter().map(|s| s.output_text.chars().count()).collect();
+            log::debug!(
+                "sweep {scope:?}: {app_count} app(s) → {} sample(s); text lengths={lens:?}",
+                samples.len()
+            );
         }
         samples
     }

@@ -10,9 +10,15 @@ Rust, no framework. Read this before changing code.
 cargo test                       # portable core; runs on any platform
 cargo build && cargo build --release
 cargo check --features ner       # optional NER layer (needs onnxruntime to link)
+cargo audit                      # RustSec check (CI runs this; must stay clean)
 scripts/sign.sh                  # sign the bare dev binary (REQUIRED, see Signing)
 packaging/bundle.sh              # build the signed .app + .dmg (see INSTALL.md)
 ```
+
+Debugging capture ("is it working?"): the app writes a metadata-only log to
+`<data-dir>/ai-usage-monitor.log` (menu → Open activity log). Run with
+`RUST_LOG=ai_usage_monitor=debug` for per-sweep window counts and text lengths.
+Never log captured text — it is pre-redaction (see `logging` module docs).
 
 There is no lint/format config beyond rustfmt defaults. Keep builds at
 **zero warnings** — they are currently zero, do not add any.
