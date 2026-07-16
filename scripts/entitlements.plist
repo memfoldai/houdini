@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!--
+    Minimal entitlements for the internal, self-signed build.
+    - No App Sandbox: the app reads other apps' window text (Accessibility) and
+      captures window images (Screen Recording), which the sandbox forbids. The
+      TCC grants (user-approved in System Settings) are the access control here.
+    - Allow unsigned executable memory / JIT are intentionally absent — the app
+      needs neither.
+    Screen Recording and Accessibility are NOT entitlements; they are TCC grants
+    the user approves at runtime. This file only sets the hardened-runtime shape.
+  -->
+  <key>com.apple.security.cs.disable-library-validation</key>
+  <false/>
+</dict>
+</plist>
