@@ -144,9 +144,10 @@ impl Monitor {
         // Content-free per-surface trace for tuning: text length + verdict, no text.
         if log::log_enabled!(log::Level::Debug) && sample.output_text.chars().count() > 40 {
             log::debug!(
-                "detect: app={} len={} typing={} verdict={:?}",
+                "detect: app={} len={} prose_len={} typing={} verdict={:?}",
                 tracker.app_id,
                 sample.output_text.chars().count(),
+                crate::detector::prose_len(&sample.output_text),
                 sample.user_typing,
                 verdict
             );
@@ -320,11 +321,11 @@ mod tests {
         let store = Rc::new(Store::open_in_memory().unwrap());
         let mut mon = monitor(&store);
         let mut t = 0i64;
-        for text in stream_texts("Answer: the capital ", &[
-            "of France is ",
-            "Paris, a major ",
-            "European city and ",
-            "the seat of government.",
+        for text in stream_texts("Answer: the capital of France ", &[
+            "is Paris, a major European ",
+            "city that sits on the river Seine ",
+            "and serves as the country's ",
+            "political and cultural center.",
         ]) {
             mon.tick(clock(t), vec![sample("win:5", "com.openai.chat", &text)]).unwrap();
             t += 350;

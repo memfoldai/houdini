@@ -58,7 +58,6 @@ pub enum SweepScope {
 /// A window queued for OCR, with the signals used to prioritize it (visible +
 /// large windows are read before the per-sweep budget runs out).
 struct OcrCandidate {
-    on_screen: bool,
     area: f64,
     win_id: u32,
     app_id: String,
@@ -147,10 +146,10 @@ impl CaptureEngine {
                     continue;
                 }
             }
-            let frame = unsafe { w.frame() };
-            if frame.size.width * frame.size.height < limits.min_surface_area {
-                continue;
-            }
+            // No area/on-screen filter here: a native app on ANOTHER Space is
+            // reported with a degenerate frame (e.g. 64×64) and off-screen, but
+            // Accessibility still reads it, so it must reach the AX pass. The
+            // area + on-screen filter belongs on the OCR path (pixels), below.
             match apps.iter_mut().find(|(p, _, _)| *p == pid) {
                 Some((_, _, wins)) => wins.push(w),
                 None => {
@@ -190,9 +189,15 @@ impl CaptureEngine {
                 let win_id = unsafe { w.windowID() };
                 live_windows.push(win_id);
                 let frame = unsafe { w.frame() };
+                let area = frame.size.width * frame.size.height;
+                // OCR needs real rendered pixels: skip off-screen windows (an app
+                // on another Space renders nothing to capture) and windows too
+                // small to hold a conversation.
+                if !unsafe { w.isOnScreen() } || area < limits.min_surface_area {
+                    continue;
+                }
                 ocr_candidates.push(OcrCandidate {
-                    on_screen: unsafe { w.isOnScreen() },
-                    area: frame.size.width * frame.size.height,
+                    area,
                     win_id,
                     app_id: app_id.clone(),
                     user_typing,
@@ -205,9 +210,7 @@ impl CaptureEngine {
         // and LARGEST — so the window the user is actually looking at (the AI
         // chat) is read before the per-sweep budget runs out. Arbitrary
         // enumeration order let a background editor's empty windows starve it.
-        ocr_candidates.sort_by(|a, b| {
-            b.on_screen.cmp(&a.on_screen).then(b.area.total_cmp(&a.area))
-        });
+        ocr_candidates.sort_by(|a, b| b.area.total_cmp(&a.area));
         let mut ocr_budget = limits.max_ocr;
         let mut ocr_skipped = 0usize;
         for c in ocr_candidates {

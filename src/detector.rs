@@ -26,25 +26,22 @@ use std::collections::VecDeque;
 #[derive(Debug, Clone)]
 pub struct DetectorConfig {
     /// Consecutive growth steps required before declaring streaming. One step
-    /// can be a paste or a re-layout; sustained append across several samples
+    /// can be a paste or a re-layout; sustained growth across several samples
     /// is what a model streaming actually looks like.
     pub min_growth_steps: usize,
-    /// A growth step must add at least this many characters. Filters caret
-    /// blink / whitespace jitter that leaves length unchanged-ish.
+    /// A growth step must add at least this many PROSE characters (letters in
+    /// natural-language lines; see `prose_len`). High enough to beat OCR/AX
+    /// jitter on a big window, low enough that word-by-word streaming clears it.
     pub min_step_growth_chars: usize,
-    /// A growth step must add at most this many characters. A whole page
-    /// appearing at once (search results, a message arriving, a page load) is
-    /// NOT autoregressive generation — it is one big jump, so it is excluded.
+    /// A jump larger than this in one step is a whole page/app painting at once
+    /// (a load, a scene change), not autoregressive generation — so it resets
+    /// the run rather than counting.
     pub max_step_growth_chars: usize,
     /// If the user was typing during a growth step, that step is the user
     /// writing, not a model generating — it cannot count toward streaming.
-    /// (The caller sets `Sample::user_typing` from keystroke/focused-input
+    /// (The caller sets `Sample::user_typing` from the focused-input-changed
     /// signal; the detector treats it as authoritative.)
     pub exclude_typing_steps: bool,
-    /// Minimum prose-vs-log score [0,1] of the *grown* text for a positive.
-    /// Below this the streaming text reads as structured log output, not model
-    /// prose — the build-log disambiguation.
-    pub min_prose_score: f32,
     /// Rolling window of samples kept. Bounds memory; a session that keeps
     /// streaming re-confirms continuously within the window.
     pub window: usize,
@@ -52,20 +49,14 @@ pub struct DetectorConfig {
 
 impl Default for DetectorConfig {
     fn default() -> Self {
-        // Starting values, not magic: ~2-4 Hz sampling, so 3 steps ≈ ~1s of
-        // sustained append; 2..=1200 chars/step spans word-by-word streaming
-        // up to a chunky multi-line token burst while still excluding a
-        // whole-screen instant paint.
+        // Starting values, not magic. Sampling is ~1-2 Hz per surface, so 3
+        // steps ≈ a few seconds of sustained prose growth. The min beats capture
+        // jitter on a cluttered window; the max excludes a whole-screen paint.
         Self {
             min_growth_steps: 3,
-            min_step_growth_chars: 2,
-            // Wide enough for a fast model's burst between OCR frames (throttled
-            // to ~800 ms, so a step can be several hundred chars), yet a single
-            // whole-screen paint is still excluded because it is ONE jump, not
-            // the required 3 consecutive growth steps.
+            min_step_growth_chars: 12,
             max_step_growth_chars: 2500,
             exclude_typing_steps: true,
-            min_prose_score: 0.55,
             window: 24,
         }
     }
@@ -120,84 +111,103 @@ impl StreamingDetector {
     }
 
     fn evaluate(&self) -> Verdict {
-        if self.samples.len() < self.cfg.min_growth_steps + 1 {
-            return Verdict::Idle;
-        }
-        // Find the longest recent run of qualifying append-growth steps.
-        let mut run_steps = 0usize;
-        let mut run_grown = 0usize;
-        let mut best_steps = 0usize;
-        let mut best_grown = 0usize;
-        let samples: Vec<&Sample> = self.samples.iter().collect();
-        for i in 1..samples.len() {
-            let prev = samples[i - 1];
-            let cur = samples[i];
-            if let Some(added) = append_growth(&prev.text, &cur.text) {
-                let typing_ok = !(self.cfg.exclude_typing_steps && cur.user_typing);
-                let size_ok =
-                    added >= self.cfg.min_step_growth_chars && added <= self.cfg.max_step_growth_chars;
-                if typing_ok && size_ok {
-                    run_steps += 1;
-                    run_grown += added;
-                    if run_steps > best_steps {
-                        best_steps = run_steps;
-                        best_grown = run_grown;
-                    }
-                    continue;
-                }
+        let lens: Vec<i64> = self.samples.iter().map(|s| prose_len(&s.text) as i64).collect();
+        let typing: Vec<bool> = self.samples.iter().map(|s| s.user_typing).collect();
+        match growth_run(&lens, &typing, &self.cfg) {
+            Some(grown) => {
+                let score = prose_score(&self.samples.back().unwrap().text);
+                Verdict::Streaming { grown_chars: grown, prose_score: score }
             }
-            run_steps = 0;
-            run_grown = 0;
+            None => Verdict::Idle,
         }
-        if best_steps < self.cfg.min_growth_steps {
-            return Verdict::Idle;
-        }
-        // Form gate on the newest text (what actually streamed in).
-        let newest = &self.samples.back().unwrap().text;
-        let score = prose_score(newest);
-        if score < self.cfg.min_prose_score {
-            return Verdict::Idle;
-        }
-        Verdict::Streaming { grown_chars: best_grown, prose_score: score }
     }
 }
 
-/// Fraction of `prev` that must survive as a common prefix of `cur` for the
-/// step to count as append-growth. Real capture is noisy — OCR re-reads the
-/// whole window each frame with small differences, UI chrome shifts — so a
-/// byte-perfect prefix (`cur.starts_with(prev)`) essentially never holds on
-/// screen text. Requiring MOST of `prev` to match as a prefix tolerates the
-/// jitter at the growing tail (where new tokens and cursors live) while still
-/// rejecting a scroll or a scene change, which diverge early and drop most of
-/// `prev`. Tuned via VERIFICATION.md; see `append_growth`.
-const PREFIX_MATCH_MIN: f32 = 0.80;
+/// How many consecutive flat/jittery frames a growth run tolerates before it is
+/// considered stalled and reset. Streaming makes a new prose high almost every
+/// sample, so a short OCR hiccup is fine; a genuine stop (or the gaps between
+/// discrete message arrivals) exceeds this and resets — which is what keeps a
+/// busy chat's incoming messages from reading as one continuous generation.
+const STALL_TOLERANCE: usize = 2;
 
-/// If `cur` is a NOISY tail-append of `prev` — most of `prev` reappears as a
-/// common prefix of `cur`, and `cur` is longer — return the number of chars in
-/// the newly-appended tail. `None` when `cur` is a replace, a shrink, a scroll,
-/// or an unrelated repaint (those are not autoregressive growth).
+/// The core signal: a SUSTAINED run of new prose highs.
 ///
-/// Growth is measured by longest common prefix (LCP) rather than exact prefix:
-/// let `lcp` be the shared leading chars. `cur` grew if it is longer than
-/// `prev` and the common prefix still covers at least `PREFIX_MATCH_MIN` of
-/// `prev` (only a little of `prev`'s tail diverged — capture jitter, not a
-/// scene change). The appended tail is everything in `cur` past the LCP.
-pub fn append_growth(prev: &str, cur: &str) -> Option<usize> {
-    let p: Vec<char> = prev.trim().chars().collect();
-    let c: Vec<char> = cur.trim().chars().collect();
-    if p.is_empty() {
-        // Growing from nothing: the whole of `cur` is new (the caller's
-        // max-step bound rejects a full-screen instant paint).
-        return Some(c.len());
+/// `lens[i]` is `prose_len` at sample `i` (letters in natural-language lines —
+/// fixed window chrome cancels, only the streamed reply moves it). A step
+/// counts when the prose amount reaches a NEW HIGH by at least
+/// `min_step_growth_chars` (measuring against the running max, not the previous
+/// frame, so an OCR dip-then-recover is not mistaken for a shrink). A jump
+/// bigger than `max_step_growth_chars`, or a large drop (below 60% of the peak),
+/// is a page/scene change and resets the run. `STALL_TOLERANCE` flat frames also
+/// reset it. Returns the grown prose chars if ≥ `min_growth_steps` were reached.
+fn growth_run(lens: &[i64], typing: &[bool], cfg: &DetectorConfig) -> Option<usize> {
+    if lens.len() < cfg.min_growth_steps + 1 {
+        return None;
     }
-    if c.len() <= p.len() {
-        return None; // not longer → static, shrink, or replace, never growth
+    let min = cfg.min_step_growth_chars as i64;
+    let max = cfg.max_step_growth_chars as i64;
+
+    let mut steps = 0usize;
+    let mut grown = 0i64;
+    let mut best = 0usize;
+    let mut best_grown = 0i64;
+    let mut peak = lens[0];
+    let mut stall = 0usize;
+
+    for i in 1..lens.len() {
+        if cfg.exclude_typing_steps && typing[i] {
+            // The user typing (their own input changing) can't be generation.
+            steps = 0;
+            grown = 0;
+            stall = 0;
+            peak = peak.max(lens[i]);
+            continue;
+        }
+        let rise = lens[i] - peak;
+        if rise >= min && rise <= max {
+            steps += 1;
+            grown += rise;
+            peak = lens[i];
+            stall = 0;
+            if steps > best {
+                best = steps;
+                best_grown = grown;
+            }
+        } else if rise > max || lens[i] * 5 < peak * 3 {
+            // Whole-screen paint (page/app load) or a big drop (scroll/scene
+            // change): not autoregressive growth — reset to the new content.
+            steps = 0;
+            grown = 0;
+            stall = 0;
+            peak = lens[i];
+        } else {
+            // Flat frame or jitter dip: hold the peak, tolerate a few in a row.
+            peak = peak.max(lens[i]);
+            stall += 1;
+            if stall > STALL_TOLERANCE {
+                steps = 0;
+                grown = 0;
+            }
+        }
     }
-    let lcp = p.iter().zip(&c).take_while(|(a, b)| a == b).count();
-    if (lcp as f32) < PREFIX_MATCH_MIN * p.len() as f32 {
-        return None; // diverged too early → a scroll/replace, not an append
-    }
-    Some(c.len() - lcp)
+    (best >= cfg.min_growth_steps).then_some(best_grown as usize)
+}
+
+/// Fraction of `prev` that must survive as a common prefix of `cur` for the
+/// The amount of natural-language PROSE on screen: the count of alphabetic
+/// characters in lines that are NOT structured (log/code/chrome-symbol lines,
+/// per `looks_structured`). This is the quantity the detector watches grow.
+///
+/// Why letters-in-prose-lines and not total length: a real app window is mostly
+/// fixed chrome (sidebar entries, button labels, timestamps, model name). That
+/// chrome is either structured (excluded) or CONSTANT, so it cancels when we
+/// difference consecutive samples — only the streamed reply changes the count.
+/// Counting only letters also shrugs off OCR punctuation/whitespace jitter.
+pub fn prose_len(text: &str) -> usize {
+    text.lines()
+        .filter(|l| !l.trim().is_empty() && !looks_structured(l))
+        .map(|l| l.chars().filter(|c| c.is_alphabetic()).count())
+        .sum()
 }
 
 /// Form score in [0,1]: how much the text reads as natural-language prose /
@@ -336,49 +346,88 @@ mod tests {
         last
     }
 
-    #[test]
-    fn append_growth_detects_tail_append() {
-        // Clean append: the tail past the common prefix (" world") is the growth.
-        assert_eq!(append_growth("Hello", "Hello world"), Some(" world".chars().count()));
-        // Trailing-whitespace churn only → not longer → not growth.
-        assert_eq!(append_growth("Hello", "Hello   "), None);
-        // Replace / early divergence is not append growth.
-        assert_eq!(append_growth("Hello world", "Goodbye world"), None);
-        // Shrink is not growth.
-        assert_eq!(append_growth("Hello world", "Hello"), None);
+    /// A model reply materializing inside a real app window: fixed chrome
+    /// (sidebar, header, disclaimer, composer) with the assistant message
+    /// growing. The whole-window prose score is LOW (chrome dominates), so the
+    /// old score gate rejected it — this is the exact real-app failure.
+    fn chat_window(reply: &str) -> String {
+        format!(
+            "New chat\nRegenerative soil\nTrip to Kyoto\nRust lifetimes\n\
+             Assistant\n\
+             You\nExplain how photosynthesis works in simple terms\n\
+             Assistant\n{reply}\n\
+             This assistant can make mistakes. Check important information.\n\
+             Message the assistant"
+        )
     }
 
     #[test]
-    fn append_growth_tolerates_ocr_tail_jitter() {
-        // OCR re-reads the whole region each frame; the already-rendered body is
-        // stable but the growing tail jitters. A misread near the tail must not
-        // hide the growth (the body still matches as a prefix).
-        let prev = "The mitochondria is the powerhouse of the cel";
-        let cur = "The mitochondria is the powerhouse of the cell, producing ATP.";
-        assert!(append_growth(prev, cur).is_some(), "tail jitter must still read as growth");
-
-        // But an early divergence (a scroll shifting the whole view) is NOT
-        // append-growth even though the result is longer.
-        let scrolled = "...much later text entirely different from before, longer overall too";
-        assert_eq!(append_growth(prev, scrolled), None);
-    }
-
-    #[test]
-    fn streams_prose_response_is_detected() {
+    fn streaming_reply_in_a_cluttered_window_is_detected() {
         let mut det = StreamingDetector::new(DetectorConfig::default());
-        // A model answer materializing token-by-token, user not typing.
-        let v = feed(
-            &mut det,
-            &[
-                (0, "", false),
-                (300, "Sure. ", false),
-                (600, "Sure. Regenerative agriculture ", false),
-                (900, "Sure. Regenerative agriculture is a set of ", false),
-                (1200, "Sure. Regenerative agriculture is a set of farming practices that ", false),
-                (1500, "Sure. Regenerative agriculture is a set of farming practices that restore soil health.", false),
-            ],
-        );
-        assert!(matches!(v, Verdict::Streaming { .. }), "expected streaming, got {v:?}");
+        let frames: Vec<String> = [
+            "",
+            "Photosynthesis is how plants make food",
+            "Photosynthesis is how plants make food from sunlight, using a green pigment",
+            "Photosynthesis is how plants make food from sunlight, using a green pigment called chlorophyll to absorb light",
+            "Photosynthesis is how plants make food from sunlight, using a green pigment called chlorophyll to absorb light and build sugars from air and water",
+        ]
+        .iter()
+        .map(|r| chat_window(r))
+        .collect();
+        let mut t = 0u64;
+        let mut last = Verdict::Idle;
+        for f in &frames {
+            last = det.push(Sample { ts_ms: t, text: f.clone(), user_typing: false });
+            t += 700;
+        }
+        assert!(matches!(last, Verdict::Streaming { .. }), "cluttered window must detect, got {last:?}");
+    }
+
+    #[test]
+    fn scrolling_a_static_page_is_not_streaming() {
+        // Scrolling replaces visible content (some leaves the top as new arrives),
+        // so net prose does not steadily grow → not streaming.
+        let mut det = StreamingDetector::new(DetectorConfig::default());
+        let a = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+        let b = "nu xi omicron pi rho sigma tau upsilon phi chi psi omega again more";
+        let v = feed(&mut det, &[(0, a, false), (700, b, false), (1400, a, false), (2100, b, false)]);
+        assert_eq!(v, Verdict::Idle, "scrolling is content replacement, not growth");
+    }
+
+    // The growth-run core, tested directly on prose_len trajectories — this is
+    // the real-world behavior (OCR jitter, message arrivals) I could not
+    // reliably reproduce by driving a GUI, so it is pinned here instead.
+    fn run(lens: &[i64]) -> Option<usize> {
+        let typing = vec![false; lens.len()];
+        growth_run(lens, &typing, &DetectorConfig::default())
+    }
+
+    #[test]
+    fn growth_run_detects_streaming_even_through_ocr_jitter() {
+        // Steady climb → streaming.
+        assert!(run(&[100, 130, 160, 190, 220]).is_some());
+        // Climb with OCR dips/wobble between frames → still streaming (peak-based,
+        // so a dip-then-recover is not read as a shrink).
+        assert!(run(&[100, 130, 125, 160, 155, 190, 188, 220]).is_some());
+    }
+
+    #[test]
+    fn growth_run_ignores_static_and_single_arrivals() {
+        // Static window with OCR wobble → not streaming.
+        assert_eq!(run(&[200, 203, 198, 201, 199, 202, 200]), None);
+        // One message/answer appearing at once, then flat → a single jump, not a
+        // sustained generation.
+        assert_eq!(run(&[100, 100, 160, 160, 160, 160, 160]), None);
+        // A busy chat: discrete messages arriving with idle gaps between them
+        // must NOT accumulate into one "generation" (the stall between resets).
+        assert_eq!(run(&[100, 150, 150, 150, 150, 205, 205, 205, 205, 260]), None);
+    }
+
+    #[test]
+    fn growth_run_resets_on_scene_change() {
+        // A big drop (navigating away / clearing) resets; a couple of later
+        // frames aren't enough to re-confirm.
+        assert_eq!(run(&[300, 330, 360, 40, 60]), None);
     }
 
     #[test]

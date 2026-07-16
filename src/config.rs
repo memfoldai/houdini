@@ -74,14 +74,37 @@ pub struct AppConfig {
 
 /// Serde mirror of `DetectorConfig` (kept separate so the detector module has
 /// no serde dependency).
+// `#[serde(default)]` on each field so a config.json written by an older version
+// (which had a `min_prose_score` field, now removed) still loads — unknown fields
+// are ignored, missing ones default.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetectorConfigSerde {
+    #[serde(default = "d_min_growth_steps")]
     pub min_growth_steps: usize,
+    #[serde(default = "d_min_step_growth_chars")]
     pub min_step_growth_chars: usize,
+    #[serde(default = "d_max_step_growth_chars")]
     pub max_step_growth_chars: usize,
+    #[serde(default = "d_exclude_typing_steps")]
     pub exclude_typing_steps: bool,
-    pub min_prose_score: f32,
+    #[serde(default = "d_window")]
     pub window: usize,
+}
+
+fn d_min_growth_steps() -> usize {
+    DetectorConfig::default().min_growth_steps
+}
+fn d_min_step_growth_chars() -> usize {
+    DetectorConfig::default().min_step_growth_chars
+}
+fn d_max_step_growth_chars() -> usize {
+    DetectorConfig::default().max_step_growth_chars
+}
+fn d_exclude_typing_steps() -> bool {
+    DetectorConfig::default().exclude_typing_steps
+}
+fn d_window() -> usize {
+    DetectorConfig::default().window
 }
 
 impl From<&DetectorConfigSerde> for DetectorConfig {
@@ -91,7 +114,6 @@ impl From<&DetectorConfigSerde> for DetectorConfig {
             min_step_growth_chars: s.min_step_growth_chars,
             max_step_growth_chars: s.max_step_growth_chars,
             exclude_typing_steps: s.exclude_typing_steps,
-            min_prose_score: s.min_prose_score,
             window: s.window,
         }
     }
@@ -105,7 +127,6 @@ impl Default for DetectorConfigSerde {
             min_step_growth_chars: d.min_step_growth_chars,
             max_step_growth_chars: d.max_step_growth_chars,
             exclude_typing_steps: d.exclude_typing_steps,
-            min_prose_score: d.min_prose_score,
             window: d.window,
         }
     }

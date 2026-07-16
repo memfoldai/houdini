@@ -5,6 +5,38 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.2.4] — 2026-07-16
+
+### Fixed
+- **Real app windows were rejected by the prose-score gate.** Diagnosing against
+  the *actual* open apps (not a synthetic page) showed a real chat window — e.g.
+  Claude's desktop app, 5000+ chars via Accessibility — scores ~0.40 on the
+  whole-window prose gate because UI chrome (sidebar, buttons, timestamps)
+  dominates. The old detector required 0.55, so it rejected genuine AI windows
+  even while a reply streamed. This was the core "detects apps but not messages"
+  cause on real apps.
+
+### Changed
+- **Detection reworked to track growth of PROSE content, not the whole window.**
+  `prose_len` counts letters only in natural-language lines (structured/log
+  lines excluded), so a window's fixed chrome cancels between frames and only
+  the streamed reply moves the number. Detection is a sustained run of new prose
+  highs, measured against a running peak so an OCR dip-then-recover isn't read as
+  a shrink, with a stall tolerance so a busy chat's discrete incoming messages
+  don't accumulate into one false "generation". The whole-window prose-score gate
+  is gone. This is validated by unit tests over realistic prose-length
+  trajectories (jitter, message arrivals, scene changes) — the behaviors that
+  can't be reproduced reliably by scripting a GUI.
+
+### Notes on scope (honest limitations)
+- **Native AI apps work across Spaces/desktops** (Accessibility reads them even
+  when off-screen). A **browser** AI window on *another* desktop cannot be
+  screen-captured (macOS renders nothing to capture off-Space) — keep it on the
+  current desktop, or use the native app.
+- After installing, macOS may hold a **stale Screen Recording grant** from an
+  earlier build: if capture seems dead, remove the app under System Settings →
+  Screen Recording and re-add it.
+
 ## [0.2.3] — 2026-07-16
 
 ### Fixed
@@ -108,6 +140,7 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.2.4]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.4
 [0.2.3]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.3
 [0.2.2]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.2
 [0.2.1]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.1

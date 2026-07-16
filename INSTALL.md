@@ -72,6 +72,12 @@ Stapling lets Gatekeeper verify offline, so teammates launch with no warning.
 
 ## 4. Install (teammate)
 
+> **Recommended for the maintainer's own machine:** build it locally
+> (`packaging/bundle.sh`) rather than installing a downloaded `.dmg`. A locally
+> built app is signed by *your* certificate, so its Screen Recording /
+> Accessibility grants are stable and won't go stale across updates — the most
+> common reason capture appears "dead" after upgrading.
+
 1. Open the `.dmg` and drag **AI Usage Monitor** to **Applications**.
 2. Launch it:
    - Notarized build: double-click.
