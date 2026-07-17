@@ -44,6 +44,10 @@ pub struct SurfaceSample {
     pub user_typing: bool,
     /// AX vs OCR provenance.
     pub via_ocr: bool,
+    /// The text the user just submitted from the composer (captured when the
+    /// focused input went non-empty → empty), if any — used as the prompt for a
+    /// session opening on this tick.
+    pub submitted_prompt: Option<String>,
 }
 
 /// The two clocks for one tick (see module docs).
@@ -61,7 +65,12 @@ struct SurfaceTracker {
     streaming: bool,
     last_growth_mono: i64,
     last_seen_mono: i64,
+    /// Window text when the session opened — the baseline the reply is diffed
+    /// against so we store just the response, not the whole conversation+chrome.
+    first_output: String,
     latest_output: String,
+    /// The user's prompt for this session (composer text they submitted).
+    prompt: Option<String>,
 }
 
 pub struct Monitor {
@@ -131,7 +140,9 @@ impl Monitor {
             streaming: false,
             last_growth_mono: 0,
             last_seen_mono: 0,
+            first_output: String::new(),
             latest_output: String::new(),
+            prompt: None,
         });
         tracker.last_seen_mono = clock.mono_ms;
         tracker.app_id = sample.app_id;
@@ -157,12 +168,20 @@ impl Monitor {
             tracker.latest_output = sample.output_text;
             tracker.streaming = true;
             if tracker.session.is_none() {
+                // `first_output` currently holds the last pre-stream snapshot —
+                // the conversation BEFORE this reply — which the reply is diffed
+                // against at finalize. Capture the prompt the user just sent.
+                tracker.prompt = sample.submitted_prompt;
                 let hash = app_hash(&self.salt, &tracker.app_id);
                 let source = if sample.via_ocr { SourceKind::Ocr } else { SourceKind::Ax };
                 log::info!("AI session started (source={source:?}, app_hash={hash})");
                 tracker.session =
                     Some(SessionRecorder::begin(&self.store, clock.wall_ms, source, &hash)?);
             }
+        } else if tracker.session.is_none() {
+            // Idle: keep the baseline current so it's the pre-reply conversation
+            // the moment a reply starts.
+            tracker.first_output = sample.output_text;
         }
         Ok(())
     }
@@ -198,23 +217,46 @@ impl Monitor {
     }
 }
 
-/// Record the captured conversation and close the tracker's session, if any.
+/// Record the prompt + the reply (just the reply, diffed from the pre-reply
+/// baseline) and close the tracker's session, if any.
 fn finalize(store: &Store, tracker: &mut SurfaceTracker, wall_ms: i64) -> rusqlite::Result<()> {
     if let Some(mut rec) = tracker.session.take() {
-        if !tracker.latest_output.trim().is_empty() {
-            rec.record(store, &TurnCandidate {
-                role: Role::Unknown,
-                text: std::mem::take(&mut tracker.latest_output),
-                ts_ms: wall_ms,
-            })?;
+        // The user's prompt, if we saw it submitted.
+        if let Some(prompt) = tracker.prompt.take() {
+            if !prompt.trim().is_empty() {
+                rec.record(store, &TurnCandidate { role: Role::User, text: prompt, ts_ms: wall_ms })?;
+            }
+        }
+        // The reply = what appeared during the session that wasn't there before,
+        // so we store the answer, not the whole conversation + UI chrome.
+        let reply = added_text(&tracker.first_output, &tracker.latest_output);
+        if !reply.trim().is_empty() {
+            rec.record(store, &TurnCandidate { role: Role::Assistant, text: reply, ts_ms: wall_ms })?;
         }
         let turns = rec.stored_turns();
         rec.finish(store, wall_ms)?;
         log::info!("AI session ended ({turns} turn(s) captured)");
     }
     tracker.streaming = false;
+    tracker.first_output.clear();
     tracker.latest_output.clear();
+    tracker.prompt = None;
+    // Start the surface fresh so leftover growth samples can't immediately
+    // re-open a session on the same (now-static) content.
+    tracker.det.reset();
     Ok(())
+}
+
+/// Lines present in `new` but not in `old` (trimmed), in order — the content
+/// that appeared during a session, i.e. the model's reply, without the
+/// surrounding conversation history and UI chrome that was already on screen.
+fn added_text(old: &str, new: &str) -> String {
+    let seen: std::collections::HashSet<&str> = old.lines().map(str::trim).collect();
+    new.lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !seen.contains(l))
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Tray-facing state.
@@ -249,7 +291,19 @@ mod tests {
             output_text: text.into(),
             user_typing: false,
             via_ocr: true,
+            submitted_prompt: None,
         }
+    }
+
+    #[test]
+    fn added_text_keeps_only_the_new_reply() {
+        let before = "You\nExplain photosynthesis\nAssistant\nSend\nNew chat";
+        let after = "You\nExplain photosynthesis\nAssistant\nPlants convert light to energy.\nOxygen is released.\nSend\nNew chat";
+        let reply = super::added_text(before, after);
+        assert!(reply.contains("Plants convert light to energy."));
+        assert!(reply.contains("Oxygen is released."));
+        assert!(!reply.contains("New chat"), "chrome that was already there is dropped");
+        assert!(!reply.contains("Explain photosynthesis"), "prior history is dropped");
     }
 
     /// Grow `parts` cumulatively onto `prefix`, one string per tick.
@@ -342,19 +396,25 @@ mod tests {
     fn captured_conversation_is_redacted_in_store() {
         let store = Rc::new(Store::open_in_memory().unwrap());
         let mut mon = monitor(&store);
+        // The secret is in the streamed REPLY (so it lands in the captured
+        // delta), not the pre-reply baseline.
+        let base = "You\nWhat is the vendor contact?\nAssistant\n";
+        let frames = [
+            format!("{base}Sure, let me get that information for you"),
+            format!("{base}Sure, let me get that information for you. The vendor email address"),
+            format!("{base}Sure, let me get that information for you. The vendor email address is ops@acme.com"),
+            format!("{base}Sure, let me get that information for you. The vendor email address is ops@acme.com and the access key is AKIAIOSFODNN7EXAMPLE currently."),
+        ];
         let mut t = 0i64;
-        for text in stream_texts(
-            "Sure. Email the vendor at ops@acme.com and note the key AKIAIOSFODNN7EXAMPLE ",
-            &["for the ", "integration once ", "billing is confirmed and ", "the account is live."],
-        ) {
-            mon.tick(clock(t), vec![sample("win:3", "com.openai.chat", &text)]).unwrap();
+        for text in &frames {
+            mon.tick(clock(t), vec![sample("win:3", "com.openai.chat", text)]).unwrap();
             t += 350;
         }
         mon.shutdown(clock(t)).unwrap();
-        let turns = store.session_turns(1).unwrap();
-        assert_eq!(turns.len(), 1);
-        assert!(!turns[0].redacted_text.contains("ops@acme.com"));
-        assert!(!turns[0].redacted_text.contains("AKIAIOSFODNN7EXAMPLE"));
-        assert!(turns[0].redacted_text.contains("[REDACTED:"));
+        let joined: String =
+            store.session_turns(1).unwrap().iter().map(|t| t.redacted_text.clone()).collect();
+        assert!(!joined.contains("ops@acme.com"), "raw email must not be stored");
+        assert!(!joined.contains("AKIAIOSFODNN7EXAMPLE"), "raw key must not be stored");
+        assert!(joined.contains("[REDACTED:"), "secret captured and redacted");
     }
 }

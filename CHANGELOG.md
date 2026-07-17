@@ -5,6 +5,33 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.3.0] — 2026-07-17
+
+### Fixed
+- **The icon/state got stuck showing "recording" forever.** The detector
+  reported the best growth run anywhere in its rolling window; for a surface
+  sampled only on full sweeps that window spans ~a minute, so a finished reply
+  kept reading as streaming and the session never closed. It now reports on the
+  run that is still active at the latest sample, so it returns to idle promptly
+  when a reply finishes. The surface's detector is also reset on close.
+
+### Changed
+- **Friendlier, calmer UX.** No more "Recording" — the menu reads in plain,
+  light language ("Catching an AI chat ✨", "Keeping an eye out 👀", "All quiet
+  for now 🌙", "Taking a break ☕"). The menu-bar icon is now icon-only (its
+  shape is the state), removing the persistent text label that could stick.
+- **Simpler menu.** Trimmed to a status line, a captured-today count, **Take a
+  break** (15 min / an hour / until you're back), **Show my data**, and Quit.
+- **No more manual "Export for review."** Finished sessions are stored
+  automatically, redacted, into **day files** `data/YYYY-MM-DD.jsonl` — the
+  standard shape for analytics at scale and trivial to merge across machines
+  (each line carries the device id). "Show my data" reveals the folder.
+- **Much cleaner captured data.** Instead of dumping the whole window (history +
+  UI chrome), each record stores just the **prompt** and the **reply** (the
+  reply is the text that appeared during the session, diffed from the pre-reply
+  baseline) as separate fields, with a lean schema: `device, day, app, surface,
+  started_ms, ended_ms, prompt, reply`.
+
 ## [0.2.5] — 2026-07-16
 
 ### Fixed
@@ -161,6 +188,7 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.3.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.3.0
 [0.2.5]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.5
 [0.2.4]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.4
 [0.2.3]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.3

@@ -1,172 +1,113 @@
-//! Two-gate export. Gate 1 (automatic): everything in the store is ALREADY
-//! redacted at capture time. Gate 2 (human): this writes the redacted extract
-//! to a plain, readable file the person reviews BEFORE sharing it — nothing
-//! leaves the machine automatically.
+//! Automatic day-partitioned storage.
 //!
-//! Format: JSON Lines, one session per line, for multi-device batch
-//! aggregation (line-delimited JSON partitions/streams trivially). Field names
-//! follow the OpenTelemetry GenAI + resource semantic conventions where a
-//! matching concept exists, so pooled extracts speak the industry vocabulary.
-//! The field table is documented once, for its consumers, in README.md —
-//! the serde `rename` attributes below are the authority.
+//! SQLite is the local source of truth; this flushes each finished session,
+//! once, into a day file `data/YYYY-MM-DD.jsonl` (one JSON object per line).
+//! Day partitioning is the standard shape for analytics at scale: files from
+//! any number of machines merge trivially (each line carries the device id and
+//! the date), and a day/week rollup is just concatenating files. There is no
+//! manual "export" step — the data is already redacted at rest and lands in the
+//! day file as it is captured.
 //!
-//! Why the deviations: the semconv role enum is system/user/assistant/tool, but
-//! observational capture cannot always attribute a speaker, so unattributed
-//! turns carry role `"unknown"`. Attributes the convention defines for
-//! in-process instrumentation (model name, token counts) are absent — they are
-//! not observable from a screen, and inventing them would be fabrication.
+//! The record is deliberately lean — device, day, app, surface, times, and the
+//! **prompt** and **reply** as separate fields — so downstream analytics is a
+//! flat read, not a schema archaeology dig.
 
-use std::fs;
+use std::fs::{self, OpenOptions};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use crate::store::{SessionRow, Store, TurnRow};
+use crate::store::Store;
 
-/// Schema discriminator for downstream processing; bump on breaking change.
-const SCHEMA: &str = "aum/session/1";
-
+/// One stored exchange, as written to a day file.
 #[derive(serde::Serialize)]
-struct ExportMessagePart {
-    r#type: &'static str,
-    content: String,
-}
-
-#[derive(serde::Serialize)]
-struct ExportMessage {
-    role: String,
-    parts: Vec<ExportMessagePart>,
-}
-
-impl ExportMessage {
-    fn text(role: &str, content: String) -> Self {
-        Self { role: role.to_string(), parts: vec![ExportMessagePart { r#type: "text", content }] }
-    }
-}
-
-/// One session line (see module docs for the naming contract).
-#[derive(serde::Serialize)]
-struct ExportSession {
-    #[serde(rename = "aum.schema")]
+struct Record {
+    /// Schema tag for downstream readers; bump on a breaking change.
     schema: &'static str,
-    #[serde(rename = "service.instance.id")]
-    install_id: String,
-    #[serde(rename = "gen_ai.conversation.id")]
-    conversation_id: String,
-    #[serde(rename = "aum.app.hash")]
-    app_hash: String,
-    #[serde(rename = "aum.capture.source")]
-    capture_source: String,
-    #[serde(rename = "aum.session.start_time_unix_ms")]
-    start_time_unix_ms: i64,
-    #[serde(rename = "aum.session.end_time_unix_ms")]
-    end_time_unix_ms: Option<i64>,
-    #[serde(rename = "gen_ai.input.messages")]
-    input_messages: Vec<ExportMessage>,
-    #[serde(rename = "gen_ai.output.messages")]
-    output_messages: Vec<ExportMessage>,
+    /// Per-install id (UUID) so pooled files stay attributable per machine.
+    device: String,
+    /// `YYYY-MM-DD` (UTC) — matches the file it lives in.
+    day: String,
+    /// Salted app hash (never the app name).
+    app: String,
+    /// Coarse, non-hardcoded surface class: `web` (read via OCR) or `app`
+    /// (read via Accessibility). See docs/grouping.md.
+    surface: &'static str,
+    started_ms: i64,
+    ended_ms: Option<i64>,
+    /// The user's message, if it was captured; else empty.
+    prompt: String,
+    /// The model's reply (redacted).
+    reply: String,
 }
 
-/// Write a JSONL extract of ALL sessions to a timestamped file under
-/// `export_dir` and return its path. The caller (menu action) then tells the
-/// person to open + review it before sharing. `now_stamp` is supplied by the
-/// caller (no wall-clock here) so the filename is deterministic/testable.
-pub fn export_all(
-    store: &Store,
-    install_id: &str,
-    export_dir: &Path,
-    now_stamp: &str,
-) -> std::io::Result<PathBuf> {
-    // Store text is already redacted; the extract is a faithful copy.
-    write_extract(store, install_id, export_dir, now_stamp, |t| t.to_string())
-}
-
-/// Two-gate export WITH the optional NER sweep (feature `ner`). Each turn's
-/// already-deterministically-redacted text passes through the GLiNER-PII layer
-/// before it is written. Falls back to the stored redacted text for any turn
-/// the NER layer errors on (never leaks: the input is already redacted).
-#[cfg(feature = "ner")]
-pub fn export_all_ner(
-    store: &Store,
-    install_id: &str,
-    export_dir: &Path,
-    now_stamp: &str,
-    redactor: &crate::ner::NerRedactor,
-) -> std::io::Result<PathBuf> {
-    write_extract(store, install_id, export_dir, now_stamp, |t| match redactor.redact(t) {
-        Ok(r) => r.text,
-        Err(e) => {
-            log::warn!("NER sweep skipped a turn (already deterministically redacted): {e}");
-            t.to_string()
-        }
-    })
-}
-
-/// Shared writer: read all sessions, map each turn's text through `map_text`,
-/// and write the timestamped JSONL extract.
-fn write_extract(
-    store: &Store,
-    install_id: &str,
-    export_dir: &Path,
-    now_stamp: &str,
-    map_text: impl Fn(&str) -> String,
-) -> std::io::Result<PathBuf> {
-    let sessions = read_sessions(store, install_id, &map_text)
+/// Flush every closed-but-unwritten session to its day file. Returns how many
+/// were written. Safe to call often; each session is written exactly once
+/// (guarded by `exported_at`), so a crash between write and mark at worst
+/// duplicates one line — acceptable for append-only analytics.
+pub fn flush_pending(store: &Store, device: &str, data_dir: &Path, now_ms: i64) -> std::io::Result<usize> {
+    let pending = store
+        .pending_export()
         .map_err(|e| std::io::Error::other(e.to_string()))?;
-    let path = export_dir.join(format!("extract-{now_stamp}.jsonl"));
-    let mut out = String::new();
-    for s in &sessions {
-        let line = serde_json::to_string(s)
+    fs::create_dir_all(data_dir)?;
+
+    let mut written = 0;
+    for s in pending {
+        let turns = store
+            .session_turns(s.id)
+            .map_err(|e| std::io::Error::other(e.to_string()))?;
+        let prompt = turns.iter().find(|t| t.role == "user").map(|t| t.redacted_text.clone());
+        let reply: String = turns
+            .iter()
+            .filter(|t| t.role != "user")
+            .map(|t| t.redacted_text.as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let day = ymd_utc(s.started_at_ms);
+        let record = Record {
+            schema: "aum/1",
+            device: device.to_string(),
+            day: day.clone(),
+            app: s.app_hash,
+            surface: if s.source_kind == "ocr" { "web" } else { "app" },
+            started_ms: s.started_at_ms,
+            ended_ms: s.ended_at_ms,
+            prompt: prompt.unwrap_or_default(),
+            reply,
+        };
+        let mut line = serde_json::to_string(&record)
             .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        out.push_str(&line);
-        out.push('\n');
+        line.push('\n');
+
+        let path = data_dir.join(format!("{day}.jsonl"));
+        OpenOptions::new().create(true).append(true).open(&path)?.write_all(line.as_bytes())?;
+        store.mark_exported(s.id, now_ms).map_err(|e| std::io::Error::other(e.to_string()))?;
+        written += 1;
     }
-    fs::write(&path, out)?;
-    Ok(path)
+    Ok(written)
 }
 
-fn read_sessions(
-    store: &Store,
-    install_id: &str,
-    map_text: &impl Fn(&str) -> String,
-) -> rusqlite::Result<Vec<ExportSession>> {
-    let rows = store.all_sessions()?;
-    let mut out = Vec::with_capacity(rows.len());
-    for row in rows {
-        let turns = store.session_turns(row.id)?;
-        out.push(to_export(row, turns, install_id, map_text));
-    }
-    Ok(out)
+/// Reveal the data folder in Finder (menu action). Ensures it exists first.
+pub fn data_dir_path(data_dir: &Path) -> PathBuf {
+    let _ = fs::create_dir_all(data_dir);
+    data_dir.to_path_buf()
 }
 
-/// Map one stored session to its export line. Turns with role `user` are model
-/// input; `assistant` and `unknown` go to output (see the module-doc deviation
-/// note for `unknown`).
-fn to_export(
-    row: SessionRow,
-    turns: Vec<TurnRow>,
-    install_id: &str,
-    map_text: &impl Fn(&str) -> String,
-) -> ExportSession {
-    let mut input_messages = Vec::new();
-    let mut output_messages = Vec::new();
-    for turn in turns {
-        let msg = ExportMessage::text(&turn.role, map_text(&turn.redacted_text));
-        if turn.role == "user" {
-            input_messages.push(msg);
-        } else {
-            output_messages.push(msg);
-        }
-    }
-    ExportSession {
-        schema: SCHEMA,
-        install_id: install_id.to_string(),
-        conversation_id: row.id.to_string(),
-        app_hash: row.app_hash,
-        capture_source: row.source_kind,
-        start_time_unix_ms: row.started_at_ms,
-        end_time_unix_ms: row.ended_at_ms,
-        input_messages,
-        output_messages,
-    }
+/// `YYYY-MM-DD` (UTC) for a unix-ms instant, without a date-library dependency
+/// (Howard Hinnant's days-from-civil, inverted). Used only for partition names.
+fn ymd_utc(unix_ms: i64) -> String {
+    let days = unix_ms.div_euclid(86_400_000); // days since 1970-01-01
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097; // [0, 146096]
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+    let mp = (5 * doy + 2) / 153; // [0, 11]
+    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+    let year = if m <= 2 { y + 1 } else { y };
+    format!("{year:04}-{m:02}-{d:02}")
 }
 
 #[cfg(test)]
@@ -175,34 +116,34 @@ mod tests {
     use crate::store::{Role, SourceKind};
 
     #[test]
-    fn export_writes_semconv_shaped_redacted_jsonl() {
+    fn ymd_utc_matches_known_dates() {
+        assert_eq!(ymd_utc(0), "1970-01-01");
+        assert_eq!(ymd_utc(1_752_624_000_000), "2025-07-16"); // a known Wed
+        assert_eq!(ymd_utc(-1), "1969-12-31");
+    }
+
+    #[test]
+    fn flush_writes_lean_record_once() {
         let store = Store::open_in_memory().unwrap();
-        let sid = store.begin_session(1000, SourceKind::Ocr, "apphash1").unwrap();
-        store.add_turn(sid, 0, Role::User, "compare vendor pricing", 1100).unwrap();
-        store
-            .add_turn(sid, 1, Role::Unknown, "researched vendors; contact [REDACTED:EMAIL]", 1200)
-            .unwrap();
-        store.end_session(sid, 5000).unwrap();
+        let sid = store.begin_session(1_752_624_000_000, SourceKind::Ocr, "apphash1").unwrap();
+        store.add_turn(sid, 0, Role::User, "explain photosynthesis", 1_752_624_000_100).unwrap();
+        store.add_turn(sid, 1, Role::Assistant, "Plants convert light [REDACTED:EMAIL]", 1_752_624_000_200).unwrap();
+        store.end_session(sid, 1_752_624_005_000).unwrap();
 
-        let dir = std::env::temp_dir().join(format!("aum-exp-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
-        let path = export_all(&store, "11111111-2222-4333-8444-555555555555", &dir, "20260716").unwrap();
-        let body = fs::read_to_string(&path).unwrap();
+        let dir = std::env::temp_dir().join(format!("aum-day-{}", std::process::id()));
+        let n = flush_pending(&store, "dev-uuid", &dir, 1_752_624_006_000).unwrap();
+        assert_eq!(n, 1);
 
-        let line: serde_json::Value = serde_json::from_str(body.lines().next().unwrap()).unwrap();
-        assert_eq!(line["aum.schema"], "aum/session/1");
-        assert_eq!(line["service.instance.id"], "11111111-2222-4333-8444-555555555555");
-        assert_eq!(line["gen_ai.conversation.id"], sid.to_string());
-        assert_eq!(line["aum.app.hash"], "apphash1");
-        assert_eq!(line["aum.capture.source"], "ocr");
-        // Semconv message structure: role + parts[{type:"text", content}].
-        assert_eq!(line["gen_ai.input.messages"][0]["role"], "user");
-        assert_eq!(line["gen_ai.input.messages"][0]["parts"][0]["type"], "text");
-        assert_eq!(line["gen_ai.output.messages"][0]["role"], "unknown");
-        assert!(line["gen_ai.output.messages"][0]["parts"][0]["content"]
-            .as_str()
-            .unwrap()
-            .contains("[REDACTED:EMAIL]"));
+        let body = fs::read_to_string(dir.join("2025-07-16.jsonl")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(body.trim()).unwrap();
+        assert_eq!(v["device"], "dev-uuid");
+        assert_eq!(v["day"], "2025-07-16");
+        assert_eq!(v["surface"], "web");
+        assert_eq!(v["prompt"], "explain photosynthesis");
+        assert!(v["reply"].as_str().unwrap().contains("[REDACTED:EMAIL]"));
+
+        // Second flush writes nothing (already marked exported).
+        assert_eq!(flush_pending(&store, "dev-uuid", &dir, 1_752_624_007_000).unwrap(), 0);
         fs::remove_dir_all(&dir).ok();
     }
 }

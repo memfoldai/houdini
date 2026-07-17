@@ -190,7 +190,8 @@ impl Paths {
         })?;
         let data_dir = pd.data_dir().to_path_buf();
         fs::create_dir_all(&data_dir)?;
-        let export_dir = data_dir.join("exports");
+        // Day-partitioned session files live here (see `export` module).
+        let export_dir = data_dir.join("data");
         fs::create_dir_all(&export_dir)?;
         Ok(Self {
             config_file: data_dir.join("config.json"),

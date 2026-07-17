@@ -62,6 +62,7 @@ struct OcrCandidate {
     win_id: u32,
     app_id: String,
     user_typing: bool,
+    prompt: Option<String>,
     window: objc2::rc::Retained<SCWindow>,
 }
 
@@ -84,7 +85,14 @@ pub struct CaptureEngine {
     /// Text of the focused input on the previous sweep — diffed to tell actual
     /// typing (text changing) from a merely-focused idle composer.
     last_focused_input: Option<String>,
+    /// The composer text the user most recently SUBMITTED (it went non-empty →
+    /// empty) plus when (monotonic ms) — used as the prompt for a session that
+    /// opens shortly after.
+    pending_prompt: Option<(String, i64)>,
 }
+
+/// How long a just-submitted prompt stays attachable to a newly-opened session.
+const PROMPT_TTL_MS: i64 = 20_000;
 
 impl CaptureEngine {
     pub fn new() -> Self {
@@ -93,6 +101,7 @@ impl CaptureEngine {
             next_slot: 0,
             ocr_last: std::collections::HashMap::new(),
             last_focused_input: None,
+            pending_prompt: None,
         }
     }
 
@@ -111,13 +120,26 @@ impl CaptureEngine {
         // whole reply. Focus-in (None→Some) is not typing; only Some→Some-changed.
         let focused = ax::focused_input_value();
         let typing = is_typing(focused.as_deref(), self.last_focused_input.as_deref());
+        // A submission = the composer had text and is now empty/gone; remember it
+        // as the prompt for a session about to open.
+        if let Some(prev) = &self.last_focused_input {
+            let now_empty = focused.as_deref().map_or(true, |n| n.trim().is_empty());
+            if !prev.trim().is_empty() && now_empty {
+                self.pending_prompt = Some((prev.clone(), now_ms));
+            }
+        }
         self.last_focused_input = focused;
+        let prompt = self
+            .pending_prompt
+            .as_ref()
+            .filter(|(_, ts)| now_ms - ts < PROMPT_TTL_MS)
+            .map(|(p, _)| p.clone());
 
         // Fast path: on a frontmost-only tick, if the frontmost app is
         // AX-readable, sample it via AX and skip enumerating every window on the
         // system (the expensive part). Browsers fall through to the OCR path.
         if let (SweepScope::FrontmostApp, Some(f)) = (scope, front.as_ref()) {
-            let ax = self.sample_ax_windows(f.pid, &f.app_id, typing);
+            let ax = self.sample_ax_windows(f.pid, &f.app_id, typing, &prompt);
             if !ax.is_empty() {
                 if log::log_enabled!(log::Level::Debug) {
                     let lens: Vec<usize> = ax.iter().map(|s| s.output_text.chars().count()).collect();
@@ -175,7 +197,9 @@ impl CaptureEngine {
         let mut ocr_candidates: Vec<OcrCandidate> = Vec::new();
         for (pid, app_id, sc_windows) in apps {
             let user_typing = typing && Some(pid) == front_pid;
-            let ax_samples = self.sample_ax_windows(pid, &app_id, user_typing);
+            // Prompt only attaches to the frontmost app (where the user typed).
+            let app_prompt = if Some(pid) == front_pid { prompt.clone() } else { None };
+            let ax_samples = self.sample_ax_windows(pid, &app_id, user_typing, &app_prompt);
             log::debug!(
                 "  app {app_id} pid={pid}: {} sc-window(s), {} ax-sample(s)",
                 sc_windows.len(),
@@ -201,6 +225,7 @@ impl CaptureEngine {
                     win_id,
                     app_id: app_id.clone(),
                     user_typing,
+                    prompt: app_prompt.clone(),
                     window: w,
                 });
             }
@@ -238,6 +263,7 @@ impl CaptureEngine {
                 output_text: text,
                 user_typing: c.user_typing,
                 via_ocr: true,
+                submitted_prompt: c.prompt,
             });
         }
         if ocr_skipped > 0 {
@@ -263,7 +289,13 @@ impl CaptureEngine {
     }
 
     /// Read all of one app's AX windows; assign/reuse stable slot ids.
-    fn sample_ax_windows(&mut self, pid: i32, app_id: &str, user_typing: bool) -> Vec<SurfaceSample> {
+    fn sample_ax_windows(
+        &mut self,
+        pid: i32,
+        app_id: &str,
+        user_typing: bool,
+        prompt: &Option<String>,
+    ) -> Vec<SurfaceSample> {
         let mut out = Vec::new();
         for window in ax::app_windows(pid) {
             let Some(text) = ax::window_output_text(&window) else {
@@ -276,6 +308,7 @@ impl CaptureEngine {
                 output_text: text,
                 user_typing,
                 via_ocr: false,
+                submitted_prompt: prompt.clone(),
             });
         }
         out

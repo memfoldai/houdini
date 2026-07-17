@@ -58,7 +58,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     ended_at     INTEGER,            -- unix ms, null while open
     source_kind  TEXT NOT NULL CHECK (source_kind IN ('ax','ocr','alma-log')),
     app_hash     TEXT NOT NULL,      -- salted hash of the source app id
-    duration_ms  INTEGER             -- filled at close
+    duration_ms  INTEGER,            -- filled at close
+    exported_at  INTEGER             -- unix ms when flushed to a day file, else null
 );
 CREATE TABLE IF NOT EXISTS turns (
     id            INTEGER PRIMARY KEY,
@@ -82,6 +83,9 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(SCHEMA)?;
+        // Migrate a pre-existing DB that lacks the `exported_at` column. SQLite
+        // has no ADD COLUMN IF NOT EXISTS, so ignore the duplicate-column error.
+        let _ = conn.execute("ALTER TABLE sessions ADD COLUMN exported_at INTEGER", []);
         Ok(Self { conn })
     }
 
@@ -169,6 +173,34 @@ impl Store {
             })
         })?;
         rows.collect()
+    }
+
+    /// Closed sessions not yet written to a day file, oldest first — for the
+    /// auto-flush. (`ended_at` set, `exported_at` null.)
+    pub fn pending_export(&self) -> rusqlite::Result<Vec<SessionRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, started_at, ended_at, source_kind, app_hash FROM sessions
+             WHERE ended_at IS NOT NULL AND exported_at IS NULL ORDER BY started_at",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(SessionRow {
+                id: r.get(0)?,
+                started_at_ms: r.get(1)?,
+                ended_at_ms: r.get(2)?,
+                source_kind: r.get(3)?,
+                app_hash: r.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    /// Mark a session as written to its day file.
+    pub fn mark_exported(&self, session_id: i64, at_ms: i64) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE sessions SET exported_at = ?1 WHERE id = ?2",
+            params![at_ms, session_id],
+        )?;
+        Ok(())
     }
 
     /// Read all turns of a session in order (for export).

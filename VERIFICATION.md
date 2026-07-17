@@ -5,7 +5,7 @@ The portable core (detector, redaction, store, session, export) is covered by
 it needs real TCC permission grants, real on-screen AI sessions, a status-bar
 item, and a stable code signature — none of which exist in a headless/CI
 environment. This document is the checklist a person runs once on a real Mac
-before trusting the app or sharing any extract.
+before trusting the app or sharing any data.
 
 Do these in order. Each has an explicit pass condition.
 
@@ -21,9 +21,9 @@ scripts/sign.sh            # stable self-signed identity (see the script header)
 ```
 
 **Pass:** an icon appears in the menu bar — a hollow ring (idle). Clicking it
-shows a status readout plus “Export extract for review…” and “Quit”. (The icon
-is a monochrome template glyph; its **shape** is the state — ring = idle,
-ring-with-dot = watching, solid disc = capturing.)
+shows a friendly status plus **Take a break**, **Show my data**, and **Quit**.
+(The icon's **shape** is the state — ring = idle, ring-with-dot = watching,
+solid disc = catching a chat, two bars = paused.)
 
 > Why signing matters: TCC keys the grants below on the binary's code identity.
 > An unsigned/ad-hoc build loses every grant on the next rebuild. Re-run
@@ -57,19 +57,18 @@ relaunch.
 2. Watch the dot while the answer streams.
 
 **Pass:** the icon fills to a **solid disc** (capturing) while the answer
-streams, then returns to the ring-with-dot a few seconds after it stops. Click
-**Export extract for review…**, then inspect the newest file under the export
-dir:
+streams, then returns to the ring-with-dot a few seconds after it stops (it must
+NOT stay solid — the "stuck forever" bug). Click **Show my data** (or wait ~30s)
+and inspect today's day file:
 
 ```
-~/Library/Application Support/ai.memfold.ai-usage-monitor/exports/extract-*.jsonl
+~/Library/Application Support/ai.memfold.ai-usage-monitor/data/YYYY-MM-DD.jsonl
 ```
 
-**Pass:** the file contains one session line whose message content is the
-conversation you just saw (redacted), with `aum.capture.source` of `ocr`
-(browser) or `ax` (native app) and a hashed `aum.app.hash` (never the app's
-real name). Timestamps (`aum.session.start_time_unix_ms`) are real wall-clock
-epoch times.
+**Pass:** the file contains one line whose `reply` is the answer you just saw
+(redacted), `prompt` is your message, `surface` is `web` (browser) or `app`
+(native), `app` is a hash (never the app's real name), and `started_ms` /
+`ended_ms` are real epoch times.
 
 ---
 
@@ -79,15 +78,15 @@ The monitor tracks every window independently. Verify the three parallel
 scenarios:
 
 1. **Two at once:** start a streaming answer in ChatGPT (browser) and, while it
-   streams, start one in another AI app (or a second browser window). Export.
-   **Pass:** two separate sessions with different `aum.app.hash` values (or two
-   sessions of the same app, if you used two windows of one app).
+   streams, start one in another AI app (or a second browser window). Then Show
+   my data. **Pass:** two separate lines with different `app` hashes (or two
+   lines from the same app, if you used two windows of one app).
 2. **Backgrounded mid-stream:** start a long streaming answer, then click into
    a different app while it streams (the AI window is now in the background,
    possibly occluded). **Pass:** the session still captures the full answer
    (the background window is picked up by the full sweep, ~every 2 s).
 3. **Another desktop/Space:** move the streaming AI window to another Space
-   (Mission Control) while it streams. **Pass:** same as above — the extract
+   (Mission Control) while it streams. **Pass:** same as above — the day file
    contains the completed answer. Window enumeration is Space-independent
    (`onScreenWindowsOnly = false`) and window capture is desktop-independent.
 
@@ -99,22 +98,18 @@ renders nothing, so it cannot be captured by any means — only visible surfaces
 
 ## 3. Redaction audit — seeded secret + personal detail (safety gate)
 
-Before ANY real extract is shared, prove redaction catches planted values.
+Before sharing any data, prove redaction catches planted values.
 
-1. In an AI chat, paste a message containing a **fake** AWS-shaped key and a
-   **fake** personal detail, e.g.:
+1. Ask an AI a question whose **answer** will echo a **fake** AWS-shaped key and
+   a **fake** personal detail (so they land in the captured reply), e.g. "repeat
+   back: key AKIAIOSFODNN7EXAMPLE, email jane.doe@example.com, +1 415-555-0132".
 
-   ```
-   Here is my key AKIAIOSFODNN7EXAMPLE and email jane.doe@example.com,
-   call +1 415-555-0132.
-   ```
+2. Let it get captured (icon fills to a solid disc), then **Show my data**.
 
-2. Let it get captured (icon fills to a solid disc), then Export.
-
-**Pass:** in the exported JSONL, none of `AKIAIOSFODNN7EXAMPLE`,
-`jane.doe@example.com`, or `415-555-0132` appear as raw text; each is replaced by
-a `[REDACTED:…]` placeholder. If any raw value survives, **do not share the
-extract** — file the gap first.
+**Pass:** in today's day file, none of `AKIAIOSFODNN7EXAMPLE`,
+`jane.doe@example.com`, or `415-555-0132` appear as raw text; each is a
+`[REDACTED:…]` placeholder. If any raw value survives, **do not share the data**
+— file the gap first.
 
 (The deterministic layer is unit-tested for these exact shapes in
 `src/redact.rs`; this step confirms it end-to-end through real capture.)
@@ -131,7 +126,7 @@ The detector must not fire on text that merely grows. Test each:
 - **Scrolling** a long article or code file.
 
 **Pass:** in all three the icon stays a **ring-with-dot** (never fills to a
-solid disc), and after Export there is **no** session for them. Typing is
+solid disc), and in the day file there is **no** entry for them. Typing is
 excluded because the caret is in an input; logs are excluded because they read
 as structured output, not prose.
 
@@ -148,8 +143,9 @@ Skip unless you enabled the NER layer — [docs/NER.md](docs/NER.md) owns the
 setup. Once it is running, two checks belong here:
 
 **Catches what regexes can't.** Repeat step 3 with a planted **person name**
-(e.g. “Contact Maria Gonzalez”). **Pass:** after Export the name is replaced by
-`[REDACTED:NER:PERSON]`.
+(e.g. “Contact Maria Gonzalez”). **Pass:** in the day file the name is replaced
+by `[REDACTED:NER:PERSON]`. (Note: as of 0.3.0 the NER layer is a library
+capability that is not wired into the auto-flush; see docs/NER.md.)
 
 **Fails closed.** Point `ner_model_dir` at a directory with no valid model and
 relaunch. **Pass:** the app logs the load failure and continues with
@@ -164,6 +160,9 @@ NER coverage it doesn't have.
   Step 4 is the tuning loop; expect one or two passes.
 - OCR quality bounds browser capture: tiny fonts or heavy theming degrade the
   captured text. AX-readable native apps are exact.
-- The app captures the visible conversation snapshot per session (role
-  `unknown`); it does not split user vs assistant turns. That's deliberate —
-  structural turn segmentation is a later, separate build step.
+- The reply is captured as a line-diff of the window before vs after, so OCR
+  reflow may occasionally include a stray non-reply line; the prompt is
+  best-effort (the composer text seen submitted).
+- A browser AI window on **another desktop/Space** can't be screen-captured
+  (macOS renders nothing off-Space); native apps work across desktops via
+  Accessibility.

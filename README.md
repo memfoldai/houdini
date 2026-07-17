@@ -38,33 +38,36 @@ detector, so two AI chats streaming at once become two separate sessions.
 - **Text only.** Images are used transiently for OCR and never stored.
 - **Redaction is a hard gate**, applied offline before anything touches disk —
   secrets (provider API keys, private keys), emails, Luhn-checked cards, SSNs,
-  phones. An optional [NER layer](docs/NER.md) catches free-form names at export.
-- **App identity is salted-hashed** per install — extracts group "same app"
+  phones.
+- **App identity is salted-hashed** per install — data groups "same app"
   without revealing which apps a person used.
-- **Two-gate export:** automatic redaction, then the person reviews their own
-  extract before sharing it.
-- Quit anytime from the menu; the dot always shows the current state.
+- **Only the exchange is kept** — the prompt and the reply, not the whole
+  conversation history or the surrounding UI.
+- Quit anytime from the menu; the icon always shows the current state.
 
-## Extract format
+## Data format
 
-The local store is SQLite. The shareable extract is **JSON Lines** (one session
-per line) — the standard interchange for pooled multi-device analytics.
+The local store is SQLite (the source of truth). Finished sessions are written
+automatically — no manual export — to **day files** `data/YYYY-MM-DD.jsonl`, one
+JSON object per line. Day partitioning is the standard shape for analytics at
+scale: files from any number of machines merge trivially (each line carries the
+device id and date), and a day/week rollup is just concatenating files.
 
-Field names follow the [OpenTelemetry GenAI semantic conventions](https://github.com/open-telemetry/semantic-conventions-genai)
-where a matching concept exists, so extracts speak the industry vocabulary
-rather than an invented one:
+Each record is deliberately lean, with the prompt and reply as separate fields:
 
 | Field | Meaning |
 |---|---|
-| `service.instance.id` | Per-install UUID v4 — distinguishes machines in a pooled dataset (OTel resource semconv) |
-| `gen_ai.conversation.id` | Session identifier |
-| `gen_ai.input.messages` / `gen_ai.output.messages` | Content as `{role, parts:[{type:"text", content}]}`; *opt-in* attributes in the convention, matching this app's consent-gated design |
-| `aum.schema`, `aum.app.hash`, `aum.capture.source`, `aum.session.*` | App-specific facts, namespaced per OTel custom-attribute guidance |
+| `schema` | Record schema tag (`aum/1`) |
+| `device` | Per-install UUID — keeps machines distinguishable in a pooled dataset |
+| `day` | `YYYY-MM-DD`, matching the file |
+| `app` | Salted app hash (never the app name) |
+| `surface` | Coarse class: `web` (read via OCR) or `app` (read via Accessibility) |
+| `started_ms` / `ended_ms` | Session bounds (unix ms) |
+| `prompt` | The user's message, if captured |
+| `reply` | The model's reply (redacted; just the reply, not the history) |
 
-Two deliberate deviations: turns whose speaker cannot be attributed from
-observation carry role `"unknown"`; and attributes the convention defines for
-in-process instrumentation (model name, token counts) are **absent** — they are
-not observable from a screen, and inventing them would be fabrication.
+Provider grouping (ChatGPT app + web + CLI → one entity) happens at analysis
+time over these files — see [docs/grouping.md](docs/grouping.md).
 
 ## Install
 
@@ -84,18 +87,17 @@ zero-friction install on other machines.
 
 The icon is a monochrome template glyph whose **shape** shows state (macOS tints
 it for you): a hollow ring when idle, a ring-with-dot while watching, a solid
-disc while recording an AI chat, two bars when paused. A small **"Recording"**
-label appears next to it only while a chat is actively being captured.
+disc while catching an AI chat, two bars when paused. It's icon-only — no text
+label to get stuck.
 
-Click it for a plain-language readout ("Watching for AI use", "Recording an AI
-chat", how many were captured recently, when the last one was) — that is how you
-confirm it is working. The menu also has:
+Click it for a friendly readout ("Keeping an eye out 👀", "Catching an AI chat
+✨", how many chats were caught today) and:
 
-- **Pause watching** — for 15 minutes, 1 hour, or until you resume. While paused
+- **Take a break** — for 15 minutes, an hour, or until you're back. While paused
   nothing is captured (handy before typing something sensitive). Global by
   design: it protects whatever you're doing, in any window.
-- **Export for review…** — writes the redacted extract and reveals it in Finder.
-- **Open activity log** — a metadata-only diagnostics log (no captured text).
+- **Show my data** — reveals the day-partitioned data folder in Finder.
+- **Peek under the hood** — the metadata-only activity log (no captured text).
 - **Quit**.
 
 ## Develop

@@ -86,9 +86,8 @@ struct Runtime {
     detail_item: MenuItem,
     resume_item: MenuItem,
     ids: MenuIds,
-    /// Optional NER redactor for the export sweep (feature `ner`).
-    #[cfg(feature = "ner")]
-    ner: Option<ai_usage_monitor::ner::NerRedactor>,
+    /// Last day-file flush (monotonic ms).
+    flush_at: Cell<i64>,
 }
 
 /// Command menu-item ids, matched in the event drain.
@@ -97,7 +96,7 @@ struct MenuIds {
     pause_1h: MenuId,
     pause_indef: MenuId,
     resume: MenuId,
-    export: MenuId,
+    show_data: MenuId,
     open_log: MenuId,
     quit: MenuId,
 }
@@ -186,7 +185,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         pause_1h: MenuId::new("pause_1h"),
         pause_indef: MenuId::new("pause_indef"),
         resume: MenuId::new("resume"),
-        export: MenuId::new("export"),
+        show_data: MenuId::new("show_data"),
         open_log: MenuId::new("open_log"),
         quit: MenuId::new("quit"),
     };
@@ -213,6 +212,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         },
         tick_count: Cell::new(0),
         heartbeat_at: Cell::new(0),
+        flush_at: Cell::new(0),
         paused_until: Cell::new(None),
         start: Instant::now(),
         tray: RefCell::new(None),
@@ -222,27 +222,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         detail_item,
         resume_item,
         ids,
-        #[cfg(feature = "ner")]
-        ner: load_ner(cfg),
     })
-}
-
-/// Load the NER redactor if a model dir is configured. A configured-but-broken
-/// model logs and yields `None` (deterministic redaction still guards the
-/// extract); a healthy model passes its seeded self-test inside `load`.
-#[cfg(feature = "ner")]
-fn load_ner(cfg: &AppConfig) -> Option<ai_usage_monitor::ner::NerRedactor> {
-    let dir = cfg.ner_model_dir.as_ref()?;
-    match ai_usage_monitor::ner::NerRedactor::load(dir) {
-        Ok(r) => {
-            log::info!("NER redaction layer loaded from {}", dir.display());
-            Some(r)
-        }
-        Err(e) => {
-            log::error!("NER model configured but not loaded ({e}); export uses the deterministic layer only");
-            None
-        }
-    }
 }
 
 /// Prompt (once) for whichever grant is missing. The app keeps running either
@@ -263,24 +243,26 @@ fn request_permissions() {
 fn install_tray(rt: &Rc<Runtime>) {
     let menu = Menu::new();
 
-    let pause = Submenu::new("Pause watching", true);
+    let pause = Submenu::new("Take a break", true);
     pause
         .append(&MenuItem::with_id(rt.ids.pause_15m.clone(), "For 15 minutes", true, None))
-        .and(pause.append(&MenuItem::with_id(rt.ids.pause_1h.clone(), "For 1 hour", true, None)))
-        .and(pause.append(&MenuItem::with_id(rt.ids.pause_indef.clone(), "Until I resume", true, None)))
+        .and(pause.append(&MenuItem::with_id(rt.ids.pause_1h.clone(), "For an hour", true, None)))
+        .and(pause.append(&MenuItem::with_id(rt.ids.pause_indef.clone(), "Until I'm back", true, None)))
         .expect("build pause submenu");
 
-    let export = MenuItem::with_id(rt.ids.export.clone(), "Export for review…", true, None);
-    let open_log = MenuItem::with_id(rt.ids.open_log.clone(), "Open activity log", true, None);
+    let show_data = MenuItem::with_id(rt.ids.show_data.clone(), "Show my data", true, None);
+    let open_log = MenuItem::with_id(rt.ids.open_log.clone(), "Peek under the hood", true, None);
     let quit = MenuItem::with_id(rt.ids.quit.clone(), "Quit", true, None);
 
+    // Minimal menu (glance-and-go): a friendly status, pause, and two footer
+    // actions. Data is stored automatically, so there is no export step.
     menu.append(&rt.status_item).expect("status");
     menu.append(&rt.detail_item).expect("detail");
     menu.append(&PredefinedMenuItem::separator()).expect("sep1");
     menu.append(&pause).expect("pause");
     menu.append(&rt.resume_item).expect("resume");
     menu.append(&PredefinedMenuItem::separator()).expect("sep2");
-    menu.append(&export).expect("export");
+    menu.append(&show_data).expect("show_data");
     menu.append(&open_log).expect("open_log");
     menu.append(&quit).expect("quit");
 
@@ -374,6 +356,17 @@ fn tick(rt: &Rc<Runtime>) {
     if changed || n % MENU_REFRESH_EVERY_TICKS == 0 {
         refresh_menu(rt, glyph, clock.wall_ms);
     }
+
+    // Flush finished sessions to their day files (~every 30s).
+    if clock.mono_ms - rt.flush_at.get() > 30_000 {
+        rt.flush_at.set(clock.mono_ms);
+        match export::flush_pending(&rt.store, &rt.install_id, &rt.export_dir, clock.wall_ms) {
+            Ok(n) if n > 0 => log::info!("stored {n} session(s) to the day file"),
+            Ok(_) => {}
+            Err(e) => log::error!("day-file flush error: {e}"),
+        }
+    }
+
     drain_menu_events(rt);
 }
 
@@ -385,7 +378,8 @@ fn glyph_for(state: MonitorState) -> Glyph {
     }
 }
 
-/// Repaint the icon (and the transient menu-bar label) only on a state change.
+/// Repaint the icon only on a state change. Icon-only in the menu bar (HIG
+/// clean) — no persistent text label to get stuck; the shape carries the state.
 fn paint(rt: &Rc<Runtime>, glyph: Glyph) {
     if rt.painted.get() == Some(glyph) {
         return;
@@ -394,10 +388,6 @@ fn paint(rt: &Rc<Runtime>, glyph: Glyph) {
         // Keep the template flag on every swap, else macOS stops tinting it.
         let _ = tray.set_icon_with_as_template(Some(tray_glyph::icon(glyph)), true);
         let _ = tray.set_tooltip(Some(tooltip_for(glyph)));
-        // A short label appears next to the icon ONLY while actively recording —
-        // transparent feedback exactly when it matters, no persistent clutter.
-        let title = if glyph == Glyph::Capturing { Some(" Recording") } else { None };
-        tray.set_title(title);
     }
     rt.painted.set(Some(glyph));
 }
@@ -406,26 +396,27 @@ fn paint(rt: &Rc<Runtime>, glyph: Glyph) {
 /// language and confirms it is working.
 fn refresh_menu(rt: &Rc<Runtime>, glyph: Glyph, now_ms: i64) {
     let status = if !permissions::screen_recording_granted() {
-        "Turn on Screen Recording in System Settings".to_string()
+        "Let me watch your screen (Settings ▸ Screen Recording)".to_string()
     } else if !permissions::accessibility_trusted() {
-        "Turn on Accessibility in System Settings".to_string()
+        "Let me read windows (Settings ▸ Accessibility)".to_string()
     } else {
         match glyph {
-            Glyph::Paused => "Paused — not watching".to_string(),
-            Glyph::Idle => "No AI activity right now".to_string(),
-            Glyph::Watching => "Watching for AI use".to_string(),
-            Glyph::Capturing => "Recording an AI chat".to_string(),
+            Glyph::Paused => "Taking a break ☕".to_string(),
+            Glyph::Idle => "All quiet for now 🌙".to_string(),
+            Glyph::Watching => "Keeping an eye out 👀".to_string(),
+            Glyph::Capturing => "Catching an AI chat ✨".to_string(),
         }
     };
     rt.status_item.set_text(status);
 
     match rt.store.session_stats(now_ms - RECENT_WINDOW_MS) {
         Ok(stats) if stats.recent == 0 && stats.last_capture_ms.is_none() => {
-            rt.detail_item.set_text("Nothing captured yet");
+            rt.detail_item.set_text("Nothing caught yet today");
         }
         Ok(stats) => rt.detail_item.set_text(format!(
-            "{} captured (24h) · last {}",
+            "{} chat{} caught today · last {}",
             stats.recent,
+            if stats.recent == 1 { "" } else { "s" },
             relative_time(stats.last_capture_ms, now_ms)
         )),
         Err(e) => log::error!("status stats error: {e}"),
@@ -437,8 +428,8 @@ fn refresh_menu(rt: &Rc<Runtime>, glyph: Glyph, now_ms: i64) {
 fn drain_menu_events(rt: &Rc<Runtime>) {
     while let Ok(ev) = MenuEvent::receiver().try_recv() {
         let id = &ev.id;
-        if id == &rt.ids.export {
-            do_export(rt);
+        if id == &rt.ids.show_data {
+            do_show_data(rt);
         } else if id == &rt.ids.open_log {
             open_log(rt);
         } else if id == &rt.ids.quit {
@@ -471,31 +462,12 @@ fn set_pause(rt: &Rc<Runtime>, until: Option<i64>, why: &str) {
     refresh_menu(rt, glyph, rt.clock().wall_ms);
 }
 
-/// Gate 2 of the two-gate export: write the (already-redacted) extract and point
-/// the person at it. Nothing is sent anywhere.
-fn do_export(rt: &Rc<Runtime>) {
-    let stamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-        .to_string();
-    match run_export(rt, &stamp) {
-        Ok(path) => {
-            log::info!("wrote extract for review: {}", path.display());
-            // Reveal it so the person can review before sharing.
-            let _ = Command::new("open").arg("-R").arg(&path).spawn();
-        }
-        Err(e) => log::error!("export failed: {e}"),
-    }
-}
-
-/// Write the extract, applying the NER sweep when a redactor is loaded.
-fn run_export(rt: &Rc<Runtime>, stamp: &str) -> std::io::Result<PathBuf> {
-    #[cfg(feature = "ner")]
-    if let Some(ner) = rt.ner.as_ref() {
-        return export::export_all_ner(&rt.store, &rt.install_id, &rt.export_dir, stamp, ner);
-    }
-    export::export_all(&rt.store, &rt.install_id, &rt.export_dir, stamp)
+/// Reveal the (auto-stored, day-partitioned) data folder in Finder. Flushes
+/// anything pending first so what they see is current.
+fn do_show_data(rt: &Rc<Runtime>) {
+    let _ = export::flush_pending(&rt.store, &rt.install_id, &rt.export_dir, rt.clock().wall_ms);
+    let dir = export::data_dir_path(&rt.export_dir);
+    let _ = Command::new("open").arg(&dir).spawn();
 }
 
 fn open_log(rt: &Rc<Runtime>) {
@@ -515,10 +487,10 @@ fn do_quit(rt: &Rc<Runtime>) {
 /// Hover tooltip per glyph.
 fn tooltip_for(glyph: Glyph) -> &'static str {
     match glyph {
-        Glyph::Paused => "AI Usage Monitor — paused",
-        Glyph::Idle => "AI Usage Monitor — no AI activity",
-        Glyph::Watching => "AI Usage Monitor — watching for AI use",
-        Glyph::Capturing => "AI Usage Monitor — recording an AI chat",
+        Glyph::Paused => "AI Usage Monitor — taking a break",
+        Glyph::Idle => "AI Usage Monitor — all quiet",
+        Glyph::Watching => "AI Usage Monitor — keeping an eye out",
+        Glyph::Capturing => "AI Usage Monitor — catching an AI chat",
     }
 }
 

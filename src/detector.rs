@@ -149,8 +149,6 @@ fn growth_run(lens: &[i64], typing: &[bool], cfg: &DetectorConfig) -> Option<usi
 
     let mut steps = 0usize;
     let mut grown = 0i64;
-    let mut best = 0usize;
-    let mut best_grown = 0i64;
     let mut peak = lens[0];
     let mut stall = 0usize;
 
@@ -169,10 +167,6 @@ fn growth_run(lens: &[i64], typing: &[bool], cfg: &DetectorConfig) -> Option<usi
             grown += rise;
             peak = lens[i];
             stall = 0;
-            if steps > best {
-                best = steps;
-                best_grown = grown;
-            }
         } else if rise > max || lens[i] * 5 < peak * 3 {
             // Whole-screen paint (page/app load) or a big drop (scroll/scene
             // change): not autoregressive growth — reset to the new content.
@@ -190,10 +184,15 @@ fn growth_run(lens: &[i64], typing: &[bool], cfg: &DetectorConfig) -> Option<usi
             }
         }
     }
-    (best >= cfg.min_growth_steps).then_some(best_grown as usize)
+    // Report on the run that is STILL ACTIVE at the latest sample — not the best
+    // run anywhere in the window. Otherwise a finished reply keeps reading as
+    // "streaming" until its growth samples age out of the window (which, for a
+    // surface sampled only on full sweeps, is ~a minute), so the session never
+    // closes and the icon is stuck. When streaming stops, the trailing flat
+    // frames exceed the stall tolerance and this resets to 0 → idle promptly.
+    (steps >= cfg.min_growth_steps).then_some(grown as usize)
 }
 
-/// Fraction of `prev` that must survive as a common prefix of `cur` for the
 /// The amount of natural-language PROSE on screen: the count of alphabetic
 /// characters in lines that are NOT structured (log/code/chrome-symbol lines,
 /// per `looks_structured`). This is the quantity the detector watches grow.
@@ -421,6 +420,20 @@ mod tests {
         // A busy chat: discrete messages arriving with idle gaps between them
         // must NOT accumulate into one "generation" (the stall between resets).
         assert_eq!(run(&[100, 150, 150, 150, 150, 205, 205, 205, 205, 260]), None);
+    }
+
+    #[test]
+    fn growth_run_stops_when_streaming_stops() {
+        // The reply streams in, then finishes — the trailing flat frames must
+        // return the verdict to idle promptly (the "recording forever" bug was
+        // reporting the best run anywhere in the window instead of the current
+        // one, so a finished reply stayed "streaming" until it aged out).
+        assert!(run(&[100, 140, 180, 220, 260]).is_some(), "still streaming at the tail");
+        assert_eq!(
+            run(&[100, 140, 180, 220, 260, 260, 260, 260]),
+            None,
+            "finished reply (flat tail) must go idle"
+        );
     }
 
     #[test]
