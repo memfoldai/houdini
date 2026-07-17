@@ -38,16 +38,17 @@ fn running_pipeline_ingests_redacts_and_exports() {
     assert_eq!(stats.sessions, 1);
     assert_eq!(stats.new_turns, 2);
 
-    // Export and read the day file back.
-    assert_eq!(export::flush_pending(&store, "dev-1", &data_dir, 1).unwrap(), 1);
-    let body = fs::read_to_string(data_dir.join("2026-07-16.jsonl")).unwrap();
-    let v: serde_json::Value = serde_json::from_str(body.trim()).unwrap();
-    assert_eq!(v["kind"], "interaction");
-    assert_eq!(v["provider"], "anthropic");
-    assert_eq!(v["tool"], "claude-code");
-    assert_eq!(v["model"], "claude-sonnet-5");
-    assert_eq!(v["turns"][0]["role"], "user");
-    let prompt = v["turns"][0]["text"].as_str().unwrap();
+    // Export and read the OLAP-flat interaction rows back (one row per turn).
+    assert_eq!(export::flush_pending(&store, "dev-1", &data_dir, 1).unwrap(), 2);
+    let body = fs::read_to_string(data_dir.join("interactions/2026-07-16.jsonl")).unwrap();
+    let rows: Vec<serde_json::Value> = body.lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+    assert_eq!(rows.len(), 2, "one flat row per turn");
+    assert_eq!(rows[0]["kind"], "interaction");
+    assert_eq!(rows[0]["provider"], "anthropic");
+    assert_eq!(rows[0]["tool"], "claude-code");
+    assert_eq!(rows[0]["model"], "claude-sonnet-5");
+    assert_eq!(rows[0]["role"], "user");
+    let prompt = rows[0]["text"].as_str().unwrap();
     assert!(!prompt.contains("AKIAIOSFODNN7EXAMPLE"), "secret must be redacted before storage");
 
     // Unchanged file on the next poll → nothing re-ingested.

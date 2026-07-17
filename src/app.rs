@@ -42,8 +42,10 @@ const BASE_TICK_S: f64 = 1.0;
 const MENU_REFRESH_EVERY_TICKS: u64 = 3;
 /// Window for the "recorded today" status count.
 const RECENT_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
-/// After an interaction is ingested, hold the "catching a chat" glyph this long.
-const FRESH_INGEST_MS: i64 = 8_000;
+/// After the last interaction is recorded, keep showing the "active" disc this
+/// long before decaying to the idle ring — long enough to track a live session
+/// (turns arrive every few seconds), short enough not to stick on.
+const ACTIVE_WINDOW_MS: i64 = 45_000;
 /// Content-free heartbeat cadence.
 const HEARTBEAT_MS: i64 = 30_000;
 
@@ -244,14 +246,14 @@ fn install_tray(rt: &Rc<Runtime>) {
 
     let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
-        .with_icon(tray_glyph::icon(Glyph::Monitoring))
+        .with_icon(tray_glyph::icon(Glyph::Idle))
         .with_icon_as_template(true)
         .build()
         .expect("build tray icon");
     *rt.tray.borrow_mut() = Some(tray);
     let clock = rt.clock();
-    paint(rt, Glyph::Monitoring);
-    refresh_menu(rt, Glyph::Monitoring, clock.wall_ms);
+    paint(rt, Glyph::Idle);
+    refresh_menu(rt, Glyph::Idle, clock.wall_ms);
 }
 
 fn install_timer(rt: &Rc<Runtime>) {
@@ -341,12 +343,12 @@ fn tick(rt: &Rc<Runtime>) {
 /// stale; it lives in the data and the dropdown detail instead.
 fn glyph_for(rt: &Rc<Runtime>, now_mono_ms: i64) -> Glyph {
     // saturating_sub: last_ingest_ms init is i64::MIN, and `now - i64::MIN`
-    // overflows/wraps in release to a small value → the icon would read
-    // "Recording" forever. Saturating gives i64::MAX (not fresh) → Monitoring.
-    if now_mono_ms.saturating_sub(rt.last_ingest_ms.get()) < FRESH_INGEST_MS {
-        Glyph::Recording
+    // overflows/wraps in release to a small value → the icon would read "active"
+    // forever. Saturating gives i64::MAX (not recent) → Idle.
+    if now_mono_ms.saturating_sub(rt.last_ingest_ms.get()) < ACTIVE_WINDOW_MS {
+        Glyph::Active
     } else {
-        Glyph::Monitoring
+        Glyph::Idle
     }
 }
 
@@ -364,8 +366,8 @@ fn paint(rt: &Rc<Runtime>, glyph: Glyph) {
 fn refresh_menu(rt: &Rc<Runtime>, glyph: Glyph, now_ms: i64) {
     let status = match glyph {
         Glyph::Paused => "Taking a break ☕".to_string(),
-        Glyph::Recording => "Recording an AI chat…".to_string(),
-        Glyph::Monitoring => "Watching for AI use 👀".to_string(),
+        Glyph::Active => "Recording AI activity ✨".to_string(),
+        Glyph::Idle => "Watching for AI use 👀".to_string(),
     };
     rt.status_item.set_text(status);
 
@@ -412,7 +414,7 @@ fn set_pause(rt: &Rc<Runtime>, until: Option<i64>, why: &str) {
     }
     rt.paused_until.set(until);
     log::info!("{why}");
-    let glyph = if until.is_some() { Glyph::Paused } else { Glyph::Monitoring };
+    let glyph = if until.is_some() { Glyph::Paused } else { Glyph::Idle };
     paint(rt, glyph);
     refresh_menu(rt, glyph, rt.clock().wall_ms);
 }
@@ -436,8 +438,8 @@ fn do_quit(rt: &Rc<Runtime>) {
 fn tooltip_for(glyph: Glyph) -> &'static str {
     match glyph {
         Glyph::Paused => "AI Usage Monitor — taking a break",
-        Glyph::Recording => "AI Usage Monitor — recording an AI chat",
-        Glyph::Monitoring => "AI Usage Monitor — watching for AI use",
+        Glyph::Active => "AI Usage Monitor — recording AI activity",
+        Glyph::Idle => "AI Usage Monitor — watching for AI use",
     }
 }
 

@@ -4,18 +4,19 @@
 //! a monochrome shape with an alpha mask, which the system tints for the light
 //! or dark menu bar and inverts on selection (see `NSImage.isTemplate`). So
 //! these carry no color — state is conveyed by SHAPE, and there are only three,
-//! deliberately:
+//! deliberately, with a big visual difference between quiet and active:
 //!
-//!   Monitoring   ring + center dot   — the steady "on, watching" state
-//!   Recording    filled disc         — a BRIEF flash when an interaction is
-//!                                       actually recorded (not while an app is
-//!                                       merely open — that was the old stale cue)
-//!   Paused       two bars            — the universal "paused" cue
+//!   Idle     hollow ring    — running, but no AI activity right now
+//!   Active   filled disc    — AI activity recorded recently (decays back to Idle
+//!                             a while after the last interaction, so it tracks
+//!                             real use instead of sticking on)
+//!   Paused   two bars       — the universal "paused" cue
 //!
-//! There is no persistent state driven by "an AI app is connected": a backgrounded
-//! app holds network connections indefinitely, so surfacing that as an icon state
-//! never cleared and read as stale. The icon means "the monitor is running";
-//! live detail lives in the dropdown.
+//! The hollow-ring ↔ filled-disc contrast is deliberately strong: the previous
+//! icon always showed a ring-with-dot and barely changed, so it read as
+//! uninformative. Active is driven by RECORDED interactions (transcripts, web),
+//! not by "an AI app is merely open" (a backgrounded app holds connections
+//! forever, which would make the icon stick on and read as stale).
 //!
 //! Rendered at 36 px (retina @2x of the 18 pt the status bar draws) with 4×4
 //! supersampled coverage, so edges are smooth. Output is black RGB with the
@@ -30,7 +31,6 @@ const CENTER: f32 = (PX as f32 - 1.0) / 2.0;
 // Ring/disc geometry (36 px canvas units).
 const R_OUTER: f32 = 15.0;
 const RING_WIDTH: f32 = 3.2;
-const DOT_RADIUS: f32 = 4.6;
 const DISC_RADIUS: f32 = 13.0;
 
 // Pause-bars geometry.
@@ -42,10 +42,10 @@ const BAR_GAP: f32 = 4.0; // center-to-inner-edge offset
 /// kept separate from the domain state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Glyph {
-    /// Steady "on and watching" — the normal running state.
-    Monitoring,
-    /// Brief flash when an interaction is actually recorded.
-    Recording,
+    /// Hollow ring — running, no AI activity right now.
+    Idle,
+    /// Filled disc — AI activity recorded recently.
+    Active,
     /// Paused — nothing is being recorded.
     Paused,
 }
@@ -82,8 +82,8 @@ fn contains(glyph: Glyph, px: f32, py: f32) -> bool {
     let d = ((px - CENTER).powi(2) + (py - CENTER).powi(2)).sqrt();
     let on_ring = d <= R_OUTER && d >= R_OUTER - RING_WIDTH;
     match glyph {
-        Glyph::Monitoring => on_ring || d <= DOT_RADIUS,
-        Glyph::Recording => d <= DISC_RADIUS,
+        Glyph::Idle => on_ring,
+        Glyph::Active => d <= DISC_RADIUS,
         Glyph::Paused => in_bar(px, py, -1.0) || in_bar(px, py, 1.0),
     }
 }

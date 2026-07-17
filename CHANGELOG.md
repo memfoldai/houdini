@@ -5,6 +5,35 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.4.2] — 2026-07-17
+
+### Changed
+- **Day files are now OLAP-ready.** Export moved from one nested-`turns` record
+  per session to two flat, single-grain fact tables partitioned by day:
+  `data/interactions/YYYY-MM-DD.jsonl` (one row per turn) and
+  `data/presence/YYYY-MM-DD.jsonl` (one row per interval). Rows are flat,
+  denormalized (each turn carries its provider/tool/surface/model), and have a
+  stable `event_id` for idempotent loads. A warehouse reads them with no unnest
+  or join. Schema tag is now `aum/3`.
+- **Turns export incrementally.** A per-session `exported_seq` high-water mark
+  replaces the old per-session `exported_at` flag, so a growing session appends
+  only its new turns instead of re-emitting the whole session — fixing the
+  duplicate/partial rows a multi-message web chat produced.
+- **Menu-bar icon is now informative.** A hollow ring when quiet, a filled disc
+  while AI activity is being recorded (decaying ~45s after the last interaction).
+  The old always-on ring-with-dot barely changed and read as uninformative.
+
+### Fixed
+- **ChatGPT web captured the prompt but not the reply.** The reply parser matched
+  an older internal SSE shape. It now reads the completed assistant message from
+  the rendered DOM (stable) after the stream ends, and takes the conversation id
+  from the `/c/<id>` page URL — no dependence on the provider's undocumented,
+  changing stream format. (Reverse-engineered surfaces; validated against sample
+  inputs, confirm live.)
+- **Claude Code slash-command noise** (`<local-command-*>`, `<command-*>` wrappers
+  from `/model` etc.) was stored as user prompts. Those synthetic entries are now
+  filtered; only real prompts are recorded.
+
 ## [0.4.1] — 2026-07-17
 
 ### Fixed
@@ -261,6 +290,7 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.4.2]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.2
 [0.4.1]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.1
 [0.4.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.0
 [0.3.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.3.0

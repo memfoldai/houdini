@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     started_at    INTEGER NOT NULL,    -- unix ms
     ended_at      INTEGER NOT NULL,    -- unix ms (last activity seen)
     message_count INTEGER NOT NULL DEFAULT 0,
-    exported_at   INTEGER,             -- unix ms when flushed to a day file, else null
+    exported_seq  INTEGER NOT NULL DEFAULT 0, -- turns already written to a day file (high-water mark)
     UNIQUE (tool, external_id)
 );
 CREATE TABLE IF NOT EXISTS turns (
@@ -77,8 +77,10 @@ CREATE TABLE IF NOT EXISTS presence (
 "#;
 
 /// Current on-disk schema version (tracked via SQLite `PRAGMA user_version`).
-/// Bumped when the `sessions`/`turns` shape changes incompatibly.
-const SCHEMA_VERSION: i64 = 2;
+/// Bumped when the `sessions`/`turns` shape changes incompatibly. v3 replaced the
+/// per-session `exported_at` flag with an `exported_seq` high-water mark so export
+/// emits one row per NEW turn (OLAP-flat, no re-emitted whole sessions).
+const SCHEMA_VERSION: i64 = 3;
 
 /// Ensure the schema is current. A DB written before 0.4.0 has an incompatible
 /// `sessions`/`turns` shape (the screen-scrape era: `source_kind`/`app_hash`,
@@ -160,20 +162,17 @@ impl Store {
             self.conn.query_row("SELECT COUNT(*) FROM turns WHERE session_id = ?1", params![id], |r| {
                 r.get(0)
             })?;
-        // A re-upsert must not lower a session below rows already written; mark
-        // it exported-stale so the new turns get re-flushed.
-        self.conn
-            .execute("UPDATE sessions SET exported_at = NULL WHERE id = ?1", params![id])?;
+        // New turns are picked up for export by the exported_seq high-water mark
+        // (turn_count > exported_seq) — no per-session re-flush flag needed.
         Ok((id, existing))
     }
 
     /// Set a session's running end time and message count after appending turns
-    /// incrementally (the browser host path), and re-open it for export. Idempotent.
+    /// incrementally (the browser host path). New turns are exported via the
+    /// exported_seq high-water mark, so no re-flush flag is needed. Idempotent.
     pub fn set_progress(&self, session_id: i64, ended_at_ms: i64, message_count: i64) -> rusqlite::Result<()> {
         self.conn.execute(
-            "UPDATE sessions
-                 SET ended_at = MAX(ended_at, ?2), message_count = ?3, exported_at = NULL
-             WHERE id = ?1",
+            "UPDATE sessions SET ended_at = MAX(ended_at, ?2), message_count = ?3 WHERE id = ?1",
             params![session_id, ended_at_ms, message_count],
         )?;
         Ok(())
@@ -230,11 +229,18 @@ impl Store {
         Ok(ActivityStats { recent_interactions: interactions, last_activity_ms: last })
     }
 
-    /// Sessions not yet written to a day file (or made stale by new turns).
-    pub fn pending_sessions(&self) -> rusqlite::Result<Vec<SessionRow>> {
+    /// Sessions that have turns not yet exported (turn count beyond the
+    /// exported_seq high-water mark). Each carries its `exported_seq` so the
+    /// exporter emits only the new turns (seq >= exported_seq).
+    pub fn pending_interactions(&self) -> rusqlite::Result<Vec<SessionRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, tool, external_id, provider, surface, model, started_at, ended_at, message_count
-             FROM sessions WHERE exported_at IS NULL ORDER BY started_at",
+            "SELECT s.id, s.tool, s.external_id, s.provider, s.surface, s.model,
+                    s.started_at, s.ended_at, s.message_count, s.exported_seq,
+                    COUNT(t.id) AS turn_count
+             FROM sessions s LEFT JOIN turns t ON t.session_id = s.id
+             GROUP BY s.id
+             HAVING turn_count > s.exported_seq
+             ORDER BY s.started_at",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(SessionRow {
@@ -247,6 +253,7 @@ impl Store {
                 started_at_ms: r.get(6)?,
                 ended_at_ms: r.get(7)?,
                 message_count: r.get(8)?,
+                exported_seq: r.get(9)?,
             })
         })?;
         rows.collect()
@@ -274,9 +281,11 @@ impl Store {
         rows.collect()
     }
 
-    pub fn mark_session_exported(&self, id: i64, at_ms: i64) -> rusqlite::Result<()> {
+    /// Advance a session's exported-turn high-water mark after its new turns are
+    /// written to the day file.
+    pub fn set_exported_seq(&self, id: i64, seq: i64) -> rusqlite::Result<()> {
         self.conn
-            .execute("UPDATE sessions SET exported_at = ?1 WHERE id = ?2", params![at_ms, id])?;
+            .execute("UPDATE sessions SET exported_seq = ?1 WHERE id = ?2", params![seq, id])?;
         Ok(())
     }
 
@@ -288,10 +297,17 @@ impl Store {
 
     /// Read a session's turns in order (for export).
     pub fn session_turns(&self, session_id: i64) -> rusqlite::Result<Vec<TurnRow>> {
+        self.session_turns_from(session_id, 0)
+    }
+
+    /// Read a session's turns with `seq >= from_seq`, in order — the new turns to
+    /// export incrementally.
+    pub fn session_turns_from(&self, session_id: i64, from_seq: i64) -> rusqlite::Result<Vec<TurnRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT seq, role, redacted_text, ts FROM turns WHERE session_id = ?1 ORDER BY seq",
+            "SELECT seq, role, redacted_text, ts FROM turns
+             WHERE session_id = ?1 AND seq >= ?2 ORDER BY seq",
         )?;
-        let rows = stmt.query_map(params![session_id], |r| {
+        let rows = stmt.query_map(params![session_id, from_seq], |r| {
             Ok(TurnRow { seq: r.get(0)?, role: r.get(1)?, redacted_text: r.get(2)?, ts_ms: r.get(3)? })
         })?;
         rows.collect()
@@ -346,6 +362,8 @@ pub struct SessionRow {
     pub started_at_ms: i64,
     pub ended_at_ms: i64,
     pub message_count: i64,
+    /// Turns already exported (rows with seq < this are on disk).
+    pub exported_seq: i64,
 }
 
 /// One turn row. `redacted_text` is always post-redaction.
@@ -426,7 +444,7 @@ mod tests {
         assert_eq!(store.session_count().unwrap(), 0, "incompatible legacy rows dropped");
         let (id, _) = store.upsert_session(&upsert("claude-code", "s", 2, 1)).unwrap();
         store.add_turn(id, 0, Role::User, "hi", 1).unwrap();
-        assert_eq!(store.pending_sessions().unwrap().len(), 1, "new schema is usable");
+        assert_eq!(store.pending_interactions().unwrap().len(), 1, "new schema is usable");
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -450,15 +468,20 @@ mod tests {
     }
 
     #[test]
-    fn new_turns_make_a_session_pending_again() {
+    fn only_new_turns_are_pending_after_exported_seq_advances() {
         let s = Store::open_in_memory().unwrap();
         let (id, _) = s.upsert_session(&upsert("codex", "c1", 2000, 1)).unwrap();
         s.add_turn(id, 0, Role::User, "q", 1000).unwrap();
-        assert_eq!(s.pending_sessions().unwrap().len(), 1);
-        s.mark_session_exported(id, 2100).unwrap();
-        assert_eq!(s.pending_sessions().unwrap().len(), 0);
-        // Growth re-opens it for export.
-        s.upsert_session(&upsert("codex", "c1", 3000, 2)).unwrap();
-        assert_eq!(s.pending_sessions().unwrap().len(), 1);
+        let pending = s.pending_interactions().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].exported_seq, 0);
+        // Export the one turn, advance the high-water mark → nothing pending.
+        s.set_exported_seq(id, 1).unwrap();
+        assert_eq!(s.pending_interactions().unwrap().len(), 0);
+        // A new turn makes it pending again, and only that turn is unexported.
+        s.add_turn(id, 1, Role::Assistant, "a", 1500).unwrap();
+        let pending = s.pending_interactions().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(s.session_turns_from(id, pending[0].exported_seq).unwrap().len(), 1, "only the new turn");
     }
 }

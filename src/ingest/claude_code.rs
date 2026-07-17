@@ -64,6 +64,7 @@ impl Adapter for ClaudeCode {
                         .and_then(Value::as_str)
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
+                        .filter(|s| !is_command_noise(s))
                     {
                         turns.push(IngestedTurn { role: Role::User, text: text.to_string(), ts_ms: ts });
                     }
@@ -102,6 +103,24 @@ impl Adapter for ClaudeCode {
             turns,
         })
     }
+}
+
+/// Claude Code injects synthetic `type:"user"` entries for slash commands and
+/// their output, wrapped in marker tags — these are not human prompts and were
+/// polluting the record. Drop content that begins with one of Claude Code's own
+/// command/caveat markers. (These tags are the tool's contract for non-prompt
+/// content, not a guessed heuristic.)
+fn is_command_noise(text: &str) -> bool {
+    const MARKERS: &[&str] = &[
+        "<local-command-caveat>",
+        "<command-name>",
+        "<command-message>",
+        "<command-args>",
+        "<local-command-stdout>",
+        "<local-command-stderr>",
+    ];
+    let head = text.trim_start();
+    MARKERS.iter().any(|m| head.starts_with(m))
 }
 
 /// Concatenate the visible `text` blocks of an assistant message, dropping
@@ -155,6 +174,15 @@ mod tests {
         // discover finds it under the projects root.
         assert_eq!(ClaudeCode.discover(&dir).len(), 1);
         fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn slash_command_noise_is_not_a_user_prompt() {
+        assert!(is_command_noise("<local-command-caveat>Caveat: ...</local-command-caveat>"));
+        assert!(is_command_noise("<command-name>/model</command-name>"));
+        assert!(is_command_noise("<local-command-stdout>Set model to Sonnet 5</local-command-stdout>"));
+        assert!(!is_command_noise("explain regenerative agriculture"));
+        assert!(!is_command_noise("what does <div> mean in html"));
     }
 
     #[test]

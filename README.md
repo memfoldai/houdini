@@ -70,33 +70,43 @@ messaging — never over the network. Covers ChatGPT and Claude on the web today
   the message content is redacted.
 - Pause anytime from the menu; while paused nothing new is recorded.
 
-## Data format
+## Data format (OLAP-ready)
 
-The local store is SQLite (the source of truth). New and changed records are
-written automatically — no manual export — to **day files** `data/YYYY-MM-DD.jsonl`,
-one JSON object per line. Day partitioning is the standard analytics-at-scale
-shape: files from any number of machines merge trivially (each line carries the
-device id), and a day/week rollup is just concatenating files.
+The local store is SQLite (the source of truth). New records are written
+automatically — no manual export — into day-partitioned JSONL, laid out as two
+**flat, single-grain fact tables** so a warehouse reads them with no unnesting or
+joins:
 
-Two record kinds share the day file, told apart by `kind`:
-
-**`interaction`** — a real session from a transcript:
-
-```json
-{"schema":"aum/2","kind":"interaction","device":"…","day":"2026-07-16",
- "provider":"anthropic","tool":"claude-code","surface":"cli",
- "model":"claude-sonnet-5","session":"…","started_ms":…,"ended_ms":…,
- "message_count":2,"turns":[{"role":"user","text":"…","ts_ms":…},…]}
+```
+data/interactions/YYYY-MM-DD.jsonl   # one row per message (turn)
+data/presence/YYYY-MM-DD.jsonl       # one row per network-presence interval
 ```
 
-**`presence`** — a content-free network interval:
+Each row is flat and denormalized, has a stable `event_id` (so a re-load dedupes
+trivially), and carries the day + device (so files from any number of machines
+merge by concatenation). Turns are written **incrementally** — a growing session
+appends only its new turns, never re-emitting the whole thing.
+
+**`data/interactions`** — one row per turn:
 
 ```json
-{"schema":"aum/2","kind":"presence","device":"…","day":"2026-07-16",
- "provider":"openai","process":"ChatGPT","surface":"app",
- "started_ms":…,"ended_ms":…,"observations":12}
+{"schema":"aum/3","kind":"interaction","event_id":"<device>:<session>:0",
+ "device":"…","day":"2026-07-16","ts_ms":…,"provider":"anthropic",
+ "tool":"claude-code","surface":"cli","model":"claude-sonnet-5",
+ "session_id":"…","turn_index":0,"role":"user","text":"…","text_chars":42}
 ```
 
+**`data/presence`** — one row per interval:
+
+```json
+{"schema":"aum/3","kind":"presence","event_id":"<device>:presence:7",
+ "device":"…","day":"2026-07-16","ts_ms":…,"provider":"openai",
+ "process":"ChatGPT","surface":"app","started_ms":…,"ended_ms":…,
+ "duration_ms":30000,"observations":12}
+```
+
+A query is a flat scan — e.g. DuckDB:
+`SELECT provider, count(*) FROM read_json_auto('data/interactions/*.jsonl') WHERE role='assistant' GROUP BY 1`.
 Provider grouping (Claude app + CLI + web → one entity) is deterministic at
 ingest; higher-level semantic clustering (research vs build, topic) is an
 analysis-time job over these files — see [docs/grouping.md](docs/grouping.md).
