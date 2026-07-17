@@ -1,171 +1,71 @@
-//! Configuration + per-install paths and salt.
+//! Configuration + per-install paths.
 //!
-//! The salt anonymizes the source-app hash: it is generated once per install,
-//! stored locally, and never leaves the machine, so app hashes are stable for
-//! grouping within one install but not comparable across installs and never
-//! reveal the app id (see `store::app_hash`).
+//! The identity the study records — provider, tool, surface — is stored in the
+//! clear, so there is no anonymization salt anymore. The only per-install secret
+//! that remains is `install_id`: a random device id so pooled day files stay
+//! attributable per machine. Only interaction CONTENT is redacted (see
+//! `redact`), and that happens before storage regardless of config.
 
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::detector::DetectorConfig;
-
 const QUALIFIER: &str = "ai";
 const ORG: &str = "memfold";
 const APP: &str = "ai-usage-monitor";
 
-/// Persisted, human-editable config (thresholds + operational knobs). The
-/// detector thresholds live here so the tuning loop can adjust them without a
-/// rebuild.
+/// Persisted, human-editable config. Every field carries a `serde(default)` so a
+/// file written by an older version still loads (missing fields default) and is
+/// rewritten to gain them; a genuinely corrupt file is backed up and reset
+/// rather than crashing the app.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
-    /// Per-install anonymization salt (hex). Generated on first run. Secret to
-    /// this machine — never exported.
-    pub salt: String,
-    /// Per-install identifier for multi-device aggregation (UUID v4, per the
-    /// OpenTelemetry `service.instance.id` recommendation). Carried in every
-    /// extract so lines from different machines are distinguishable. Random —
-    /// derived from nothing, reveals nothing.
+    /// Per-install device id (UUID v4) for multi-device aggregation. Random,
+    /// reveals nothing, stable across runs.
     #[serde(default = "generate_uuid_v4")]
     pub install_id: String,
-    // Every tunable below carries a `serde(default)` so a config.json written by
-    // an OLDER version — which lacks fields added later — still loads (the
-    // missing field takes its default) instead of failing. `load_or_init` then
-    // rewrites the file so it gains the new fields. Adding a field here WITHOUT
-    // a default would crash every existing install on upgrade.
-    /// Sampling cadence while armed, in milliseconds.
-    #[serde(default = "d_sample_interval_ms")]
-    pub sample_interval_ms: u64,
-    /// Every Nth tick is a FULL sweep over all windows (all displays, Spaces,
-    /// background); other ticks sample only the frontmost app. Bounds the OCR
-    /// cost of watching everything.
-    #[serde(default = "d_full_sweep_every_ticks")]
-    pub full_sweep_every_ticks: u32,
-    /// Windows smaller than this (points²) are skipped — a surface too small to
-    /// host a conversation (status items, palettes). Tunable, not hardcoded.
-    #[serde(default = "d_min_surface_area")]
-    pub min_surface_area: f64,
-    /// At most this many OCR captures per full sweep; the rest are logged as
-    /// skipped (no silent truncation) and picked up next sweep.
-    #[serde(default = "d_max_ocr_per_sweep")]
-    pub max_ocr_per_sweep: usize,
-    /// Minimum time between OCR captures of the SAME window (ms). OCR is the
-    /// expensive path (a screenshot + Vision pass); this decouples its cost
-    /// from the sample rate so a frontmost browser is not OCR'd several times a
-    /// second. The detector still confirms streaming within a few of these.
-    #[serde(default = "d_ocr_min_interval_ms")]
-    pub ocr_min_interval_ms: u64,
-    /// How long (ms) of no growth ends an active AI session.
-    #[serde(default = "d_session_idle_gap_ms")]
-    pub session_idle_gap_ms: u64,
-    /// Detector thresholds (see `DetectorConfig`).
-    #[serde(default)]
-    pub detector: DetectorConfigSerde,
-    /// Optional directory holding a provisioned token-mode GLiNER-PII model
-    /// (tokenizer.json + model.onnx). When set AND the binary is built with the
-    /// `ner` feature, the export sweep adds the NER redaction layer over the
-    /// already-deterministically-redacted text. Absent by default; the
-    /// deterministic layer always runs regardless. See docs/NER.md.
+    /// How often to scan transcripts for new interactions (ms).
+    #[serde(default = "d_transcript_poll_ms")]
+    pub transcript_poll_ms: u64,
+    /// How often to poll the process table for AI network connections (ms).
+    #[serde(default = "d_network_poll_ms")]
+    pub network_poll_ms: u64,
+    /// A provider unseen on the network for this long closes its presence
+    /// interval (ms). Bridges brief connection churn into one "was active" span.
+    #[serde(default = "d_presence_gap_ms")]
+    pub presence_gap_ms: u64,
+    /// How often to flush new/closed records to day files (ms).
+    #[serde(default = "d_flush_ms")]
+    pub flush_ms: u64,
+    /// Optional GLiNER-PII model dir; enables the NER redaction layer when the
+    /// binary is built with the `ner` feature (see docs/NER.md). The
+    /// deterministic redaction layer always runs regardless.
     #[serde(default)]
     pub ner_model_dir: Option<PathBuf>,
 }
 
-/// Serde mirror of `DetectorConfig` (kept separate so the detector module has
-/// no serde dependency).
-// `#[serde(default)]` on each field so a config.json written by an older version
-// (which had a `min_prose_score` field, now removed) still loads — unknown fields
-// are ignored, missing ones default.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DetectorConfigSerde {
-    #[serde(default = "d_min_growth_steps")]
-    pub min_growth_steps: usize,
-    #[serde(default = "d_min_step_growth_chars")]
-    pub min_step_growth_chars: usize,
-    #[serde(default = "d_max_step_growth_chars")]
-    pub max_step_growth_chars: usize,
-    #[serde(default = "d_exclude_typing_steps")]
-    pub exclude_typing_steps: bool,
-    #[serde(default = "d_window")]
-    pub window: usize,
+fn d_transcript_poll_ms() -> u64 {
+    5_000
 }
-
-fn d_min_growth_steps() -> usize {
-    DetectorConfig::default().min_growth_steps
+fn d_network_poll_ms() -> u64 {
+    5_000
 }
-fn d_min_step_growth_chars() -> usize {
-    DetectorConfig::default().min_step_growth_chars
+fn d_presence_gap_ms() -> u64 {
+    60_000
 }
-fn d_max_step_growth_chars() -> usize {
-    DetectorConfig::default().max_step_growth_chars
-}
-fn d_exclude_typing_steps() -> bool {
-    DetectorConfig::default().exclude_typing_steps
-}
-fn d_window() -> usize {
-    DetectorConfig::default().window
-}
-
-impl From<&DetectorConfigSerde> for DetectorConfig {
-    fn from(s: &DetectorConfigSerde) -> Self {
-        DetectorConfig {
-            min_growth_steps: s.min_growth_steps,
-            min_step_growth_chars: s.min_step_growth_chars,
-            max_step_growth_chars: s.max_step_growth_chars,
-            exclude_typing_steps: s.exclude_typing_steps,
-            window: s.window,
-        }
-    }
-}
-
-impl Default for DetectorConfigSerde {
-    fn default() -> Self {
-        let d = DetectorConfig::default();
-        Self {
-            min_growth_steps: d.min_growth_steps,
-            min_step_growth_chars: d.min_step_growth_chars,
-            max_step_growth_chars: d.max_step_growth_chars,
-            exclude_typing_steps: d.exclude_typing_steps,
-            window: d.window,
-        }
-    }
-}
-
-// Field defaults — the single source of truth for both `fresh()` and the
-// per-field `serde(default)`s, so an old config missing a field and a
-// first-run config agree on the value.
-fn d_sample_interval_ms() -> u64 {
-    350 // ~3 Hz on the frontmost app
-}
-fn d_full_sweep_every_ticks() -> u32 {
-    6 // full multi-window sweep ~every 2.1 s
-}
-fn d_min_surface_area() -> f64 {
-    40_000.0 // ~250×160 pt — smallest plausible chat window
-}
-fn d_max_ocr_per_sweep() -> usize {
-    6
-}
-fn d_ocr_min_interval_ms() -> u64 {
-    800 // OCR any one window at most ~1.25×/s
-}
-fn d_session_idle_gap_ms() -> u64 {
-    4_000
+fn d_flush_ms() -> u64 {
+    15_000
 }
 
 impl AppConfig {
-    fn fresh(salt: String, install_id: String) -> Self {
+    fn fresh(install_id: String) -> Self {
         Self {
-            salt,
             install_id,
-            sample_interval_ms: d_sample_interval_ms(),
-            full_sweep_every_ticks: d_full_sweep_every_ticks(),
-            min_surface_area: d_min_surface_area(),
-            max_ocr_per_sweep: d_max_ocr_per_sweep(),
-            ocr_min_interval_ms: d_ocr_min_interval_ms(),
-            session_idle_gap_ms: d_session_idle_gap_ms(),
-            detector: DetectorConfigSerde::default(),
+            transcript_poll_ms: d_transcript_poll_ms(),
+            network_poll_ms: d_network_poll_ms(),
+            presence_gap_ms: d_presence_gap_ms(),
+            flush_ms: d_flush_ms(),
             ner_model_dir: None,
         }
     }
@@ -177,9 +77,7 @@ pub struct Paths {
     pub db_file: PathBuf,
     pub export_dir: PathBuf,
     pub data_dir: PathBuf,
-    /// Diagnostics log (a named product artifact — allowed on disk). Capped +
-    /// rotated by `logging`; the menu can reveal it so the user can confirm
-    /// what the app is seeing.
+    /// Diagnostics log (a named product artifact). Capped + rotated by `logging`.
     pub log_file: PathBuf,
 }
 
@@ -190,7 +88,6 @@ impl Paths {
         })?;
         let data_dir = pd.data_dir().to_path_buf();
         fs::create_dir_all(&data_dir)?;
-        // Day-partitioned session files live here (see `export` module).
         let export_dir = data_dir.join("data");
         fs::create_dir_all(&export_dir)?;
         Ok(Self {
@@ -203,33 +100,24 @@ impl Paths {
     }
 }
 
-/// Load config, or create it (with a fresh random salt) on first run.
-///
-/// Upgrade-safe: a file written by an older version is loaded with missing
-/// fields defaulted (see the `serde(default)`s), then REWRITTEN so it gains the
-/// new fields. A file that is genuinely unparseable (corrupt JSON, not merely
-/// missing fields) is backed up and replaced with a fresh one rather than
-/// crashing the app — a monitor that won't launch is worse than a reset salt.
+/// Load config, or create it on first run. Upgrade-safe (missing fields default
+/// and are rewritten); an unparseable file is backed up and replaced.
 pub fn load_or_init(config_file: &Path) -> std::io::Result<AppConfig> {
     if config_file.exists() {
         let bytes = fs::read(config_file)?;
         match serde_json::from_slice::<AppConfig>(&bytes) {
             Ok(cfg) => {
-                // Rewrite so any field the old file lacked is now persisted.
                 write_config(config_file, &cfg)?;
                 return Ok(cfg);
             }
             Err(e) => {
                 let bad = config_file.with_extension("json.bad");
                 let _ = fs::rename(config_file, &bad);
-                log::error!(
-                    "config unparseable ({e}); backed up to {} and starting fresh",
-                    bad.display()
-                );
+                log::error!("config unparseable ({e}); backed up to {} and starting fresh", bad.display());
             }
         }
     }
-    let cfg = AppConfig::fresh(generate_salt(), generate_uuid_v4());
+    let cfg = AppConfig::fresh(generate_uuid_v4());
     write_config(config_file, &cfg)?;
     Ok(cfg)
 }
@@ -240,16 +128,7 @@ fn write_config(config_file: &Path, cfg: &AppConfig) -> std::io::Result<()> {
     fs::write(config_file, bytes)
 }
 
-/// 32 random bytes as hex.
-fn generate_salt() -> String {
-    use rand::RngCore;
-    let mut b = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut b);
-    b.iter().map(|x| format!("{x:02x}")).collect()
-}
-
-/// RFC 4122 UUID v4 (random): 16 random bytes with the version nibble set to 4
-/// and the variant bits set to 10, formatted 8-4-4-4-12.
+/// RFC 4122 UUID v4 (random).
 fn generate_uuid_v4() -> String {
     use rand::RngCore;
     let mut b = [0u8; 16];
@@ -275,41 +154,22 @@ mod tests {
         let _ = fs::remove_file(&cf);
         let a = load_or_init(&cf).unwrap();
         let b = load_or_init(&cf).unwrap();
-        assert_eq!(a.salt, b.salt, "salt must persist across runs");
-        assert_eq!(a.salt.len(), 64);
         assert_eq!(a.install_id, b.install_id, "install id must persist across runs");
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn old_config_missing_new_fields_still_loads_and_upgrades() {
-        // A config.json written by an EARLIER version (only the v0.1 fields,
-        // salt present) must load — the newer fields take their defaults — and
-        // be rewritten so it gains them. This is the exact upgrade crash guarded.
         let dir = std::env::temp_dir().join(format!("aum-oldcfg-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let cf = dir.join("config.json");
-        let old = r#"{
-            "salt": "deadbeef",
-            "sample_interval_ms": 350,
-            "session_idle_gap_ms": 4000,
-            "detector": {
-                "min_growth_steps": 3, "min_step_growth_chars": 2,
-                "max_step_growth_chars": 1200, "exclude_typing_steps": true,
-                "min_prose_score": 0.55, "window": 24
-            }
-        }"#;
-        fs::write(&cf, old).unwrap();
-
+        // A minimal older file: just an install id.
+        fs::write(&cf, r#"{"install_id":"keep-me"}"#).unwrap();
         let cfg = load_or_init(&cf).expect("old config must load, not crash");
-        assert_eq!(cfg.salt, "deadbeef", "existing salt is preserved");
-        assert_eq!(cfg.ocr_min_interval_ms, 800, "missing field takes its default");
-        assert!(!cfg.install_id.is_empty(), "missing install id is generated");
-
-        // Rewritten with all current fields → a second load is a clean reload.
+        assert_eq!(cfg.install_id, "keep-me", "existing id preserved");
+        assert_eq!(cfg.transcript_poll_ms, 5_000, "missing field takes default");
         let reread = fs::read_to_string(&cf).unwrap();
-        assert!(reread.contains("ocr_min_interval_ms"), "file upgraded on load");
-        assert_eq!(load_or_init(&cf).unwrap().install_id, cfg.install_id, "stable after upgrade");
+        assert!(reread.contains("network_poll_ms"), "file upgraded on load");
         fs::remove_dir_all(&dir).ok();
     }
 
@@ -319,6 +179,5 @@ mod tests {
         let parts: Vec<&str> = id.split('-').collect();
         assert_eq!(parts.iter().map(|p| p.len()).collect::<Vec<_>>(), vec![8, 4, 4, 4, 12]);
         assert!(parts[2].starts_with('4'), "version nibble must be 4");
-        assert!(matches!(parts[3].as_bytes()[0], b'8' | b'9' | b'a' | b'b'), "variant bits must be 10");
     }
 }

@@ -1,90 +1,133 @@
-//! Automatic day-partitioned storage.
+//! Automatic day-partitioned export.
 //!
-//! SQLite is the local source of truth; this flushes each finished session,
-//! once, into a day file `data/YYYY-MM-DD.jsonl` (one JSON object per line).
-//! Day partitioning is the standard shape for analytics at scale: files from
-//! any number of machines merge trivially (each line carries the device id and
-//! the date), and a day/week rollup is just concatenating files. There is no
-//! manual "export" step — the data is already redacted at rest and lands in the
-//! day file as it is captured.
+//! SQLite is the source of truth; this flushes each new/changed record, once,
+//! into a day file `data/YYYY-MM-DD.jsonl` (one JSON object per line). Day
+//! partitioning is the standard analytics-at-scale shape: files from any number
+//! of machines merge trivially (each line carries the device id), and a day/week
+//! rollup is just concatenating files.
 //!
-//! The record is deliberately lean — device, day, app, surface, times, and the
-//! **prompt** and **reply** as separate fields — so downstream analytics is a
-//! flat read, not a schema archaeology dig.
+//! Two record kinds share the day file, told apart by `kind`:
+//! - `interaction` — a real session read from a tool's transcript, with its
+//!   provider/tool/surface/model identity and the redacted turns.
+//! - `presence` — a content-free "AI tool was active" interval from the network
+//!   signal.
+//!
+//! Every field a downstream reader needs is named and typed; there is no schema
+//! archaeology and no hashing of the identity that the study is about.
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::store::Store;
+use crate::timestamp::ymd_utc;
 
-/// One stored exchange, as written to a day file.
+/// Bump on a breaking change to either record shape.
+const SCHEMA: &str = "aum/2";
+
 #[derive(serde::Serialize)]
-struct Record {
-    /// Schema tag for downstream readers; bump on a breaking change.
-    schema: &'static str,
-    /// Per-install id (UUID) so pooled files stay attributable per machine.
-    device: String,
-    /// `YYYY-MM-DD` (UTC) — matches the file it lives in.
-    day: String,
-    /// Salted app hash (never the app name).
-    app: String,
-    /// Coarse, non-hardcoded surface class: `web` (read via OCR) or `app`
-    /// (read via Accessibility). See docs/grouping.md.
-    surface: &'static str,
-    started_ms: i64,
-    ended_ms: Option<i64>,
-    /// The user's message, if it was captured; else empty.
-    prompt: String,
-    /// The model's reply (redacted).
-    reply: String,
+struct Turn {
+    role: String,
+    text: String,
+    ts_ms: i64,
 }
 
-/// Flush every closed-but-unwritten session to its day file. Returns how many
-/// were written. Safe to call often; each session is written exactly once
-/// (guarded by `exported_at`), so a crash between write and mark at worst
-/// duplicates one line — acceptable for append-only analytics.
-pub fn flush_pending(store: &Store, device: &str, data_dir: &Path, now_ms: i64) -> std::io::Result<usize> {
-    let pending = store
-        .pending_export()
-        .map_err(|e| std::io::Error::other(e.to_string()))?;
-    fs::create_dir_all(data_dir)?;
+#[derive(serde::Serialize)]
+struct InteractionRecord {
+    schema: &'static str,
+    kind: &'static str, // "interaction"
+    device: String,
+    day: String,
+    provider: String,
+    tool: String,
+    surface: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    model: Option<String>,
+    session: String,
+    started_ms: i64,
+    ended_ms: i64,
+    message_count: i64,
+    turns: Vec<Turn>,
+}
 
+#[derive(serde::Serialize)]
+struct PresenceRecord {
+    schema: &'static str,
+    kind: &'static str, // "presence"
+    device: String,
+    day: String,
+    provider: String,
+    process: String,
+    surface: String,
+    started_ms: i64,
+    ended_ms: i64,
+    observations: i64,
+}
+
+/// Flush every pending session and presence interval to its day file. Returns
+/// how many records were written. Each is written exactly once (guarded by
+/// `exported_at`); a crash between write and mark at worst re-writes one line —
+/// acceptable for append-only analytics.
+pub fn flush_pending(store: &Store, device: &str, data_dir: &Path, now_ms: i64) -> std::io::Result<usize> {
+    fs::create_dir_all(data_dir)?;
     let mut written = 0;
-    for s in pending {
+
+    for s in store.pending_sessions().map_err(io_err)? {
         let turns = store
             .session_turns(s.id)
-            .map_err(|e| std::io::Error::other(e.to_string()))?;
-        let prompt = turns.iter().find(|t| t.role == "user").map(|t| t.redacted_text.clone());
-        let reply: String = turns
-            .iter()
-            .filter(|t| t.role != "user")
-            .map(|t| t.redacted_text.as_str())
-            .collect::<Vec<_>>()
-            .join("\n");
-
+            .map_err(io_err)?
+            .into_iter()
+            .map(|t| Turn { role: t.role, text: t.redacted_text, ts_ms: t.ts_ms })
+            .collect();
         let day = ymd_utc(s.started_at_ms);
-        let record = Record {
-            schema: "aum/1",
+        let record = InteractionRecord {
+            schema: SCHEMA,
+            kind: "interaction",
             device: device.to_string(),
             day: day.clone(),
-            app: s.app_hash,
-            surface: if s.source_kind == "ocr" { "web" } else { "app" },
+            provider: s.provider,
+            tool: s.tool,
+            surface: s.surface,
+            model: s.model,
+            session: s.external_id,
             started_ms: s.started_at_ms,
             ended_ms: s.ended_at_ms,
-            prompt: prompt.unwrap_or_default(),
-            reply,
+            message_count: s.message_count,
+            turns,
         };
-        let mut line = serde_json::to_string(&record)
-            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-        line.push('\n');
-
-        let path = data_dir.join(format!("{day}.jsonl"));
-        OpenOptions::new().create(true).append(true).open(&path)?.write_all(line.as_bytes())?;
-        store.mark_exported(s.id, now_ms).map_err(|e| std::io::Error::other(e.to_string()))?;
+        append_line(data_dir, &day, &record)?;
+        store.mark_session_exported(s.id, now_ms).map_err(io_err)?;
         written += 1;
     }
+
+    for p in store.pending_presence().map_err(io_err)? {
+        let day = ymd_utc(p.row.started_at_ms);
+        let record = PresenceRecord {
+            schema: SCHEMA,
+            kind: "presence",
+            device: device.to_string(),
+            day: day.clone(),
+            provider: p.row.provider,
+            process: p.row.process,
+            surface: p.row.surface,
+            started_ms: p.row.started_at_ms,
+            ended_ms: p.row.ended_at_ms,
+            observations: p.row.observations,
+        };
+        append_line(data_dir, &day, &record)?;
+        store.mark_presence_exported(p.id, now_ms).map_err(io_err)?;
+        written += 1;
+    }
+
     Ok(written)
+}
+
+fn append_line<T: serde::Serialize>(data_dir: &Path, day: &str, record: &T) -> std::io::Result<()> {
+    let mut line = serde_json::to_string(record)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    line.push('\n');
+    let path = data_dir.join(format!("{day}.jsonl"));
+    OpenOptions::new().create(true).append(true).open(&path)?.write_all(line.as_bytes())
 }
 
 /// Reveal the data folder in Finder (menu action). Ensures it exists first.
@@ -93,57 +136,75 @@ pub fn data_dir_path(data_dir: &Path) -> PathBuf {
     data_dir.to_path_buf()
 }
 
-/// `YYYY-MM-DD` (UTC) for a unix-ms instant, without a date-library dependency
-/// (Howard Hinnant's days-from-civil, inverted). Used only for partition names.
-fn ymd_utc(unix_ms: i64) -> String {
-    let days = unix_ms.div_euclid(86_400_000); // days since 1970-01-01
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097; // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
-    let year = if m <= 2 { y + 1 } else { y };
-    format!("{year:04}-{m:02}-{d:02}")
+fn io_err(e: rusqlite::Error) -> std::io::Error {
+    std::io::Error::other(e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::store::{Role, SourceKind};
+    use crate::store::{PresenceRow, Role, SessionUpsert};
 
     #[test]
-    fn ymd_utc_matches_known_dates() {
-        assert_eq!(ymd_utc(0), "1970-01-01");
-        assert_eq!(ymd_utc(1_752_624_000_000), "2025-07-16"); // a known Wed
-        assert_eq!(ymd_utc(-1), "1969-12-31");
-    }
-
-    #[test]
-    fn flush_writes_lean_record_once() {
+    fn flushes_interaction_with_identity_and_turns() {
         let store = Store::open_in_memory().unwrap();
-        let sid = store.begin_session(1_752_624_000_000, SourceKind::Ocr, "apphash1").unwrap();
-        store.add_turn(sid, 0, Role::User, "explain photosynthesis", 1_752_624_000_100).unwrap();
-        store.add_turn(sid, 1, Role::Assistant, "Plants convert light [REDACTED:EMAIL]", 1_752_624_000_200).unwrap();
-        store.end_session(sid, 1_752_624_005_000).unwrap();
+        let (id, _) = store
+            .upsert_session(&SessionUpsert {
+                tool: "claude-code",
+                external_id: "sess-9",
+                provider: "anthropic",
+                surface: "cli",
+                model: Some("claude-sonnet-5"),
+                started_at_ms: 1_752_624_000_000,
+                ended_at_ms: 1_752_624_005_000,
+                message_count: 2,
+            })
+            .unwrap();
+        store.add_turn(id, 0, Role::User, "explain photosynthesis", 1_752_624_000_100).unwrap();
+        store.add_turn(id, 1, Role::Assistant, "Plants convert light [REDACTED:EMAIL]", 1_752_624_000_200).unwrap();
 
-        let dir = std::env::temp_dir().join(format!("aum-day-{}", std::process::id()));
-        let n = flush_pending(&store, "dev-uuid", &dir, 1_752_624_006_000).unwrap();
-        assert_eq!(n, 1);
+        let dir = std::env::temp_dir().join(format!("aum-x-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(flush_pending(&store, "dev-uuid", &dir, 1).unwrap(), 1);
 
         let body = fs::read_to_string(dir.join("2025-07-16.jsonl")).unwrap();
         let v: serde_json::Value = serde_json::from_str(body.trim()).unwrap();
-        assert_eq!(v["device"], "dev-uuid");
-        assert_eq!(v["day"], "2025-07-16");
-        assert_eq!(v["surface"], "web");
-        assert_eq!(v["prompt"], "explain photosynthesis");
-        assert!(v["reply"].as_str().unwrap().contains("[REDACTED:EMAIL]"));
+        assert_eq!(v["kind"], "interaction");
+        assert_eq!(v["provider"], "anthropic");
+        assert_eq!(v["tool"], "claude-code");
+        assert_eq!(v["surface"], "cli");
+        assert_eq!(v["model"], "claude-sonnet-5");
+        assert_eq!(v["turns"][0]["role"], "user");
+        assert_eq!(v["turns"][0]["text"], "explain photosynthesis");
+        assert!(v["turns"][1]["text"].as_str().unwrap().contains("[REDACTED:EMAIL]"));
 
-        // Second flush writes nothing (already marked exported).
-        assert_eq!(flush_pending(&store, "dev-uuid", &dir, 1_752_624_007_000).unwrap(), 0);
+        // Idempotent: nothing new to flush.
+        assert_eq!(flush_pending(&store, "dev-uuid", &dir, 2).unwrap(), 0);
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn flushes_presence_record() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .insert_presence(&PresenceRow {
+                provider: "openai".into(),
+                process: "codex".into(),
+                surface: "cli".into(),
+                started_at_ms: 1_752_624_000_000,
+                ended_at_ms: 1_752_624_030_000,
+                observations: 12,
+            })
+            .unwrap();
+        let dir = std::env::temp_dir().join(format!("aum-p-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        assert_eq!(flush_pending(&store, "dev", &dir, 1).unwrap(), 1);
+        let body = fs::read_to_string(dir.join("2025-07-16.jsonl")).unwrap();
+        let v: serde_json::Value = serde_json::from_str(body.trim()).unwrap();
+        assert_eq!(v["kind"], "presence");
+        assert_eq!(v["provider"], "openai");
+        assert_eq!(v["process"], "codex");
+        assert_eq!(v["observations"], 12);
         fs::remove_dir_all(&dir).ok();
     }
 }

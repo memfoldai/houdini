@@ -5,3 +5,6 @@ target/
 /dist/
 # Generated iconset scratch
 *.iconset/
+
+# Extension signing private key — never commit
+packaging/extension-key/key.pem

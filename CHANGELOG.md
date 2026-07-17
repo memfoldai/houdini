@@ -5,6 +5,63 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.4.0] — 2026-07-17
+
+Fundamental change of approach. Screen-scraping AI detection is removed: reading
+the screen with OCR and a streaming heuristic was unreliable at the mechanism
+level — it produced false positives (Slack, editors), garbled content, no app
+identity, and it missed the CLI/agent tools entirely. Detection is now based on
+two reliable signals, and the change was validated against real data on a real
+machine (184 Claude Code + 40 Codex sessions parsed; the live ChatGPT/Claude
+apps, Codex, and Claude Code all detected on the network).
+
+### Changed
+- **Detection is now transcript ingestion + network presence, not screen
+  capture.**
+  - **Layer A — transcripts.** AI coding tools persist structured local
+    transcripts; the monitor reads them directly (Claude Code
+    `~/.claude/projects/*/*.jsonl`, Codex `~/.codex/**/rollout-*.jsonl`),
+    yielding exact prompt/reply, timestamps, model, and session id with zero
+    OCR and zero false positives, across all desktops/Spaces.
+  - **Layer B — network presence.** For AI with no local transcript (web chats,
+    native apps), the monitor observes process → AI-endpoint connections via
+    `libproc` (no root, no entitlement). AI tools/apps are attributed by process
+    identity; browsers by provider-owned IP range.
+- **Records now carry real identity.** Each day-file line names the `provider`
+  (`anthropic`, `openai`, …), `tool`, `surface`, and `model`, with the exchange
+  as structured `turns`. The old salted app-hash is gone — for a consenting
+  internal study the provider entity is the signal, not something to hide. Schema
+  is now `aum/2`; `presence` records are a second kind alongside `interaction`.
+- **No screen-recording or accessibility permission.** The app reads files the
+  user owns and observes its own sockets; a rebuild never loses a TCC grant.
+- **Menu.** Removed "Peek under the hood"; the status line reflects the new
+  signals.
+
+### Removed
+- The OCR/Vision + ScreenCaptureKit capture stack, the streaming-signature
+  detector, the Accessibility reader, and their dependencies. Large net code and
+  dependency reduction.
+
+### Added
+- **Layer C — browser web-chat capture.** A Chromium extension (`extension/`)
+  intercepts the AI site's own API calls (fetch/SSE) — reliable and working in
+  background tabs — and delivers each web chat to a local native-messaging host
+  (`--native-host`), which redacts and stores it as a `web` session grouped under
+  the right provider. Strictly local: the extension talks only to the local host,
+  which has no egress. Install the host into every Chromium browser with
+  `--install-browser-host`. Covers ChatGPT and Claude web; endpoint shapes are
+  reverse-engineered and each needs one live confirmation.
+- `--diagnose` now reports what each layer sees live: per-tool transcript counts
+  and every AI network connection active on the machine right now (content-free).
+
+### UX
+- **Menu-bar states redesigned.** Three honest states: **Monitoring** (steady),
+  **Recording** (a brief flash only when an interaction is actually recorded), and
+  **Paused**. The old presence-driven "in use nearby" state is gone — a
+  backgrounded AI app holds a network connection indefinitely, so that state never
+  cleared and read as stale. Presence still feeds the data, just not a persistent
+  icon state.
+
 ## [0.3.0] — 2026-07-17
 
 ### Fixed
@@ -188,6 +245,7 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.4.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.0
 [0.3.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.3.0
 [0.2.5]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.5
 [0.2.4]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.4

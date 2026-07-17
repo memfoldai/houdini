@@ -22,8 +22,15 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build (lib + native bin)
         run: cargo build --verbose
-      - name: Test (portable core)
-        run: cargo test --lib --verbose
+      - name: Test (core + native host + integration)
+        run: cargo test --verbose
+      - name: Validate extension (syntax, manifest, interceptor parsers)
+        run: |
+          node --check extension/interceptor.js
+          node --check extension/relay.js
+          node --check extension/background.js
+          node -e "JSON.parse(require('fs').readFileSync('extension/manifest.json','utf8'))"
+          node extension/test/interceptor.test.mjs
       - name: Release build
         run: cargo build --release --verbose
 

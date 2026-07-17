@@ -1,168 +1,98 @@
 # Verification — human-gated steps
 
-The portable core (detector, redaction, store, session, export) is covered by
-`cargo test` and runs anywhere. The **native runtime cannot be self-verified**:
-it needs real TCC permission grants, real on-screen AI sessions, a status-bar
-item, and a stable code signature — none of which exist in a headless/CI
-environment. This document is the checklist a person runs once on a real Mac
-before trusting the app or sharing any data.
+The portable core (ingestion, attribution, redaction, store, export) is covered
+by `cargo test` and runs anywhere. This checklist is what a person runs once on a
+real Mac to confirm the two live detectors work end-to-end and the data is safe
+to share. It is much shorter than before: there is **no permission to grant and
+no false-positive tuning loop**, because detection no longer reads the screen.
 
 Do these in order. Each has an explicit pass condition.
 
 ---
 
-## 0. Build, sign, launch
+## 0. Build and probe
 
 ```bash
-cargo test                 # portable core must be green
+cargo test                 # portable core + integration must be green
 cargo build --release
-scripts/sign.sh            # stable self-signed identity (see the script header)
-./target/release/ai-usage-monitor
+./target/release/ai-usage-monitor --diagnose
 ```
 
-**Pass:** an icon appears in the menu bar — a hollow ring (idle). Clicking it
-shows a friendly status plus **Take a break**, **Show my data**, and **Quit**.
-(The icon's **shape** is the state — ring = idle, ring-with-dot = watching,
-solid disc = catching a chat, two bars = paused.)
-
-> Why signing matters: TCC keys the grants below on the binary's code identity.
-> An unsigned/ad-hoc build loses every grant on the next rebuild. Re-run
-> `scripts/sign.sh` after each rebuild so the grants persist.
+**Pass:** `--diagnose` prints two sections. Layer A lists your transcript tools
+with non-zero counts if you have used them (e.g. `claude-code  N file(s) → M
+session(s)`). Layer B lists AI network connections active right now (open an AI
+app or run an AI CLI first, or it will be empty). No content is printed.
 
 ---
 
-## 1. Grant permissions
+## 1. Layer A — a real interaction is ingested
 
-On first launch the app prompts for **Accessibility** and **Screen Recording**.
-If you miss the prompts, grant them manually:
+1. Run a prompt in Claude Code or Codex (e.g. "explain regenerative agriculture").
+2. Launch the app: `./target/release/ai-usage-monitor` (a ring icon appears in
+   the menu bar).
+3. Wait ~20 s (one ingest + one flush), then **Show my data**.
 
-- System Settings → Privacy & Security → **Accessibility** → enable it.
-- System Settings → Privacy & Security → **Screen Recording** → enable it.
-
-(Listed as **AI Usage Monitor** for the bundled app, or `ai-usage-monitor` for
-the bare dev binary.)
-
-Screen Recording only takes effect after a relaunch (Apple's behavior). Quit and
-relaunch.
-
-**Pass:** with any windows open, the icon becomes a **ring with a center dot**
-(armed — watching). The status line in the menu reads “Watching N window(s)”.
+**Pass:** today's day file
+`~/Library/Application Support/ai.memfold.ai-usage-monitor/data/YYYY-MM-DD.jsonl`
+contains an `"kind":"interaction"` line whose `provider`/`tool`/`surface`/`model`
+are correct and whose `turns` hold your prompt and the reply. The icon briefly
+shows the solid disc when a new interaction is recorded.
 
 ---
 
-## 2. Real AI session is captured (true positive)
+## 2. Layer B — apps and CLIs are detected across desktops
 
-1. Open ChatGPT or Claude (browser or native app) and send a prompt whose answer
-   streams in as prose (e.g. “Explain regenerative agriculture in a paragraph”).
-2. Watch the dot while the answer streams.
+With ChatGPT (app), Claude (app), and/or a running AI CLI open — including on
+other desktops/Spaces — run `--diagnose` again (or watch the running app).
 
-**Pass:** the icon fills to a **solid disc** (capturing) while the answer
-streams, then returns to the ring-with-dot a few seconds after it stops (it must
-NOT stay solid — the "stuck forever" bug). Click **Show my data** (or wait ~30s)
-and inspect today's day file:
-
-```
-~/Library/Application Support/ai.memfold.ai-usage-monitor/data/YYYY-MM-DD.jsonl
-```
-
-**Pass:** the file contains one line whose `reply` is the answer you just saw
-(redacted), `prompt` is your message, `surface` is `web` (browser) or `app`
-(native), `app` is a hash (never the app's real name), and `started_ms` /
-`ended_ms` are real epoch times.
+**Pass:** each open AI app/CLI appears in the Layer B list with the right
+provider (`ChatGPT → openai`, `Claude → anthropic`, `codex → openai`, …).
+Note the documented gap: **ChatGPT/Gemini in a browser tab will not appear** (CDN
+IPs are not provider-identifying) — their native apps do.
 
 ---
 
-## 2b. Concurrent / background / other-desktop sessions
+## 3. Non-AI activity must NOT be recorded (false-positive gate)
 
-The monitor tracks every window independently. Verify the three parallel
-scenarios:
+With Slack, an editor, email, and unrelated browser tabs open and busy:
 
-1. **Two at once:** start a streaming answer in ChatGPT (browser) and, while it
-   streams, start one in another AI app (or a second browser window). Then Show
-   my data. **Pass:** two separate lines with different `app` hashes (or two
-   lines from the same app, if you used two windows of one app).
-2. **Backgrounded mid-stream:** start a long streaming answer, then click into
-   a different app while it streams (the AI window is now in the background,
-   possibly occluded). **Pass:** the session still captures the full answer
-   (the background window is picked up by the full sweep, ~every 2 s).
-3. **Another desktop/Space:** move the streaming AI window to another Space
-   (Mission Control) while it streams. **Pass:** same as above — the day file
-   contains the completed answer. Window enumeration is Space-independent
-   (`onScreenWindowsOnly = false`) and window capture is desktop-independent.
-
-Known limit to note: a *browser tab* that is not the window's visible tab
-renders nothing, so it cannot be captured by any means — only visible surfaces
-(in any window, on any Space) are observable.
+**Pass:** none of them appear in the Layer B list, and no `interaction`/`presence`
+record is written for them. (Slack has no AI transcript and its endpoints are not
+AI providers, so it is structurally invisible — this is the class of false
+positive the old screen-scraper produced.)
 
 ---
 
-## 3. Redaction audit — seeded secret + personal detail (safety gate)
+## 4. Redaction audit — seeded secret (safety gate)
 
 Before sharing any data, prove redaction catches planted values.
 
-1. Ask an AI a question whose **answer** will echo a **fake** AWS-shaped key and
-   a **fake** personal detail (so they land in the captured reply), e.g. "repeat
-   back: key AKIAIOSFODNN7EXAMPLE, email jane.doe@example.com, +1 415-555-0132".
+1. In Claude Code or Codex, send a prompt containing a **fake** AWS-shaped key and
+   a **fake** email, e.g. "note key AKIAIOSFODNN7EXAMPLE, mail jane@example.com".
+2. Let it ingest (~20 s), then **Show my data**.
 
-2. Let it get captured (icon fills to a solid disc), then **Show my data**.
-
-**Pass:** in today's day file, none of `AKIAIOSFODNN7EXAMPLE`,
-`jane.doe@example.com`, or `415-555-0132` appear as raw text; each is a
-`[REDACTED:…]` placeholder. If any raw value survives, **do not share the data**
-— file the gap first.
-
-(The deterministic layer is unit-tested for these exact shapes in
-`src/redact.rs`; this step confirms it end-to-end through real capture.)
-
----
-
-## 4. Non-AI activity must NOT be captured (false-positive gate)
-
-The detector must not fire on text that merely grows. Test each:
-
-- **You typing** a long message into any composer (email, Slack, a chat box).
-- **A build log / test output** streaming in a terminal (`cargo build`, `npm
-  install`, a CI tail).
-- **Scrolling** a long article or code file.
-
-**Pass:** in all three the icon stays a **ring-with-dot** (never fills to a
-solid disc), and in the day file there is **no** entry for them. Typing is
-excluded because the caret is in an input; logs are excluded because they read
-as structured output, not prose.
-
-If any of these produce a session, the detector thresholds need tuning — adjust
-`detector` in `config.json` (see README) and re-run this step. This gate is the
-one most likely to need a tuning pass on real machines; treat a failure here as
-expected iteration, not a blocker.
+**Pass:** in today's day file, neither `AKIAIOSFODNN7EXAMPLE` nor
+`jane@example.com` appears as raw text; each is a `[REDACTED:…]` placeholder. If
+any raw value survives, **do not share the data** — file the gap first.
+(`src/redact.rs` unit-tests these exact shapes; this confirms it end-to-end.)
 
 ---
 
 ## 5. Optional: NER redaction layer (feature `ner`)
 
-Skip unless you enabled the NER layer — [docs/NER.md](docs/NER.md) owns the
-setup. Once it is running, two checks belong here:
-
-**Catches what regexes can't.** Repeat step 3 with a planted **person name**
-(e.g. “Contact Maria Gonzalez”). **Pass:** in the day file the name is replaced
-by `[REDACTED:NER:PERSON]`. (Note: as of 0.3.0 the NER layer is a library
-capability that is not wired into the auto-flush; see docs/NER.md.)
-
-**Fails closed.** Point `ner_model_dir` at a directory with no valid model and
-relaunch. **Pass:** the app logs the load failure and continues with
-deterministic-only redaction — it must not crash, and must not silently claim
-NER coverage it doesn't have.
+Skip unless you enabled the NER layer — [docs/NER.md](docs/NER.md) owns the setup.
+When running, it should replace a planted person name with `[REDACTED:NER:PERSON]`
+and, pointed at a missing model, fail closed (log the failure, continue with
+deterministic-only redaction, never crash).
 
 ---
 
 ## Known limits (state these when sharing results)
 
-- Detector thresholds are seeded from reasoning, not yet tuned on a real corpus.
-  Step 4 is the tuning loop; expect one or two passes.
-- OCR quality bounds browser capture: tiny fonts or heavy theming degrade the
-  captured text. AX-readable native apps are exact.
-- The reply is captured as a line-diff of the window before vs after, so OCR
-  reflow may occasionally include a stray non-reply line; the prompt is
-  best-effort (the composer text seen submitted).
-- A browser AI window on **another desktop/Space** can't be screen-captured
-  (macOS renders nothing off-Space); native apps work across desktops via
-  Accessibility.
+- **Browser web chats** (ChatGPT/Gemini) are not attributed by the network layer;
+  only their native apps/CLIs are. Reliable browser-content capture is a future
+  browser-extension layer.
+- **Network presence** means "an AI tool was connected/active," coarser than a
+  discrete message; the transcript layer supplies exact interactions.
+- **Adapters are per-tool.** A tool without an adapter is not ingested (its
+  network presence is still observed generically). Adding one is a small change.

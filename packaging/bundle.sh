@@ -63,9 +63,8 @@ iconutil -c icns "$ICONSET" -o "$CONTENTS/Resources/AppIcon.icns"
 
 # --- Info.plist ---
 # LSUIElement=true → menu-bar-only agent (no Dock icon, no app menu).
-# NSScreenCaptureUsageDescription is enforced for ScreenCaptureKit: a bundled app
-# that triggers the Screen Recording prompt without it is terminated. There is no
-# usage-description key for Accessibility — its prompt is generic.
+# The app reads local transcripts and observes its own sockets, so it needs NO
+# TCC usage-description keys (no Screen Recording, no Accessibility).
 cat >"$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -82,8 +81,6 @@ cat >"$CONTENTS/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key><string>$MIN_MACOS</string>
   <key>LSUIElement</key><true/>
   <key>NSHumanReadableCopyright</key><string>Internal research tool — Memfold AI</string>
-  <key>NSScreenCaptureUsageDescription</key>
-  <string>AI Usage Monitor reads on-screen text to detect AI-model sessions and store a redacted, locally-reviewed record for the internal usage study.</string>
 </dict>
 </plist>
 PLIST

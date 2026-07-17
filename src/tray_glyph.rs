@@ -2,14 +2,20 @@
 //!
 //! Apple's guidance for menu-bar (status-item) icons is a **template image**:
 //! a monochrome shape with an alpha mask, which the system tints for the light
-//! or dark menu bar and inverts on selection (see `NSImage.isTemplate`,
-//! linked from tray-icon's `set_icon_as_template`). So these carry no color —
-//! state is conveyed by SHAPE, not hue (the old colored dot broke both rules):
+//! or dark menu bar and inverts on selection (see `NSImage.isTemplate`). So
+//! these carry no color — state is conveyed by SHAPE, and there are only three,
+//! deliberately:
 //!
-//!   Idle       hollow ring         — running, nothing to watch
-//!   Watching   ring + center dot   — an aperture/eye; watching windows
-//!   Capturing  filled disc         — the universal "recording" cue
-//!   Paused     two bars            — the universal "paused" cue
+//!   Monitoring   ring + center dot   — the steady "on, watching" state
+//!   Recording    filled disc         — a BRIEF flash when an interaction is
+//!                                       actually recorded (not while an app is
+//!                                       merely open — that was the old stale cue)
+//!   Paused       two bars            — the universal "paused" cue
+//!
+//! There is no persistent state driven by "an AI app is connected": a backgrounded
+//! app holds network connections indefinitely, so surfacing that as an icon state
+//! never cleared and read as stale. The icon means "the monitor is running";
+//! live detail lives in the dropdown.
 //!
 //! Rendered at 36 px (retina @2x of the 18 pt the status bar draws) with 4×4
 //! supersampled coverage, so edges are smooth. Output is black RGB with the
@@ -33,12 +39,14 @@ const BAR_HALF_W: f32 = 2.4; // half width
 const BAR_GAP: f32 = 4.0; // center-to-inner-edge offset
 
 /// What the menu-bar icon should show. A display concern (includes Paused),
-/// kept separate from the monitor's domain `MonitorState`.
+/// kept separate from the domain state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Glyph {
-    Idle,
-    Watching,
-    Capturing,
+    /// Steady "on and watching" — the normal running state.
+    Monitoring,
+    /// Brief flash when an interaction is actually recorded.
+    Recording,
+    /// Paused — nothing is being recorded.
     Paused,
 }
 
@@ -74,9 +82,8 @@ fn contains(glyph: Glyph, px: f32, py: f32) -> bool {
     let d = ((px - CENTER).powi(2) + (py - CENTER).powi(2)).sqrt();
     let on_ring = d <= R_OUTER && d >= R_OUTER - RING_WIDTH;
     match glyph {
-        Glyph::Idle => on_ring,
-        Glyph::Watching => on_ring || d <= DOT_RADIUS,
-        Glyph::Capturing => d <= DISC_RADIUS,
+        Glyph::Monitoring => on_ring || d <= DOT_RADIUS,
+        Glyph::Recording => d <= DISC_RADIUS,
         Glyph::Paused => in_bar(px, py, -1.0) || in_bar(px, py, 1.0),
     }
 }

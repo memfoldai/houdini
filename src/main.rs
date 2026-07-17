@@ -1,35 +1,53 @@
 //! ai-usage-monitor entry point.
 //!
-//! Menu-bar-only macOS daemon: no window, no dock icon (activation policy
-//! `Accessory`). A main-thread timer samples the frontmost window ~3 Hz, feeds
-//! each snapshot to the world-model streaming `Monitor`, and reflects its state
-//! in the status-bar icon. The menu offers two actions: write a redacted
-//! extract for human review, and quit.
+//! Menu-bar-only macOS daemon (activation policy `Accessory`): no window, no
+//! dock icon. A main-thread timer scans AI tools' local transcripts (Layer A)
+//! and polls the process table for AI network connections (Layer B), storing a
+//! redacted, structured record of each. A browser extension delivers web-chat
+//! content (Layer C) via native messaging. There is no screen capture and no TCC
+//! permission.
 //!
 //! Non-macOS builds compile to a stub so the portable core (`ai_usage_monitor`
 //! lib) still builds and tests cross-platform.
 
 #[cfg(target_os = "macos")]
-mod capture;
-#[cfg(target_os = "macos")]
-mod permissions;
-
-#[cfg(target_os = "macos")]
 mod app;
 #[cfg(target_os = "macos")]
+mod browserhost;
+#[cfg(target_os = "macos")]
 mod diagnose;
+#[cfg(target_os = "macos")]
+mod nativehost;
+#[cfg(target_os = "macos")]
+mod netpresence;
 #[cfg(target_os = "macos")]
 mod tray_glyph;
 
 #[cfg(target_os = "macos")]
 fn main() {
-    // `--diagnose`: one-shot capture probe to stdout (no menu bar, no run loop).
-    if std::env::args().any(|a| a == "--diagnose") {
+    let args: Vec<String> = std::env::args().collect();
+
+    // Chromium launches the native-messaging host with the caller origin as an
+    // argument (`chrome-extension://…`); `--native-host` forces it for testing.
+    let is_native_host = args.iter().any(|a| a.starts_with("chrome-extension://") || a == "--native-host");
+    if is_native_host {
+        nativehost::run();
+        return;
+    }
+    if args.iter().any(|a| a == "--install-browser-host") {
+        browserhost::install();
+        return;
+    }
+    if args.iter().any(|a| a == "--uninstall-browser-host") {
+        browserhost::uninstall();
+        return;
+    }
+    // `--diagnose`: one-shot probe to stdout (no menu bar, no run loop).
+    if args.iter().any(|a| a == "--diagnose") {
         diagnose::run();
         return;
     }
-    // Logging is initialized inside app::run once the data-dir paths resolve
-    // (it writes to a file under the data dir; see logging::init).
+    // Logging is initialized inside app::run once the data-dir paths resolve.
     app::run();
 }
 

@@ -1,48 +1,37 @@
-//! Local-only SQLite store. Text-only: no screenshots are ever persisted (the
-//! multi-GB capture figures in the research are images; text is single-digit
-//! MB/day). Nothing here uploads anything — the store is a plain on-disk
-//! SQLite file under the app's data dir.
+//! Local-only SQLite store — the source of truth. Text-only; nothing here
+//! uploads anything.
 //!
-//! Schema is deliberately small: one row per detected AI session, one row per
-//! turn. The source app is stored as a SALTED hash (`app_hash`), never its
-//! bundle id in cleartext — analytics can group "same app" within an install
-//! without the shared extract revealing which apps a person used.
+//! Two kinds of signal live here, in their own tables because they are
+//! genuinely different shapes, not two views of one thing:
+//!
+//! - `sessions` + `turns`: real AI interactions read from a tool's own local
+//!   transcript (Layer A). Rich: provider, tool, surface, model, and the
+//!   redacted prompt/response turns. Keyed `UNIQUE(tool, external_id)` so
+//!   re-reading a growing transcript upserts the same row instead of duplicating
+//!   it — the ingest is idempotent.
+//! - `presence`: content-free "an AI tool was active" intervals derived from
+//!   network connections (Layer B), for usage that leaves no local transcript
+//!   (web chats, apps). No turns, ever.
+//!
+//! Unlike the old capture store, the app/provider identity is stored in the
+//! CLEAR (`anthropic`, `claude-code`, …): for a consenting internal study the
+//! provider entity IS the research signal, not something to hash away. Only the
+//! CONTENT of turns is redacted (before it is ever written).
 
 use rusqlite::{params, Connection};
 use std::path::Path;
 
-/// How a session's text was obtained.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SourceKind {
-    /// Accessibility tree (native apps).
-    Ax,
-    /// Screen capture + Vision OCR (browsers and AX-empty windows).
-    Ocr,
-    /// Alma's own local logs (no capture surface).
-    AlmaLog,
-}
-
-impl SourceKind {
-    fn as_str(self) -> &'static str {
-        match self {
-            SourceKind::Ax => "ax",
-            SourceKind::Ocr => "ocr",
-            SourceKind::AlmaLog => "alma-log",
-        }
-    }
-}
-
-/// A turn's speaker, inferred structurally (never from content meaning).
+/// A turn's speaker, taken straight from the transcript's own role field.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     User,
     Assistant,
-    /// Structure didn't resolve a speaker (kept rather than guessed).
+    /// The transcript had a role we don't map to user/assistant (tool/system).
     Unknown,
 }
 
 impl Role {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Role::User => "user",
             Role::Assistant => "assistant",
@@ -53,23 +42,38 @@ impl Role {
 
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS sessions (
-    id           INTEGER PRIMARY KEY,
-    started_at   INTEGER NOT NULL,   -- unix ms
-    ended_at     INTEGER,            -- unix ms, null while open
-    source_kind  TEXT NOT NULL CHECK (source_kind IN ('ax','ocr','alma-log')),
-    app_hash     TEXT NOT NULL,      -- salted hash of the source app id
-    duration_ms  INTEGER,            -- filled at close
-    exported_at  INTEGER             -- unix ms when flushed to a day file, else null
+    id            INTEGER PRIMARY KEY,
+    tool          TEXT NOT NULL,       -- concrete source: claude-code, codex, cursor
+    external_id   TEXT NOT NULL,       -- the tool's own session id (idempotency key)
+    provider      TEXT NOT NULL,       -- grouped entity: anthropic, openai, google, local
+    surface       TEXT NOT NULL,       -- cli | ide | app | web
+    model         TEXT,                -- model id if the transcript names one
+    started_at    INTEGER NOT NULL,    -- unix ms
+    ended_at      INTEGER NOT NULL,    -- unix ms (last activity seen)
+    message_count INTEGER NOT NULL DEFAULT 0,
+    exported_at   INTEGER,             -- unix ms when flushed to a day file, else null
+    UNIQUE (tool, external_id)
 );
 CREATE TABLE IF NOT EXISTS turns (
     id            INTEGER PRIMARY KEY,
     session_id    INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    seq           INTEGER NOT NULL,  -- 0-based order within the session
+    seq           INTEGER NOT NULL,    -- 0-based order within the session
     role          TEXT NOT NULL CHECK (role IN ('user','assistant','unknown')),
-    redacted_text TEXT NOT NULL,     -- ALWAYS post-redaction; raw never stored
-    ts            INTEGER NOT NULL   -- unix ms
+    redacted_text TEXT NOT NULL,       -- ALWAYS post-redaction; raw never stored
+    ts            INTEGER NOT NULL,    -- unix ms
+    UNIQUE (session_id, seq)
 );
 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id, seq);
+CREATE TABLE IF NOT EXISTS presence (
+    id           INTEGER PRIMARY KEY,
+    provider     TEXT NOT NULL,        -- anthropic, openai, ...
+    process      TEXT NOT NULL,        -- observed process name (e.g. Google Chrome)
+    surface      TEXT NOT NULL,        -- app | cli | web
+    started_at   INTEGER NOT NULL,     -- unix ms (interval start)
+    ended_at     INTEGER NOT NULL,     -- unix ms (interval end)
+    observations INTEGER NOT NULL DEFAULT 1,
+    exported_at  INTEGER
+);
 "#;
 
 pub struct Store {
@@ -83,9 +87,6 @@ impl Store {
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.execute_batch(SCHEMA)?;
-        // Migrate a pre-existing DB that lacks the `exported_at` column. SQLite
-        // has no ADD COLUMN IF NOT EXISTS, so ignore the duplicate-column error.
-        let _ = conn.execute("ALTER TABLE sessions ADD COLUMN exported_at INTEGER", []);
         Ok(Self { conn })
     }
 
@@ -97,21 +98,66 @@ impl Store {
         Ok(Self { conn })
     }
 
-    /// Open a new session row; returns its id. `app_hash` is already salted.
-    pub fn begin_session(
-        &self,
-        started_at_ms: i64,
-        source: SourceKind,
-        app_hash: &str,
-    ) -> rusqlite::Result<i64> {
+    /// Insert or update a session by its `(tool, external_id)` identity and
+    /// return `(session_id, existing_turn_count)`. The count lets the ingest
+    /// append only turns it has not stored yet, so re-reading a transcript that
+    /// grew by three messages inserts exactly those three. `ended_at`, `model`,
+    /// and `message_count` are refreshed on every upsert.
+    pub fn upsert_session(&self, s: &SessionUpsert) -> rusqlite::Result<(i64, i64)> {
         self.conn.execute(
-            "INSERT INTO sessions (started_at, source_kind, app_hash) VALUES (?1, ?2, ?3)",
-            params![started_at_ms, source.as_str(), app_hash],
+            "INSERT INTO sessions
+                 (tool, external_id, provider, surface, model, started_at, ended_at, message_count)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(tool, external_id) DO UPDATE SET
+                 provider      = excluded.provider,
+                 surface       = excluded.surface,
+                 model         = COALESCE(excluded.model, sessions.model),
+                 ended_at      = MAX(excluded.ended_at, sessions.ended_at),
+                 -- MAX so a caller that appends incrementally (the browser host,
+                 -- which passes 0 because it learns the running count only after
+                 -- the upsert) never shrinks a session; the transcript path passes
+                 -- the full count, which always grows.
+                 message_count = MAX(excluded.message_count, sessions.message_count)",
+            params![
+                s.tool,
+                s.external_id,
+                s.provider,
+                s.surface,
+                s.model,
+                s.started_at_ms,
+                s.ended_at_ms,
+                s.message_count,
+            ],
         )?;
-        Ok(self.conn.last_insert_rowid())
+        let id: i64 = self.conn.query_row(
+            "SELECT id FROM sessions WHERE tool = ?1 AND external_id = ?2",
+            params![s.tool, s.external_id],
+            |r| r.get(0),
+        )?;
+        let existing: i64 =
+            self.conn.query_row("SELECT COUNT(*) FROM turns WHERE session_id = ?1", params![id], |r| {
+                r.get(0)
+            })?;
+        // A re-upsert must not lower a session below rows already written; mark
+        // it exported-stale so the new turns get re-flushed.
+        self.conn
+            .execute("UPDATE sessions SET exported_at = NULL WHERE id = ?1", params![id])?;
+        Ok((id, existing))
     }
 
-    /// Append one already-redacted turn to a session.
+    /// Set a session's running end time and message count after appending turns
+    /// incrementally (the browser host path), and re-open it for export. Idempotent.
+    pub fn set_progress(&self, session_id: i64, ended_at_ms: i64, message_count: i64) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "UPDATE sessions
+                 SET ended_at = MAX(ended_at, ?2), message_count = ?3, exported_at = NULL
+             WHERE id = ?1",
+            params![session_id, ended_at_ms, message_count],
+        )?;
+        Ok(())
+    }
+
+    /// Append one already-redacted turn. Idempotent on `(session_id, seq)`.
     pub fn add_turn(
         &self,
         session_id: i64,
@@ -121,93 +167,108 @@ impl Store {
         ts_ms: i64,
     ) -> rusqlite::Result<()> {
         self.conn.execute(
-            "INSERT INTO turns (session_id, seq, role, redacted_text, ts) VALUES (?1, ?2, ?3, ?4, ?5)",
+            "INSERT OR IGNORE INTO turns (session_id, seq, role, redacted_text, ts)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
             params![session_id, seq, role.as_str(), redacted_text, ts_ms],
         )?;
         Ok(())
     }
 
-    /// Close a session, stamping ended_at + duration.
-    pub fn end_session(&self, session_id: i64, ended_at_ms: i64) -> rusqlite::Result<()> {
+    /// Record a closed network-presence interval.
+    pub fn insert_presence(&self, p: &PresenceRow) -> rusqlite::Result<()> {
         self.conn.execute(
-            "UPDATE sessions SET ended_at = ?1,
-                 duration_ms = ?1 - started_at
-             WHERE id = ?2 AND ended_at IS NULL",
-            params![ended_at_ms, session_id],
+            "INSERT INTO presence (provider, process, surface, started_at, ended_at, observations)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            params![p.provider, p.process, p.surface, p.started_at_ms, p.ended_at_ms, p.observations],
         )?;
         Ok(())
     }
 
-    /// Count sessions (for tests / a status line).
+    /// Count of stored sessions (tests / status).
     pub fn session_count(&self) -> rusqlite::Result<i64> {
         self.conn.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
     }
 
-    /// Live capture stats for the menu status line: how many sessions started
-    /// since `since_ms`, and when the most recent capture activity was (its
-    /// end, or start if still open). Lets the user confirm at a glance that
-    /// detection is actually happening.
-    pub fn session_stats(&self, since_ms: i64) -> rusqlite::Result<SessionStats> {
-        self.conn.query_row(
-            "SELECT
-                 COALESCE(SUM(CASE WHEN started_at >= ?1 THEN 1 ELSE 0 END), 0),
-                 MAX(COALESCE(ended_at, started_at))
-             FROM sessions",
+    /// Status-line stats: interactions touched since `since_ms` (started or
+    /// updated) and the most recent activity time across both signals.
+    pub fn activity_stats(&self, since_ms: i64) -> rusqlite::Result<ActivityStats> {
+        let interactions: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sessions WHERE ended_at >= ?1",
             params![since_ms],
-            |r| Ok(SessionStats { recent: r.get(0)?, last_capture_ms: r.get(1)? }),
-        )
+            |r| r.get(0),
+        )?;
+        let last: Option<i64> = self.conn.query_row(
+            "SELECT MAX(t) FROM (
+                 SELECT MAX(ended_at) AS t FROM sessions
+                 UNION ALL SELECT MAX(ended_at) FROM presence
+             )",
+            [],
+            |r| r.get(0),
+        )?;
+        Ok(ActivityStats { recent_interactions: interactions, last_activity_ms: last })
     }
 
-    /// All sessions, oldest first — for export.
-    pub fn all_sessions(&self) -> rusqlite::Result<Vec<SessionRow>> {
+    /// Sessions not yet written to a day file (or made stale by new turns).
+    pub fn pending_sessions(&self) -> rusqlite::Result<Vec<SessionRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, started_at, ended_at, source_kind, app_hash FROM sessions ORDER BY started_at",
+            "SELECT id, tool, external_id, provider, surface, model, started_at, ended_at, message_count
+             FROM sessions WHERE exported_at IS NULL ORDER BY started_at",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(SessionRow {
                 id: r.get(0)?,
-                started_at_ms: r.get(1)?,
-                ended_at_ms: r.get(2)?,
-                source_kind: r.get(3)?,
-                app_hash: r.get(4)?,
+                tool: r.get(1)?,
+                external_id: r.get(2)?,
+                provider: r.get(3)?,
+                surface: r.get(4)?,
+                model: r.get(5)?,
+                started_at_ms: r.get(6)?,
+                ended_at_ms: r.get(7)?,
+                message_count: r.get(8)?,
             })
         })?;
         rows.collect()
     }
 
-    /// Closed sessions not yet written to a day file, oldest first — for the
-    /// auto-flush. (`ended_at` set, `exported_at` null.)
-    pub fn pending_export(&self) -> rusqlite::Result<Vec<SessionRow>> {
+    /// Presence intervals not yet written to a day file.
+    pub fn pending_presence(&self) -> rusqlite::Result<Vec<PendingPresence>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, started_at, ended_at, source_kind, app_hash FROM sessions
-             WHERE ended_at IS NOT NULL AND exported_at IS NULL ORDER BY started_at",
+            "SELECT id, provider, process, surface, started_at, ended_at, observations
+             FROM presence WHERE exported_at IS NULL ORDER BY started_at",
         )?;
         let rows = stmt.query_map([], |r| {
-            Ok(SessionRow {
+            Ok(PendingPresence {
                 id: r.get(0)?,
-                started_at_ms: r.get(1)?,
-                ended_at_ms: r.get(2)?,
-                source_kind: r.get(3)?,
-                app_hash: r.get(4)?,
+                row: PresenceRow {
+                    provider: r.get(1)?,
+                    process: r.get(2)?,
+                    surface: r.get(3)?,
+                    started_at_ms: r.get(4)?,
+                    ended_at_ms: r.get(5)?,
+                    observations: r.get(6)?,
+                },
             })
         })?;
         rows.collect()
     }
 
-    /// Mark a session as written to its day file.
-    pub fn mark_exported(&self, session_id: i64, at_ms: i64) -> rusqlite::Result<()> {
-        self.conn.execute(
-            "UPDATE sessions SET exported_at = ?1 WHERE id = ?2",
-            params![at_ms, session_id],
-        )?;
+    pub fn mark_session_exported(&self, id: i64, at_ms: i64) -> rusqlite::Result<()> {
+        self.conn
+            .execute("UPDATE sessions SET exported_at = ?1 WHERE id = ?2", params![at_ms, id])?;
         Ok(())
     }
 
-    /// Read all turns of a session in order (for export).
+    pub fn mark_presence_exported(&self, id: i64, at_ms: i64) -> rusqlite::Result<()> {
+        self.conn
+            .execute("UPDATE presence SET exported_at = ?1 WHERE id = ?2", params![at_ms, id])?;
+        Ok(())
+    }
+
+    /// Read a session's turns in order (for export).
     pub fn session_turns(&self, session_id: i64) -> rusqlite::Result<Vec<TurnRow>> {
-        let mut stmt = self
-            .conn
-            .prepare("SELECT seq, role, redacted_text, ts FROM turns WHERE session_id = ?1 ORDER BY seq")?;
+        let mut stmt = self.conn.prepare(
+            "SELECT seq, role, redacted_text, ts FROM turns WHERE session_id = ?1 ORDER BY seq",
+        )?;
         let rows = stmt.query_map(params![session_id], |r| {
             Ok(TurnRow { seq: r.get(0)?, role: r.get(1)?, redacted_text: r.get(2)?, ts_ms: r.get(3)? })
         })?;
@@ -215,27 +276,57 @@ impl Store {
     }
 }
 
-/// Live capture stats for the status line.
+/// Fields to insert/update for a session upsert.
 #[derive(Debug, Clone)]
-pub struct SessionStats {
-    /// Sessions started in the recent window (see `session_stats`).
-    pub recent: i64,
-    /// Most recent capture activity (unix ms), or `None` if nothing captured.
-    pub last_capture_ms: Option<i64>,
+pub struct SessionUpsert<'a> {
+    pub tool: &'a str,
+    pub external_id: &'a str,
+    pub provider: &'a str,
+    pub surface: &'a str,
+    pub model: Option<&'a str>,
+    pub started_at_ms: i64,
+    pub ended_at_ms: i64,
+    pub message_count: i64,
+}
+
+/// A closed presence interval.
+#[derive(Debug, Clone)]
+pub struct PresenceRow {
+    pub provider: String,
+    pub process: String,
+    pub surface: String,
+    pub started_at_ms: i64,
+    pub ended_at_ms: i64,
+    pub observations: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingPresence {
+    pub id: i64,
+    pub row: PresenceRow,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActivityStats {
+    pub recent_interactions: i64,
+    pub last_activity_ms: Option<i64>,
 }
 
 /// One session row as read back for export/analytics.
 #[derive(Debug, Clone)]
 pub struct SessionRow {
     pub id: i64,
+    pub tool: String,
+    pub external_id: String,
+    pub provider: String,
+    pub surface: String,
+    pub model: Option<String>,
     pub started_at_ms: i64,
-    pub ended_at_ms: Option<i64>,
-    pub source_kind: String,
-    pub app_hash: String,
+    pub ended_at_ms: i64,
+    pub message_count: i64,
 }
 
-/// One turn row as read back for export/analytics. `redacted_text` is always
-/// post-redaction (the store never held raw text).
+/// One turn row. `redacted_text` is always post-redaction.
 #[derive(Debug, Clone)]
 pub struct TurnRow {
     pub seq: i64,
@@ -244,76 +335,79 @@ pub struct TurnRow {
     pub ts_ms: i64,
 }
 
-/// Salted, non-reversible hash of a source app identifier (bundle id / process
-/// path). The salt is per-install (see `config`), so hashes are stable within
-/// one machine for grouping but not comparable across installs and never
-/// reveal the app name in a shared extract. Uses SHA-256 over `salt || id`.
-pub fn app_hash(salt: &str, app_id: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(salt.as_bytes());
-    h.update(b"\x00");
-    h.update(app_id.as_bytes());
-    let digest = h.finalize();
-    // 16 hex chars is ample to disambiguate a handful of apps without bloating.
-    hex_lower(&digest[..8])
-}
-
-fn hex_lower(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
-        s.push(char::from_digit((b & 0xf) as u32, 16).unwrap());
-    }
-    s
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn session_and_turn_roundtrip() {
-        let s = Store::open_in_memory().unwrap();
-        let sid = s.begin_session(1000, SourceKind::Ocr, "abcd1234").unwrap();
-        s.add_turn(sid, 0, Role::User, "compare X and Y", 1000).unwrap();
-        s.add_turn(sid, 1, Role::Assistant, "Here is the comparison [REDACTED:EMAIL]", 1500).unwrap();
-        s.end_session(sid, 3000).unwrap();
-        assert_eq!(s.session_count().unwrap(), 1);
-        let turns = s.session_turns(sid).unwrap();
-        assert_eq!(turns.len(), 2);
-        assert_eq!(turns[0].role, "user");
-        assert!(turns[1].redacted_text.contains("[REDACTED:EMAIL]"));
+    fn upsert(tool: &str, id: &str, ended: i64, count: i64) -> SessionUpsert<'static> {
+        // Leak small test strings to get 'static borrows — fine for a unit test.
+        SessionUpsert {
+            tool: Box::leak(tool.to_string().into_boxed_str()),
+            external_id: Box::leak(id.to_string().into_boxed_str()),
+            provider: "anthropic",
+            surface: "cli",
+            model: Some("claude-sonnet-5"),
+            started_at_ms: 1000,
+            ended_at_ms: ended,
+            message_count: count,
+        }
     }
 
     #[test]
-    fn source_kind_check_constraint_enforced() {
+    fn upsert_is_idempotent_and_appends_only_new_turns() {
         let s = Store::open_in_memory().unwrap();
-        // Valid kinds only; the CHECK constraint guards the column.
-        assert!(s.begin_session(1, SourceKind::Ax, "h").is_ok());
-        assert!(s.begin_session(1, SourceKind::AlmaLog, "h").is_ok());
+
+        // First read: session with 2 turns.
+        let (id, existing) = s.upsert_session(&upsert("claude-code", "sess-1", 2000, 2)).unwrap();
+        assert_eq!(existing, 0);
+        s.add_turn(id, 0, Role::User, "hello", 1000).unwrap();
+        s.add_turn(id, 1, Role::Assistant, "hi there", 1500).unwrap();
+
+        // Transcript grew: same session, now 4 turns. Upsert returns the 2 we
+        // already stored, so ingest appends only seq 2 and 3.
+        let (id2, existing2) = s.upsert_session(&upsert("claude-code", "sess-1", 4000, 4)).unwrap();
+        assert_eq!(id2, id, "same session identity → same row");
+        assert_eq!(existing2, 2, "already-stored turns are reported");
+        s.add_turn(id, 2, Role::User, "more", 3000).unwrap();
+        s.add_turn(id, 3, Role::Assistant, "reply", 3500).unwrap();
+
+        assert_eq!(s.session_count().unwrap(), 1, "no duplicate session");
+        assert_eq!(s.session_turns(id).unwrap().len(), 4);
+
+        // A re-inserted duplicate seq is ignored, never duplicated.
+        s.add_turn(id, 0, Role::User, "hello again", 9999).unwrap();
+        assert_eq!(s.session_turns(id).unwrap().len(), 4);
     }
 
     #[test]
-    fn app_hash_is_stable_salted_and_hides_id() {
-        let h1 = app_hash("salt-A", "com.openai.chat");
-        let h2 = app_hash("salt-A", "com.openai.chat");
-        let h3 = app_hash("salt-B", "com.openai.chat");
-        assert_eq!(h1, h2, "stable within a salt");
-        assert_ne!(h1, h3, "different salt -> different hash");
-        assert!(!h1.contains("openai"), "never reveals the app id");
-        assert_eq!(h1.len(), 16);
+    fn presence_roundtrips_and_pends_for_export() {
+        let s = Store::open_in_memory().unwrap();
+        s.insert_presence(&PresenceRow {
+            provider: "openai".into(),
+            process: "codex".into(),
+            surface: "cli".into(),
+            started_at_ms: 100,
+            ended_at_ms: 500,
+            observations: 4,
+        })
+        .unwrap();
+        let pending = s.pending_presence().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].row.provider, "openai");
+        s.mark_presence_exported(pending[0].id, 600).unwrap();
+        assert_eq!(s.pending_presence().unwrap().len(), 0);
     }
 
     #[test]
-    fn end_session_stamps_duration() {
+    fn new_turns_make_a_session_pending_again() {
         let s = Store::open_in_memory().unwrap();
-        let sid = s.begin_session(1000, SourceKind::Ax, "h").unwrap();
-        s.end_session(sid, 4200).unwrap();
-        let dur: i64 = s
-            .conn
-            .query_row("SELECT duration_ms FROM sessions WHERE id=?1", params![sid], |r| r.get(0))
-            .unwrap();
-        assert_eq!(dur, 3200);
+        let (id, _) = s.upsert_session(&upsert("codex", "c1", 2000, 1)).unwrap();
+        s.add_turn(id, 0, Role::User, "q", 1000).unwrap();
+        assert_eq!(s.pending_sessions().unwrap().len(), 1);
+        s.mark_session_exported(id, 2100).unwrap();
+        assert_eq!(s.pending_sessions().unwrap().len(), 0);
+        // Growth re-opens it for export.
+        s.upsert_session(&upsert("codex", "c1", 3000, 2)).unwrap();
+        assert_eq!(s.pending_sessions().unwrap().len(), 1);
     }
 }

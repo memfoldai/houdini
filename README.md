@@ -1,103 +1,116 @@
 # ai-usage-monitor
 
-A minimal, menu-bar-only macOS app that detects when **any** AI model is being
-used on screen and stores a redacted, reviewable record of the session — the
-observation instrument for an internal AI-usage study.
+A minimal, menu-bar-only macOS app that records **what people use AI for** — the
+observation instrument for an internal AI-usage study. It reads AI tools' own
+structured logs and observes AI network activity; it does **not** capture the
+screen.
 
 It is deliberately small and standalone: its own repo, no cloud, no dashboards,
 no coupling to any other product. It runs on the study team's own machines with
-per-install consent and a visible capture indicator.
+per-install consent and a visible menu-bar indicator.
 
-## The idea: detect AI by behavior, not by app
+## How it detects AI use
 
-There is no allowlist of "AI apps" and no content classifier. The app watches
-on-screen text and fires on the one signature every autoregressive model shares
-and nothing else produces: **prose that grows a bit at a time, on its own, while
-you are not typing** — token-by-token streaming. That is a physical property of
-model inference, so it works for ChatGPT, Claude, a local model, a coding agent,
-or a tool that doesn't exist yet, without knowing any of their names.
+Two independent, reliable signals — no screenshots, no OCR, no guessing from
+pixels:
 
-Other things that grow are excluded by **form, never by meaning**:
+**Layer A — transcript ingestion (the rich signal).** Coding agents already
+persist every interaction to a structured local transcript. The monitor reads
+those directly, so it gets the exact prompt and reply, the real timestamps, the
+model, and a session id — with zero false positives and full coverage across
+desktops and Spaces. Adapters ship for:
 
-- **You typing** — the caret is in a text input, so growth is yours, not a model's.
-- **Build logs / structured output** — brackets, paths, `key=value`, level tags.
-  The detector scores prose-ness and requires it.
+| Tool | Reads |
+|---|---|
+| Claude Code | `~/.claude/projects/*/*.jsonl` |
+| Codex | `~/.codex/**/rollout-*.jsonl` |
 
-This is the whole point: `"best domain extensions in 2026"` is indistinguishable
-from a Google search or a WhatsApp message by content, so content is never used.
-The *act of a model streaming a reply* is what's detectable, and that's what's
-detected.
+Adding a tool is adding one small adapter; the rest of the pipeline is shared.
 
-It watches **every window concurrently** — all displays, all Spaces, background
-and occluded windows. Each window is an independent surface with its own
-detector, so two AI chats streaming at once become two separate sessions.
+**Layer B — network presence (the coverage signal).** For AI used where no local
+transcript exists (web chats, native apps), the monitor observes which process
+connects to which AI endpoint, read from the process table with `libproc` — the
+same information `lsof` shows, **no root and no entitlement**. A known AI tool or
+app is attributed by its process identity (so the ChatGPT app, the Codex CLI, and
+Claude Code all register even though OpenAI's traffic rides Cloudflare); a browser
+is attributed only when its destination is a provider-owned IP range. This is a
+content-free "an AI tool was active" signal — who, when, and how often, never
+what was said.
+
+Everything that is not identifiably AI resolves to nothing, which is why Slack, an
+editor, or a browser to an unrelated site never register.
+
+**Layer C — browser web chats (optional extension).** Web ChatGPT/Claude leave no
+local transcript and ride shared CDNs, so neither layer above reads their content.
+An optional Chromium extension ([extension/](extension/README.md)) captures them
+by intercepting the site's **own API calls** (the reliable technique, and it works
+in background tabs), delivering each exchange to the app over local native
+messaging — never over the network. Covers ChatGPT and Claude on the web today.
+
+### Honest limits
+
+- **The browser extension is installed per browser**, and its per-site parsers
+  track reverse-engineered endpoint shapes, so a site redesign can need a small
+  parser fix. Without it, web chats are uncaptured (their native apps/CLIs are
+  still caught).
+- **Gemini on the web** isn't parsed yet (obfuscated batch transport).
+- Network presence means "an AI tool was connected/active," coarser than a
+  discrete message. The transcript and extension layers supply exact interactions.
 
 ## Privacy model
 
 - **Local-only.** No network egress anywhere in the code path. Nothing uploads.
-- **Text only.** Images are used transiently for OCR and never stored.
-- **Redaction is a hard gate**, applied offline before anything touches disk —
-  secrets (provider API keys, private keys), emails, Luhn-checked cards, SSNs,
-  phones.
-- **App identity is salted-hashed** per install — data groups "same app"
-  without revealing which apps a person used.
-- **Only the exchange is kept** — the prompt and the reply, not the whole
-  conversation history or the surrounding UI.
-- Quit anytime from the menu; the icon always shows the current state.
+- **No screen capture, no TCC permission.** The app reads files the user already
+  owns and observes its own user's sockets — it never asks for Screen Recording
+  or Accessibility.
+- **Content is redacted** — offline, before anything touches disk — for secrets
+  (provider API keys, private keys), emails, Luhn-checked cards, SSNs, phones.
+- **Identity is kept in the clear** on purpose: for a consenting internal study
+  the provider/tool (`anthropic`, `claude-code`) *is* the research signal. Only
+  the message content is redacted.
+- Pause anytime from the menu; while paused nothing new is recorded.
 
 ## Data format
 
-The local store is SQLite (the source of truth). Finished sessions are written
-automatically — no manual export — to **day files** `data/YYYY-MM-DD.jsonl`, one
-JSON object per line. Day partitioning is the standard shape for analytics at
-scale: files from any number of machines merge trivially (each line carries the
-device id and date), and a day/week rollup is just concatenating files.
+The local store is SQLite (the source of truth). New and changed records are
+written automatically — no manual export — to **day files** `data/YYYY-MM-DD.jsonl`,
+one JSON object per line. Day partitioning is the standard analytics-at-scale
+shape: files from any number of machines merge trivially (each line carries the
+device id), and a day/week rollup is just concatenating files.
 
-Each record is deliberately lean, with the prompt and reply as separate fields:
+Two record kinds share the day file, told apart by `kind`:
 
-| Field | Meaning |
-|---|---|
-| `schema` | Record schema tag (`aum/1`) |
-| `device` | Per-install UUID — keeps machines distinguishable in a pooled dataset |
-| `day` | `YYYY-MM-DD`, matching the file |
-| `app` | Salted app hash (never the app name) |
-| `surface` | Coarse class: `web` (read via OCR) or `app` (read via Accessibility) |
-| `started_ms` / `ended_ms` | Session bounds (unix ms) |
-| `prompt` | The user's message, if captured |
-| `reply` | The model's reply (redacted; just the reply, not the history) |
+**`interaction`** — a real session from a transcript:
 
-Provider grouping (ChatGPT app + web + CLI → one entity) happens at analysis
-time over these files — see [docs/grouping.md](docs/grouping.md).
-
-## Install
-
-To install the finished app (or hand it to a teammate), build the signed
-`.app`/`.dmg` and follow **[INSTALL.md](INSTALL.md)**:
-
-```bash
-packaging/bundle.sh        # → dist/AI Usage Monitor.app + a .dmg installer
+```json
+{"schema":"aum/2","kind":"interaction","device":"…","day":"2026-07-16",
+ "provider":"anthropic","tool":"claude-code","surface":"cli",
+ "model":"claude-sonnet-5","session":"…","started_ms":…,"ended_ms":…,
+ "message_count":2,"turns":[{"role":"user","text":"…","ts_ms":…},…]}
 ```
 
-Open the `.dmg`, drag to Applications, grant **Accessibility** + **Screen
-Recording**, relaunch. A dot appears in the menu bar; click it for live status.
-INSTALL.md covers the one-time signing certificate and the notarization path for
-zero-friction install on other machines.
+**`presence`** — a content-free network interval:
+
+```json
+{"schema":"aum/2","kind":"presence","device":"…","day":"2026-07-16",
+ "provider":"openai","process":"ChatGPT","surface":"app",
+ "started_ms":…,"ended_ms":…,"observations":12}
+```
+
+Provider grouping (Claude app + CLI + web → one entity) is deterministic at
+ingest; higher-level semantic clustering (research vs build, topic) is an
+analysis-time job over these files — see [docs/grouping.md](docs/grouping.md).
 
 ## Menu bar & status
 
 The icon is a monochrome template glyph whose **shape** shows state (macOS tints
-it for you): a hollow ring when idle, a ring-with-dot while watching, a solid
-disc while catching an AI chat, two bars when paused. It's icon-only — no text
-label to get stuck.
-
-Click it for a friendly readout ("Keeping an eye out 👀", "Catching an AI chat
-✨", how many chats were caught today) and:
+it): a hollow ring when idle, a ring-with-dot when an AI is in use nearby, a
+solid disc the moment a new interaction is recorded, two bars when paused. Click
+it for a friendly readout and:
 
 - **Take a break** — for 15 minutes, an hour, or until you're back. While paused
-  nothing is captured (handy before typing something sensitive). Global by
-  design: it protects whatever you're doing, in any window.
+  nothing is recorded.
 - **Show my data** — reveals the day-partitioned data folder in Finder.
-- **Peek under the hood** — the metadata-only activity log (no captured text).
 - **Quit**.
 
 ## Develop
@@ -105,58 +118,44 @@ Click it for a friendly readout ("Keeping an eye out 👀", "Catching an AI chat
 Requires a recent stable Rust toolchain and macOS 14+.
 
 ```bash
-cargo test                 # portable core (runs anywhere)
+cargo test                       # portable core + integration (runs anywhere)
 cargo build --release
-scripts/sign.sh            # sign the bare binary with a stable identity
-./target/release/ai-usage-monitor
+./target/release/ai-usage-monitor --diagnose   # one-shot: what each layer sees now
+./target/release/ai-usage-monitor              # run the menu-bar app
 ```
 
-**Signing is not optional**, even in dev: macOS keys the Accessibility and
-Screen Recording grants to the code identity, so an unsigned rebuild silently
-loses both and captures nothing. `scripts/sign.sh` (bare binary) and
-`packaging/bundle.sh` (app) both handle it; see INSTALL.md for the certificate.
+`--diagnose` is the "is it working?" answer: it prints how many interactions each
+transcript adapter can read and every AI network connection live on the machine
+right now — no content, just counts and endpoints.
 
-Before trusting or sharing any data, run **[VERIFICATION.md](VERIFICATION.md)** —
-the checklist that proves capture, concurrent/background windows, the redaction
-audit, and the false-positive gate.
+Signing is still recommended for a stable install identity, but the app no longer
+depends on any TCC grant, so a rebuild never silently loses capture.
 
 ## Configuration
 
-`~/Library/Application Support/ai.memfold.ai-usage-monitor/config.json` is
-created on first run with a random salt and install id. Operator knobs:
+`~/Library/Application Support/ai.memfold.ai-usage-monitor/config.json` is created
+on first run. Operator knobs:
 
 | Key | Default | Purpose |
 |---|---|---|
-| `sample_interval_ms` | 350 | Frontmost-app sampling cadence |
-| `full_sweep_every_ticks` | 6 | Every Nth tick sweeps *all* windows (≈2.1 s) |
-| `min_surface_area` | 40000 | Skip windows below this pt² (too small to hold a chat) |
-| `max_ocr_per_sweep` | 6 | OCR budget per sweep; excess is logged and retried |
-| `ocr_min_interval_ms` | 800 | Min time between OCR captures of the same window (CPU throttle) |
-| `session_idle_gap_ms` | 4000 | No-growth gap that ends a session |
-| `detector` | — | Streaming thresholds; VERIFICATION.md step 4 is the tuning loop |
-| `ner_model_dir` | unset | Enables the [NER export sweep](docs/NER.md) (`--features ner` build) |
+| `transcript_poll_ms` | 5000 | How often to scan transcripts for new interactions |
+| `network_poll_ms` | 5000 | How often to poll the process table for AI connections |
+| `presence_gap_ms` | 60000 | A provider unseen this long closes its presence interval |
+| `flush_ms` | 15000 | How often to write new records to day files |
+| `ner_model_dir` | unset | Enables the [NER redaction layer](docs/NER.md) (`--features ner`) |
 
-`salt` and `install_id` are generated per install. The salt never leaves the
-machine.
+`install_id` is a random per-install device id, stable across runs.
 
 ## Documentation
 
 - **[INSTALL.md](INSTALL.md)** — build the app, distribute it, install it.
 - **[VERIFICATION.md](VERIFICATION.md)** — the human-gated proof checklist.
-- **[SECURITY.md](SECURITY.md)** — data-handling guarantees, dependency audit,
-  memory/CPU posture.
+- **[SECURITY.md](SECURITY.md)** — data-handling guarantees and posture.
 - **[CHANGELOG.md](CHANGELOG.md)** — what changed in each version.
-- **[docs/grouping.md](docs/grouping.md)** — how sessions are grouped by
-  provider/surface at analysis time (no hardcoding, no LLM in the daemon).
+- **[docs/grouping.md](docs/grouping.md)** — entity grouping + analysis-time
+  clustering.
 - **[docs/NER.md](docs/NER.md)** — the optional NER redaction layer.
-- **[AGENTS.md](AGENTS.md)** — for coding agents: commands, non-negotiables,
-  architecture invariants.
-
-If it seems like it isn't capturing, **Open activity log** from the menu (or
-`tail -f "~/Library/Application Support/ai.memfold.ai-usage-monitor/ai-usage-monitor.log"`).
-It shows, without any captured text, how many windows each sweep saw, the text
-lengths it read, and when sessions start and end — enough to tell whether the
-issue is permissions, capture, or detection tuning.
+- **[AGENTS.md](AGENTS.md)** — for coding agents: commands, invariants.
 
 Per-module design and rationale live in the doc comment at the top of each file
 in `src/`, next to the code they explain.

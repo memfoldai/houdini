@@ -1,6 +1,6 @@
 [package]
 name = "ai-usage-monitor"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Internal, consenting-only macOS monitor that detects AI-inference sessions on screen (world-model streaming detection, no per-app rules) and stores redacted, reviewable extracts for the AI-research usage study."
 license = "MIT"
@@ -37,22 +37,22 @@ gline-rs = { version = "1", optional = true }
 orp = { version = "0.9", optional = true }
 
 # --- macOS native (only compiled on macOS) ---
+# The monitor no longer captures the screen: detection reads local transcripts
+# (portable core) and observes the process table via `libproc` (Layer B). So the
+# heavy Vision / ScreenCaptureKit / Accessibility frameworks are gone — all that
+# remains here is the menu-bar shell (AppKit + tray-icon) and libproc.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSDictionary", "NSValue", "NSEnumerator", "NSDate", "NSRunLoop", "NSNotification", "NSTimer", "block2"] }
-objc2-core-foundation = { version = "0.3", features = ["CFString", "CFArray", "CFDictionary", "CFNumber", "CFRunLoop", "CFDate"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSDate", "NSRunLoop", "NSNotification", "NSTimer", "block2"] }
 objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSWorkspace", "NSRunningApplication"] }
-objc2-application-services = { version = "0.3", features = ["libc"] }
-objc2-core-graphics = { version = "0.3", features = ["CGImage"] }
-objc2-vision = { version = "0.3", features = ["VNRequest", "VNRecognizeTextRequest", "VNObservation", "VNTypes", "objc2-core-graphics"] }
-objc2-screen-capture-kit = { version = "0.3", features = ["SCScreenshotManager", "SCShareableContent", "SCStream", "objc2-core-graphics", "objc2-core-media", "block2"] }
-objc2-core-media = { version = "0.3", features = ["CMSampleBuffer"] }
 block2 = "0.6"
 # tray-icon re-exports the exact `muda` it was built against as `tray_icon::menu`
 # — depend on it there, never on `muda` directly, so the two can't diverge into
 # incompatible duplicate crates.
 tray-icon = "0.24"
-macos-accessibility-client = "0.0.2"
+# Per-process socket enumeration (proc_pidfdinfo) for network presence. No root,
+# no entitlement — own-user processes only, exactly what `lsof` shows.
+libproc = "0.14"
 
 [features]
 default = []

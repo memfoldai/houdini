@@ -11,9 +11,11 @@ and **teammates** who install the `.dmg`. Teammates only need the last section.
 
 ## 1. One-time: a signing certificate (maintainer)
 
-macOS ties the Accessibility and Screen Recording grants to the app's
-code-signing identity, so the app must be signed with a **stable** certificate —
-an unsigned/ad-hoc build loses those grants on every rebuild.
+The app no longer needs any TCC permission (no Screen Recording, no
+Accessibility) — it reads local transcript files and observes its own sockets. A
+stable code-signing identity is still worth having for a clean install, a smooth
+Gatekeeper experience, and notarization, so a rebuild never re-triggers a
+first-launch prompt.
 
 Create a self-signed one (free, internal use):
 
@@ -72,35 +74,45 @@ Stapling lets Gatekeeper verify offline, so teammates launch with no warning.
 
 ## 4. Install (teammate)
 
-> **Recommended for the maintainer's own machine:** build it locally
-> (`packaging/bundle.sh`) rather than installing a downloaded `.dmg`. A locally
-> built app is signed by *your* certificate, so its Screen Recording /
-> Accessibility grants are stable and won't go stale across updates — the most
-> common reason capture appears "dead" after upgrading.
-
 1. Open the `.dmg` and drag **AI Usage Monitor** to **Applications**.
 2. Launch it:
    - Notarized build: double-click.
    - Self-signed build: **right-click → Open**, then **Open** in the dialog.
      (Only the first launch; macOS remembers thereafter.)
-3. A dot appears in the menu bar. Grant the two permissions when prompted, or in
-   System Settings → Privacy & Security:
-   - **Accessibility** → enable *AI Usage Monitor*
-   - **Screen Recording** → enable *AI Usage Monitor*
-4. **Quit and relaunch** — Screen Recording only takes effect after a restart
-   (Apple's behavior).
+3. A ring appears in the menu bar. **No permission prompt** — the app reads the
+   AI tools' own local logs and observes its own network connections; it never
+   asks for Screen Recording or Accessibility.
 
-There is no window. Click the menu-bar dot to see live status — current state,
-sessions captured in the last 24 h, and when the last capture was. That is how
-you confirm it is working; the dot fills solid while it is capturing an AI
-session. The menu's **Export extract for review…** writes a redacted file you
-review before sharing; **Quit** stops it.
+There is no window. Click the menu-bar icon to see live status — current state,
+AI sessions recorded in the last 24 h, and when the last activity was. The icon
+briefly fills to a solid disc when a new interaction is recorded and shows a dot
+when an AI is in use nearby. Data is stored automatically (redacted) to day
+files; **Show my data** reveals the folder, **Quit** stops it.
 
 To confirm detection end-to-end (and audit redaction before trusting any data),
 run [VERIFICATION.md](VERIFICATION.md).
 
+## 5. Optional: web-chat capture (browser extension)
+
+The app catches AI apps and CLIs on its own. To also capture **web** ChatGPT/Claude,
+install the Chromium extension (see [extension/README.md](extension/README.md)):
+
+```bash
+ai-usage-monitor --install-browser-host    # registers the local host for every Chromium browser
+```
+
+Then in each browser: `chrome://extensions` → **Developer mode** → **Load unpacked**
+→ select the `extension/` folder. Send one web AI message to confirm it appears in
+your day file.
+
+The extension and app are a matched pair and **share a version** (both `0.4.0`):
+the extension's fixed id (`jphmlmjmieilhimgemjanlkgfommlife`) is allowlisted by the
+host manifest `--install-browser-host` writes, and they talk only over local native
+messaging. Upgrade them together. Remove with `--uninstall-browser-host` and by
+removing the unpacked extension.
+
 ## Uninstall
 
 Quit from the menu, drag the app to the Trash, and remove its local data:
-`~/Library/Application Support/ai.memfold.ai-usage-monitor/`. Revoke the two
-permissions in System Settings if you like.
+`~/Library/Application Support/ai.memfold.ai-usage-monitor/`. There are no
+permissions to revoke.

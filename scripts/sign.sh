@@ -4,12 +4,11 @@
 # the DEVELOPMENT workflow (running ./target/release/ai-usage-monitor directly).
 # For a distributable app, use packaging/bundle.sh instead.
 #
-# Why this exists: macOS TCC (the Accessibility + Screen Recording grants this
-# app needs) keys its grants on the binary's code-signing identity. An unsigned
-# or ad-hoc-signed (`codesign -s -`) binary gets a NEW identity/hash on every
-# rebuild, so every rebuild silently drops the grants and the app captures
-# nothing. A stable self-signed certificate gives the binary a constant
-# identity, so a grant made once survives rebuilds.
+# Why this exists: the app needs no TCC grant anymore (it reads local transcripts
+# and its own sockets), so signing is no longer required for detection to work. A
+# stable self-signed identity is still useful — it keeps Gatekeeper quiet and
+# gives the binary a constant identity for distribution/notarization — so this
+# convenience remains for the development workflow.
 #
 # Usage:
 #   scripts/sign.sh                 # build --release, then sign
@@ -67,6 +66,5 @@ echo "Verifying signature…"
 codesign --verify --verbose=2 "$BIN"
 
 echo
-echo "Signed with a stable identity — the Accessibility and Screen Recording"
-echo "grants you make for this binary now persist across rebuilds (re-run this"
-echo "after each build)."
+echo "Signed with a stable identity. The app needs no TCC grant, so this is only"
+echo "for a clean Gatekeeper/distribution identity — detection works unsigned too."
