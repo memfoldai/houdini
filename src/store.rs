@@ -76,17 +76,39 @@ CREATE TABLE IF NOT EXISTS presence (
 );
 "#;
 
+/// Current on-disk schema version (tracked via SQLite `PRAGMA user_version`).
+/// Bumped when the `sessions`/`turns` shape changes incompatibly.
+const SCHEMA_VERSION: i64 = 2;
+
+/// Ensure the schema is current. A DB written before 0.4.0 has an incompatible
+/// `sessions`/`turns` shape (the screen-scrape era: `source_kind`/`app_hash`,
+/// no `tool`/`provider`) that `CREATE TABLE IF NOT EXISTS` silently leaves in
+/// place — so every new query failed with "no such column: tool". That data is
+/// from the retired approach with no contract to preserve, so we drop and
+/// rebuild rather than migrate rows; the version gate makes this run once.
+fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    if version < SCHEMA_VERSION {
+        conn.execute_batch("DROP TABLE IF EXISTS turns; DROP TABLE IF EXISTS sessions;")?;
+    }
+    conn.execute_batch(SCHEMA)?;
+    if version < SCHEMA_VERSION {
+        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    }
+    Ok(())
+}
+
 pub struct Store {
     conn: Connection,
 }
 
 impl Store {
-    /// Open (creating if needed) the store at `path` and ensure the schema.
+    /// Open (creating if needed) the store at `path`, migrating an older schema.
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         Ok(Self { conn })
     }
 
@@ -94,7 +116,7 @@ impl Store {
     pub fn open_in_memory() -> rusqlite::Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
-        conn.execute_batch(SCHEMA)?;
+        migrate(&conn)?;
         Ok(Self { conn })
     }
 
@@ -377,6 +399,35 @@ mod tests {
         // A re-inserted duplicate seq is ignored, never duplicated.
         s.add_turn(id, 0, Role::User, "hello again", 9999).unwrap();
         assert_eq!(s.session_turns(id).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn legacy_pre_0_4_schema_is_migrated_not_left_broken() {
+        // A DB written by the screen-scrape era: incompatible `sessions` shape,
+        // user_version 0. Opening it must rebuild to the current schema so the
+        // new columns exist (the "no such column: tool" production bug).
+        let dir = std::env::temp_dir().join(format!("aum-mig-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("legacy.sqlite");
+        let _ = std::fs::remove_file(&path);
+        {
+            let c = Connection::open(&path).unwrap();
+            c.execute_batch(
+                "CREATE TABLE sessions (id INTEGER PRIMARY KEY, started_at INTEGER, source_kind TEXT, app_hash TEXT);
+                 CREATE TABLE turns (id INTEGER PRIMARY KEY, session_id INTEGER, redacted_text TEXT);
+                 INSERT INTO sessions (started_at, source_kind, app_hash) VALUES (1, 'ocr', 'deadbeef');",
+            )
+            .unwrap();
+            // user_version defaults to 0 — the legacy state.
+        }
+        // Opening through Store must migrate: the new `tool` column now exists,
+        // the incompatible legacy row is gone, and writes work.
+        let store = Store::open(&path).unwrap();
+        assert_eq!(store.session_count().unwrap(), 0, "incompatible legacy rows dropped");
+        let (id, _) = store.upsert_session(&upsert("claude-code", "s", 2, 1)).unwrap();
+        store.add_turn(id, 0, Role::User, "hi", 1).unwrap();
+        assert_eq!(store.pending_sessions().unwrap().len(), 1, "new schema is usable");
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]

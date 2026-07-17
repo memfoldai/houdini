@@ -284,8 +284,11 @@ fn tick(rt: &Rc<Runtime>) {
     let n = rt.tick_count.get().wrapping_add(1);
     rt.tick_count.set(n);
 
-    // Layer A — transcript ingestion.
-    if clock.mono_ms - rt.last_transcript_ms.get() >= rt.transcript_poll_ms {
+    // Layer A — transcript ingestion. saturating_sub, never `-`: the timers init
+    // to i64::MIN ("due immediately"), and `mono - i64::MIN` OVERFLOWS in release
+    // and wraps negative, which would make every poll read as "not due" and stop
+    // detection entirely. Saturating gives i64::MAX (== due) on the first tick.
+    if clock.mono_ms.saturating_sub(rt.last_transcript_ms.get()) >= rt.transcript_poll_ms {
         rt.last_transcript_ms.set(clock.mono_ms);
         let stats = rt.ingestor.borrow_mut().poll(&rt.store);
         if stats.new_turns > 0 {
@@ -299,13 +302,13 @@ fn tick(rt: &Rc<Runtime>) {
     }
 
     // Layer B — network presence.
-    if clock.mono_ms - rt.last_network_ms.get() >= rt.network_poll_ms {
+    if clock.mono_ms.saturating_sub(rt.last_network_ms.get()) >= rt.network_poll_ms {
         rt.last_network_ms.set(clock.mono_ms);
         let active = rt.net.borrow_mut().poll(&rt.store, clock.wall_ms);
         rt.net_active.set(active);
     }
 
-    if clock.mono_ms - rt.heartbeat_at.get() > HEARTBEAT_MS {
+    if clock.mono_ms.saturating_sub(rt.heartbeat_at.get()) > HEARTBEAT_MS {
         rt.heartbeat_at.set(clock.mono_ms);
         log::info!(
             "heartbeat: {} AI provider(s) active on the network; watching transcripts for new messages",
@@ -320,7 +323,7 @@ fn tick(rt: &Rc<Runtime>) {
         refresh_menu(rt, glyph, clock.wall_ms);
     }
 
-    if clock.mono_ms - rt.last_flush_ms.get() > rt.flush_ms {
+    if clock.mono_ms.saturating_sub(rt.last_flush_ms.get()) > rt.flush_ms {
         rt.last_flush_ms.set(clock.mono_ms);
         match export::flush_pending(&rt.store, &rt.install_id, &rt.export_dir, clock.wall_ms) {
             Ok(n) if n > 0 => log::info!("wrote {n} record(s) to the day file"),
@@ -337,7 +340,10 @@ fn tick(rt: &Rc<Runtime>) {
 /// deliberately does NOT drive the icon — that state never cleared and read as
 /// stale; it lives in the data and the dropdown detail instead.
 fn glyph_for(rt: &Rc<Runtime>, now_mono_ms: i64) -> Glyph {
-    if now_mono_ms - rt.last_ingest_ms.get() < FRESH_INGEST_MS {
+    // saturating_sub: last_ingest_ms init is i64::MIN, and `now - i64::MIN`
+    // overflows/wraps in release to a small value → the icon would read
+    // "Recording" forever. Saturating gives i64::MAX (not fresh) → Monitoring.
+    if now_mono_ms.saturating_sub(rt.last_ingest_ms.get()) < FRESH_INGEST_MS {
         Glyph::Recording
     } else {
         Glyph::Monitoring

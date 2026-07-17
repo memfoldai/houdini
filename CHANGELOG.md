@@ -5,6 +5,22 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.4.1] — 2026-07-17
+
+### Fixed
+- **Nothing was recorded after upgrading from 0.3.x.** An existing `sessions.sqlite`
+  kept the pre-0.4 schema (`source_kind`/`app_hash`, no `tool`/`provider`), and
+  `CREATE TABLE IF NOT EXISTS` left it in place, so every session query failed with
+  `no such column: tool` and both storage and export were dead. The store now
+  tracks a `PRAGMA user_version` and migrates a pre-0.4 DB by dropping and
+  rebuilding the incompatible `sessions`/`turns` tables (that data was from the
+  retired screen-scrape approach; nothing to preserve).
+- **Detection silently never ran, and the icon stuck on "Recording an AI chat".**
+  The poll timers initialized to `i64::MIN`, and `now - i64::MIN` overflows and
+  wraps in release builds — so the transcript and network polls always read as
+  "not due" (never ran) and the icon read "Recording" forever. All monotonic
+  time-deltas now use `saturating_sub`.
+
 ## [0.4.0] — 2026-07-17
 
 Fundamental change of approach. Screen-scraping AI detection is removed: reading
@@ -245,6 +261,7 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.4.1]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.1
 [0.4.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.0
 [0.3.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.3.0
 [0.2.5]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.5
