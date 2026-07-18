@@ -13,11 +13,11 @@ cargo test                       # portable core + integration; runs on any plat
 cargo build && cargo build --release
 cargo check --features ner       # optional NER layer (needs onnxruntime to link)
 cargo audit                      # RustSec check (CI runs this; must stay clean)
-./target/release/ai-usage-monitor --diagnose   # transcript counts
+./target/release/houdini --diagnose   # transcript counts
 ```
 
 Debugging ("is it working?"): the app writes a metadata-only log to
-`<data-dir>/ai-usage-monitor.log`. `--diagnose` prints per-tool transcript counts. Never log ingested text — it
+`<data-dir>/houdini.log`. `--diagnose` prints per-tool transcript counts. Never log ingested text — it
 is pre-redaction (see `logging` module docs).
 
 Keep builds at **zero warnings**.
@@ -52,7 +52,7 @@ Keep builds at **zero warnings**.
 
 ## Architecture
 
-Portable core (lib `ai_usage_monitor`, fully tested, no macOS deps) + macOS
+Portable core (lib `houdini`, fully tested, no macOS deps) + macOS
 native shell (the binary, `cfg(target_os = "macos")`). This split is why
 `cargo test` runs everywhere; keep native code out of the lib.
 

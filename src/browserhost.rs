@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::PathBuf;
 
-const HOST_NAME: &str = "ai.memfold.usage_monitor";
+const HOST_NAME: &str = "ai.memfold.houdini";
 
 const EXTENSION_ID: &str = "jphmlmjmieilhimgemjanlkgfommlife";
 
@@ -90,7 +90,7 @@ pub fn uninstall() {
 fn manifest_json(exe_path: &str) -> String {
     let escaped = exe_path.replace('\\', "\\\\").replace('"', "\\\"");
     format!(
-        "{{\n  \"name\": \"{HOST_NAME}\",\n  \"description\": \"AI Usage Monitor — internal study web-chat capture (local only)\",\n  \"path\": \"{escaped}\",\n  \"type\": \"stdio\",\n  \"allowed_origins\": [\"chrome-extension://{EXTENSION_ID}/\"]\n}}\n"
+        "{{\n  \"name\": \"{HOST_NAME}\",\n  \"description\": \"Houdini — internal study web-chat capture (local only)\",\n  \"path\": \"{escaped}\",\n  \"type\": \"stdio\",\n  \"allowed_origins\": [\"chrome-extension://{EXTENSION_ID}/\"]\n}}\n"
     )
 }
 
@@ -100,7 +100,7 @@ mod tests {
 
     #[test]
     fn manifest_has_required_fields() {
-        let m = manifest_json("/Applications/AI Usage Monitor.app/Contents/MacOS/ai-usage-monitor");
+        let m = manifest_json("/Applications/Houdini.app/Contents/MacOS/houdini");
         let v: serde_json::Value = serde_json::from_str(&m).unwrap();
         assert_eq!(v["name"], HOST_NAME);
         assert_eq!(v["type"], "stdio");
@@ -108,6 +108,6 @@ mod tests {
             v["allowed_origins"][0],
             format!("chrome-extension://{EXTENSION_ID}/")
         );
-        assert!(v["path"].as_str().unwrap().ends_with("ai-usage-monitor"));
+        assert!(v["path"].as_str().unwrap().ends_with("houdini"));
     }
 }

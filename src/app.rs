@@ -23,11 +23,11 @@ use objc2_foundation::{MainThreadMarker, NSNotification, NSTimer};
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{TrayIcon, TrayIconBuilder};
 
-use ai_usage_monitor::config::{self, AppConfig, Paths};
-use ai_usage_monitor::export;
-use ai_usage_monitor::ingest::Ingestor;
-use ai_usage_monitor::store::{ActivityStats, Store, PAUSE_UNTIL_KEY};
-use ai_usage_monitor::webingest;
+use houdini::config::{self, AppConfig, Paths};
+use houdini::export;
+use houdini::ingest::Ingestor;
+use houdini::store::{ActivityStats, Store, PAUSE_UNTIL_KEY};
+use houdini::webingest;
 
 use crate::tray_glyph::{self, Glyph};
 use crate::updater;
@@ -129,7 +129,7 @@ define_class!(
             crate::browserhost::ensure_installed();
             install_tray(&rt);
             install_timer(&rt);
-            log::info!("ai-usage-monitor started (transcript ingest)");
+            log::info!("houdini started (transcript ingest)");
         }
     }
 );
@@ -145,7 +145,7 @@ pub fn run() {
     let mtm = MainThreadMarker::new().expect("must run on the main thread");
 
     let paths = Paths::resolve().expect("resolve paths");
-    ai_usage_monitor::logging::init(&paths.log_file);
+    houdini::logging::init(&paths.log_file);
     let cfg = config::load_or_init(&paths.config_file).expect("load config");
     let rt = build_runtime(&paths, &cfg);
 
@@ -297,7 +297,7 @@ fn install_tray(rt: &Rc<Runtime>) {
     let quit = MenuItem::with_id(rt.ids.quit.clone(), "Quit", true, None);
 
     let title = MenuItem::new(
-        concat!("AI Usage Monitor ", env!("CARGO_PKG_VERSION")),
+        concat!("Houdini ", env!("CARGO_PKG_VERSION")),
         false,
         None,
     );
@@ -590,9 +590,9 @@ fn do_quit() {
 
 fn tooltip_for(glyph: Glyph) -> &'static str {
     match glyph {
-        Glyph::Paused => "AI Usage Monitor — taking a break",
-        Glyph::Active => "AI Usage Monitor — recording AI activity",
-        Glyph::Idle => "AI Usage Monitor — watching for AI use",
+        Glyph::Paused => "Houdini — taking a break",
+        Glyph::Active => "Houdini — recording AI activity",
+        Glyph::Idle => "Houdini — watching for AI use",
     }
 }
 

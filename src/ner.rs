@@ -192,7 +192,7 @@ mod tests {
     #[test]
     #[ignore]
     fn ner_layer_redacts_a_planted_name_over_deterministic() {
-        let dir = std::env::var("AUM_NER_MODEL_DIR").expect("set AUM_NER_MODEL_DIR");
+        let dir = std::env::var("HOUDINI_NER_MODEL_DIR").expect("set HOUDINI_NER_MODEL_DIR");
         let redactor = NerRedactor::load(Path::new(&dir)).expect("load + self-test");
         let out = redactor
             .redact("Contact Maria Gonzalez about the vendor at ops@acme.com.")

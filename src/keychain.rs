@@ -1,7 +1,7 @@
 use security_framework::passwords::{get_generic_password, set_generic_password};
 use security_framework_sys::base::errSecItemNotFound;
 
-const SERVICE: &str = "ai.memfold.ai-usage-monitor";
+const SERVICE: &str = "ai.memfold.houdini";
 const ACCOUNT: &str = "db-encryption-key";
 
 pub fn db_key() -> Result<[u8; 32], String> {

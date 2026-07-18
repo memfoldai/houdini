@@ -1,7 +1,7 @@
 use std::os::unix::net::UnixStream;
 
-use ai_usage_monitor::config::Paths;
-use ai_usage_monitor::webingest::{read_frame, write_frame};
+use houdini::config::Paths;
+use houdini::webingest::{read_frame, write_frame};
 
 pub fn run() {
     let paths = match Paths::resolve() {
@@ -11,7 +11,7 @@ pub fn run() {
             return;
         }
     };
-    ai_usage_monitor::logging::init(&paths.log_file);
+    houdini::logging::init(&paths.log_file);
 
     let mut app = match UnixStream::connect(&paths.sock_file) {
         Ok(s) => s,

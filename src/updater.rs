@@ -3,9 +3,9 @@ use std::process::Command;
 
 use serde::Deserialize;
 
-pub const REPO: &str = "memfoldai/ai-usage-monitor";
+pub const REPO: &str = "memfoldai/houdini";
 
-const USER_AGENT: &str = "ai-usage-monitor";
+const USER_AGENT: &str = "houdini";
 
 pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -46,7 +46,7 @@ pub fn download_and_stage(update: &Update) -> Result<PathBuf, String> {
     let bundle = installed_app_bundle()
         .ok_or_else(|| "not running from an installed .app in /Applications".to_string())?;
 
-    let work = std::env::temp_dir().join("aum-update");
+    let work = std::env::temp_dir().join("houdini-update");
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
 
@@ -161,7 +161,7 @@ mod tests {
     fn picks_dmg_asset_url_from_release_json() {
         let json = br#"{"tag_name":"v0.5.0","assets":[
             {"name":"notes.txt","browser_download_url":"https://example.com/notes.txt"},
-            {"name":"AI-Usage-Monitor-0.5.0.dmg","browser_download_url":"https://example.com/app.dmg"}]}"#;
+            {"name":"Houdini-0.5.0.dmg","browser_download_url":"https://example.com/app.dmg"}]}"#;
         let release: Release = serde_json::from_slice(json).unwrap();
         let dmg = release.assets.into_iter().find(|a| a.name.ends_with(".dmg")).unwrap();
         assert_eq!(dmg.browser_download_url, "https://example.com/app.dmg");

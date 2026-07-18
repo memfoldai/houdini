@@ -57,7 +57,7 @@ cargo build --release --features ner
 ```
 
 Set the model directory in
-`~/Library/Application Support/ai.memfold.ai-usage-monitor/config.json`:
+`~/Library/Application Support/ai.memfold.houdini/config.json`:
 
 ```json
 {
@@ -120,7 +120,7 @@ more — the safe direction for redaction.
 The unit test that exercises a real model is `#[ignore]` (it needs the model):
 
 ```bash
-AUM_NER_MODEL_DIR=/absolute/path/to/model-dir \
+HOUDINI_NER_MODEL_DIR=/absolute/path/to/model-dir \
   cargo test --features ner ner_ -- --ignored
 ```
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build a distributable macOS app: AI Usage Monitor.app (+ a .dmg).
+# Build a distributable macOS app: Houdini.app (+ a .dmg).
 #
 # Uses only Apple's own tools (sips, iconutil, codesign, hdiutil) plus cargo —
 # no bundler dependency, full control over Info.plist. Output lands in dist/.
@@ -8,10 +8,10 @@
 # Usage:
 #   packaging/bundle.sh            # build, bundle, sign, and make a .dmg
 #   packaging/bundle.sh --no-dmg   # stop after the signed .app
-#   AUM_FEATURES=ner packaging/bundle.sh   # build with the NER feature
+#   HOUDINI_FEATURES=ner packaging/bundle.sh   # build with the NER feature
 #
 # Signing identity: same self-signed cert as scripts/sign.sh (override with
-# AUM_SIGN_IDENTITY). A self-signed build runs on other Macs after a one-time
+# HOUDINI_SIGN_IDENTITY). A self-signed build runs on other Macs after a one-time
 # right-click → Open (Gatekeeper). For zero-friction install, sign with a
 # "Developer ID Application" cert and notarize — see INSTALL.md.
 
@@ -20,10 +20,10 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-APP_NAME="AI Usage Monitor"
-BUNDLE_ID="ai.memfold.ai-usage-monitor"
-EXE="ai-usage-monitor"
-CERT_NAME="${AUM_SIGN_IDENTITY:-AI Usage Monitor Self-Signed}"
+APP_NAME="Houdini"
+BUNDLE_ID="ai.memfold.houdini"
+EXE="houdini"
+CERT_NAME="${HOUDINI_SIGN_IDENTITY:-Houdini Self-Signed}"
 MIN_MACOS="14.0"
 ENTITLEMENTS="$ROOT/packaging/entitlements.plist"
 MASTER_ICON="$ROOT/packaging/appicon-1024.png"
@@ -33,7 +33,7 @@ MAKE_DMG=1
 
 VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')"
 FEATURES_ARG=()
-[[ -n "${AUM_FEATURES:-}" ]] && FEATURES_ARG=(--features "$AUM_FEATURES")
+[[ -n "${HOUDINI_FEATURES:-}" ]] && FEATURES_ARG=(--features "$HOUDINI_FEATURES")
 
 DIST="$ROOT/dist"
 APP="$DIST/$APP_NAME.app"
@@ -80,7 +80,7 @@ cat >"$CONTENTS/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>$MIN_MACOS</string>
   <key>LSUIElement</key><true/>
-  <key>NSHumanReadableCopyright</key><string>Internal research tool — Memfold AI</string>
+  <key>NSHumanReadableCopyright</key><string>Houdini — internal research tool by Rahul Biliyar, Memfold AI</string>
 </dict>
 </plist>
 PLIST
@@ -101,7 +101,7 @@ echo "    signed: $APP"
 
 if [[ "$MAKE_DMG" -eq 1 ]]; then
   echo "==> Building .dmg…"
-  DMG="$DIST/AI-Usage-Monitor-$VERSION.dmg"
+  DMG="$DIST/Houdini-$VERSION.dmg"
   STAGE="$(mktemp -d)/dmg"
   mkdir -p "$STAGE"
   cp -R "$APP" "$STAGE/"

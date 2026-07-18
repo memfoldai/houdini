@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Sign the bare ai-usage-monitor binary with a STABLE self-signed identity, for
-# the DEVELOPMENT workflow (running ./target/release/ai-usage-monitor directly).
+# Sign the bare houdini binary with a STABLE self-signed identity, for
+# the DEVELOPMENT workflow (running ./target/release/houdini directly).
 # For a distributable app, use packaging/bundle.sh instead.
 #
 # Why this exists: the app needs no TCC grant anymore (it reads local transcripts
@@ -16,7 +16,7 @@
 #
 # One-time: create the self-signed cert in Keychain Access:
 #   Keychain Access → Certificate Assistant → Create a Certificate…
-#     Name:             AI Usage Monitor Self-Signed
+#     Name:             Houdini Self-Signed
 #     Identity Type:    Self Signed Root
 #     Certificate Type: Code Signing
 # Leave it in the login keychain. It does NOT need to be "trusted": a self-signed
@@ -26,14 +26,14 @@
 
 set -euo pipefail
 
-CERT_NAME="${AUM_SIGN_IDENTITY:-AI Usage Monitor Self-Signed}"
+CERT_NAME="${HOUDINI_SIGN_IDENTITY:-Houdini Self-Signed}"
 ENTITLEMENTS="$(cd "$(dirname "$0")/.." && pwd)/packaging/entitlements.plist"
 
 BIN="${1:-}"
 if [[ -z "$BIN" ]]; then
   echo "Building release binary…"
   cargo build --release
-  BIN="target/release/ai-usage-monitor"
+  BIN="target/release/houdini"
 fi
 
 if [[ ! -f "$BIN" ]]; then
@@ -46,7 +46,7 @@ fi
 # codesign can use it. `find-identity -p codesigning` lists untrusted certs too.
 if ! security find-identity -p codesigning | grep -qF "$CERT_NAME"; then
   echo "error: no code-signing certificate named '$CERT_NAME' in your keychain." >&2
-  echo "       Create it (see this script's header), or set AUM_SIGN_IDENTITY to" >&2
+  echo "       Create it (see this script's header), or set HOUDINI_SIGN_IDENTITY to" >&2
   echo "       the name of an existing code-signing certificate." >&2
   echo >&2
   echo "       Certificates currently available for signing:" >&2

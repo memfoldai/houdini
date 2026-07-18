@@ -1,9 +1,9 @@
 use std::path::PathBuf;
 
-use ai_usage_monitor::ingest::default_adapters;
+use houdini::ingest::default_adapters;
 
 pub fn run() {
-    println!("AI Usage Monitor — diagnose\n");
+    println!("Houdini — diagnose\n");
     println!("Transcript ingestion (reads AI tools' own local logs):");
 
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));

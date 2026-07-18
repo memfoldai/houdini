@@ -1,4 +1,4 @@
-# AI Usage Monitor — browser extension (web chats)
+# Houdini — browser extension (web chats)
 
 Captures **web AI chats** (ChatGPT, Claude on the web) that leave no local
 transcript, and delivers them to the local monitor. It reads the **prompt from the
@@ -15,7 +15,7 @@ user actually saw.
 
 ```
 page (MAIN world)          isolated world        service worker         native app
-interceptor.js  ──window──▶ relay.js ──runtime──▶ background.js ──stdio──▶ ai-usage-monitor
+interceptor.js  ──window──▶ relay.js ──runtime──▶ background.js ──stdio──▶ houdini
   reads prompt (request)      forwards              connectNative           --native-host:
   + reply (rendered DOM)      the captured          per message             validate → redact
   + id (page URL)             turn                                          → store → day file
@@ -44,7 +44,7 @@ here only because it is local, redacted, and installed per consent.
 1. Build the app and register the native host for every Chromium browser present:
    ```bash
    cargo build --release
-   ./target/release/ai-usage-monitor --install-browser-host
+   ./target/release/houdini --install-browser-host
    ```
 2. Load this folder as an unpacked extension: `chrome://extensions` →
    **Developer mode** → **Load unpacked** → select `extension/`. The id must be
@@ -53,7 +53,7 @@ here only because it is local, redacted, and installed per consent.
 3. Open ChatGPT or Claude on the web and send a message. The prompt/reply lands in
    the monitor's day file as a `web` session.
 
-Remove with `./target/release/ai-usage-monitor --uninstall-browser-host` and
+Remove with `./target/release/houdini --uninstall-browser-host` and
 removing the unpacked extension.
 
 ## Supported sites and the honest caveat

@@ -20,7 +20,7 @@ first-launch prompt.
 Create a self-signed one (free, internal use):
 
 1. Keychain Access → Certificate Assistant → **Create a Certificate…**
-2. Name `AI Usage Monitor Self-Signed`, Identity Type **Self Signed Root**,
+2. Name `Houdini Self-Signed`, Identity Type **Self Signed Root**,
    Certificate Type **Code Signing**. Create it; leave it in the login keychain.
 
 It will show as untrusted (`CSSMERR_TP_NOT_TRUSTED`) — that is expected and fine.
@@ -30,15 +30,15 @@ the signature, which notarization (below) handles.
 ## 2. Build the app + installer (maintainer)
 
 ```bash
-packaging/bundle.sh            # → dist/AI Usage Monitor.app + dist/AI-Usage-Monitor-<v>.dmg
+packaging/bundle.sh            # → dist/Houdini.app + dist/Houdini-<v>.dmg
 packaging/bundle.sh --no-dmg   # just the signed .app
-AUM_FEATURES=ner packaging/bundle.sh   # include the optional NER layer
+HOUDINI_FEATURES=ner packaging/bundle.sh   # include the optional NER layer
 ```
 
 The script builds the release binary, generates the app icon (`.icns` from
 `packaging/appicon-1024.png` — regenerate with `python3 packaging/make_appicon.py`
 if the design changes), writes `Info.plist`, signs with hardened runtime, and
-produces the `.dmg`. Override the identity with `AUM_SIGN_IDENTITY`.
+produces the `.dmg`. Override the identity with `HOUDINI_SIGN_IDENTITY`.
 
 ## 3. Choose a distribution path (maintainer)
 
@@ -54,7 +54,7 @@ when the Gatekeeper right-click step becomes a support burden.
 ### Notarizing (only if you have a Developer ID)
 
 Sign with a **Developer ID Application** certificate and a secure timestamp
-(edit `bundle.sh`: set `AUM_SIGN_IDENTITY` to the Developer ID cert and change
+(edit `bundle.sh`: set `HOUDINI_SIGN_IDENTITY` to the Developer ID cert and change
 `--timestamp=none` to `--timestamp`), then:
 
 ```bash
@@ -63,9 +63,9 @@ xcrun notarytool store-credentials "AUM-notary" \
   --apple-id "you@example.com" --team-id "YOURTEAMID" --password "app-specific-pw"
 
 # Per release: submit the .dmg, wait for the result, then staple the ticket.
-xcrun notarytool submit "dist/AI-Usage-Monitor-<v>.dmg" --keychain-profile "AUM-notary" --wait
-xcrun stapler staple "dist/AI Usage Monitor.app"
-xcrun stapler staple "dist/AI-Usage-Monitor-<v>.dmg"
+xcrun notarytool submit "dist/Houdini-<v>.dmg" --keychain-profile "AUM-notary" --wait
+xcrun stapler staple "dist/Houdini.app"
+xcrun stapler staple "dist/Houdini-<v>.dmg"
 ```
 
 Stapling lets Gatekeeper verify offline, so teammates launch with no warning.
@@ -74,7 +74,7 @@ Stapling lets Gatekeeper verify offline, so teammates launch with no warning.
 
 ## 4. Install (teammate)
 
-1. Open the `.dmg` and drag **AI Usage Monitor** to **Applications**.
+1. Open the `.dmg` and drag **Houdini** to **Applications**.
 2. Launch it:
    - Notarized build: double-click.
    - Self-signed build: **right-click → Open**, then **Open** in the dialog.
@@ -129,7 +129,7 @@ updates…** entry runs the same check on demand. Nothing to configure.
 ### Requirement: the repo must be public
 
 The updater reads the releases API **unauthenticated**, so the
-`memfoldai/ai-usage-monitor` repo must be **public** (GitHub only serves release
+`memfoldai/houdini` repo must be **public** (GitHub only serves release
 assets without auth on public repos). Only the source becomes visible — there are
 no secrets in the repo or its history. While the repo is private, OTA is simply
 inert (the check returns nothing); it activates the moment the repo is public.
@@ -138,7 +138,7 @@ inert (the check returns nothing); it activates the moment the repo is public.
 
 ```bash
 packaging/bundle.sh                                   # builds dist/*.dmg (signed)
-gh release upload vX.Y.Z dist/AI-Usage-Monitor-X.Y.Z.dmg
+gh release upload vX.Y.Z dist/Houdini-X.Y.Z.dmg
 ```
 
 Compatibility: updates ship from **tagged releases** (not raw `main`); the DB
@@ -150,5 +150,5 @@ message shape changes (it rarely does).
 ## Uninstall
 
 Quit from the menu, drag the app to the Trash, and remove its local data:
-`~/Library/Application Support/ai.memfold.ai-usage-monitor/`. There are no
+`~/Library/Application Support/ai.memfold.houdini/`. There are no
 permissions to revoke.

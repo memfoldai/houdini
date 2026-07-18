@@ -50,5 +50,5 @@ fn main() {
 
 #[cfg(not(target_os = "macos"))]
 fn main() {
-    eprintln!("ai-usage-monitor is macOS-only");
+    eprintln!("houdini is macOS-only");
 }

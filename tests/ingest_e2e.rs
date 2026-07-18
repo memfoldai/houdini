@@ -1,8 +1,8 @@
 use std::fs;
 
-use ai_usage_monitor::export;
-use ai_usage_monitor::ingest::Ingestor;
-use ai_usage_monitor::store::Store;
+use houdini::export;
+use houdini::ingest::Ingestor;
+use houdini::store::Store;
 
 fn write_transcript(home: &std::path::Path, lines: &[&str]) -> std::path::PathBuf {
     let proj = home.join(".claude").join("projects").join("demo");
@@ -14,7 +14,7 @@ fn write_transcript(home: &std::path::Path, lines: &[&str]) -> std::path::PathBu
 
 #[test]
 fn running_pipeline_ingests_redacts_and_exports() {
-    let home = std::env::temp_dir().join(format!("aum-e2e-{}", std::process::id()));
+    let home = std::env::temp_dir().join(format!("houdini-e2e-{}", std::process::id()));
     let _ = fs::remove_dir_all(&home);
     let data_dir = home.join("data");
 

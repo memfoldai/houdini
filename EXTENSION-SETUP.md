@@ -11,7 +11,7 @@ hands it to the app locally. Nothing is uploaded.
 
 ## Step 1 — Install the app first
 
-If you haven't already: open the `.dmg`, drag **AI Usage Monitor** to
+If you haven't already: open the `.dmg`, drag **Houdini** to
 **Applications**, then **right-click it → Open** (once — macOS asks the first time
 because it's an internal build). A small ring appears in your menu bar. Leave it
 running.
@@ -34,7 +34,7 @@ This works in any Chromium browser: **Chrome, Brave, Edge, Arc, Vivaldi**.
 3. Turn on **Developer mode** (toggle, top-right).
 4. Click **Load unpacked** (top-left) and select the **Browser Extension** folder
    you copied in step 1.
-5. Done — you'll see **AI Usage Monitor** in the list.
+5. Done — you'll see **Houdini** in the list.
 
 ## Step 3 — Check it works
 

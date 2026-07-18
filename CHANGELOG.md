@@ -43,7 +43,7 @@ include behavior changes.
   longer shells out to the GitHub CLI (which needs an install, auth, and repo
   access none of a non-developer machine has). It calls the GitHub REST API
   directly with a fine-grained, **read-only** token baked in at build time
-  (`AUM_UPDATE_TOKEN`, supplied via a gitignored `packaging/.update-token`). The
+  (`HOUDINI_UPDATE_TOKEN`, supplied via a gitignored `packaging/.update-token`). The
   token is fed to curl on stdin, never in argv, so it never appears in `ps`.
   Verified live against the private repo's release API.
 - **Updates install silently to stay current.** The periodic check (on launch +
@@ -155,7 +155,7 @@ include behavior changes.
   `data/interactions/YYYY-MM-DD.jsonl` (the `presence` table is gone); every
   source emits the identical row. Schema stays `aum/3`; DB schema is v4.
 - **Menu bar UX.** No emojis — plain status text ("Watching for AI use",
-  "Recording AI activity", "Paused"). Added a version header (`AI Usage Monitor
+  "Recording AI activity", "Paused"). Added a version header (`Houdini
   <version>`) — the standard place a menu-bar app shows its version. Icon: hollow
   ring when quiet, filled disc while recording, bars when paused.
 
@@ -371,7 +371,7 @@ apps, Codex, and Claude Code all detected on the network).
 - [docs/grouping.md](docs/grouping.md): how sessions are grouped by provider and
   surface (web/app/CLI) at analysis time — without hardcoding providers and
   without adding any network/LLM call to the local-only daemon.
-- Content-free per-surface detection tracing (`RUST_LOG=ai_usage_monitor=debug`):
+- Content-free per-surface detection tracing (`RUST_LOG=houdini=debug`):
   text length + verdict, no captured text — for tuning and support.
 
 ## [0.2.2] — 2026-07-16
@@ -397,10 +397,10 @@ debug log), not by guessing:
   area, so the window you're actually looking at is read first.
 
 ### Added
-- `ai-usage-monitor --diagnose`: a one-shot probe (permissions, window
+- `houdini --diagnose`: a one-shot probe (permissions, window
   enumeration, per-app AX text) that prints why capture is or isn't working.
 - Debug-level capture tracing (per-app AX/OCR outcomes, char counts) behind
-  `RUST_LOG=ai_usage_monitor=debug`.
+  `RUST_LOG=houdini=debug`.
 
 ## [0.2.1] — 2026-07-16
 
@@ -453,22 +453,22 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
-[0.4.10]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.10
-[0.4.9]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.9
-[0.4.8]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.8
-[0.4.7]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.7
-[0.4.6]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.6
-[0.4.5]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.5
-[0.4.4]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.4
-[0.4.3]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.3
-[0.4.2]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.2
-[0.4.1]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.1
-[0.4.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.0
-[0.3.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.3.0
-[0.2.5]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.5
-[0.2.4]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.4
-[0.2.3]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.3
-[0.2.2]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.2
-[0.2.1]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.1
-[0.2.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.2.0
-[0.1.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.1.0
+[0.4.10]: https://github.com/memfoldai/houdini/releases/tag/v0.4.10
+[0.4.9]: https://github.com/memfoldai/houdini/releases/tag/v0.4.9
+[0.4.8]: https://github.com/memfoldai/houdini/releases/tag/v0.4.8
+[0.4.7]: https://github.com/memfoldai/houdini/releases/tag/v0.4.7
+[0.4.6]: https://github.com/memfoldai/houdini/releases/tag/v0.4.6
+[0.4.5]: https://github.com/memfoldai/houdini/releases/tag/v0.4.5
+[0.4.4]: https://github.com/memfoldai/houdini/releases/tag/v0.4.4
+[0.4.3]: https://github.com/memfoldai/houdini/releases/tag/v0.4.3
+[0.4.2]: https://github.com/memfoldai/houdini/releases/tag/v0.4.2
+[0.4.1]: https://github.com/memfoldai/houdini/releases/tag/v0.4.1
+[0.4.0]: https://github.com/memfoldai/houdini/releases/tag/v0.4.0
+[0.3.0]: https://github.com/memfoldai/houdini/releases/tag/v0.3.0
+[0.2.5]: https://github.com/memfoldai/houdini/releases/tag/v0.2.5
+[0.2.4]: https://github.com/memfoldai/houdini/releases/tag/v0.2.4
+[0.2.3]: https://github.com/memfoldai/houdini/releases/tag/v0.2.3
+[0.2.2]: https://github.com/memfoldai/houdini/releases/tag/v0.2.2
+[0.2.1]: https://github.com/memfoldai/houdini/releases/tag/v0.2.1
+[0.2.0]: https://github.com/memfoldai/houdini/releases/tag/v0.2.0
+[0.1.0]: https://github.com/memfoldai/houdini/releases/tag/v0.1.0

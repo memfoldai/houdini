@@ -94,7 +94,7 @@ mod tests {
         store.add_turn(id, 0, Role::User, "explain photosynthesis", 1_752_624_000_000).unwrap();
         store.add_turn(id, 1, Role::Assistant, "plants convert light [REDACTED:EMAIL]", 1_752_624_002_000).unwrap();
 
-        let dir = std::env::temp_dir().join(format!("aum-snap-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("houdini-snap-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         let path = export_snapshot(&store, "dev", &dir).unwrap();
 

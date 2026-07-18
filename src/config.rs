@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 
 const QUALIFIER: &str = "ai";
 const ORG: &str = "memfold";
-const APP: &str = "ai-usage-monitor";
+const APP: &str = "houdini";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -60,7 +60,7 @@ impl Paths {
             db_file: data_dir.join("sessions.sqlite"),
             export_dir,
             sock_file: data_dir.join("host.sock"),
-            log_file: data_dir.join("ai-usage-monitor.log"),
+            log_file: data_dir.join("houdini.log"),
             data_dir,
         })
     }
@@ -118,7 +118,7 @@ mod tests {
 
     #[test]
     fn load_or_init_is_stable_across_reloads() {
-        let dir = std::env::temp_dir().join(format!("aum-cfg-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("houdini-cfg-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let cf = dir.join("config.json");
         let _ = fs::remove_file(&cf);
@@ -133,7 +133,7 @@ mod tests {
 
     #[test]
     fn old_config_missing_new_fields_still_loads_and_upgrades() {
-        let dir = std::env::temp_dir().join(format!("aum-oldcfg-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("houdini-oldcfg-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let cf = dir.join("config.json");
 

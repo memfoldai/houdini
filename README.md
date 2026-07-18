@@ -1,4 +1,4 @@
-# ai-usage-monitor
+# houdini
 
 A minimal, menu-bar-only macOS app that records **what people use AI for** — the
 observation instrument for an internal AI-usage study. It reads the actual
@@ -110,8 +110,8 @@ Requires a recent stable Rust toolchain and macOS 14+.
 ```bash
 cargo test                       # portable core + integration (runs anywhere)
 cargo build --release
-./target/release/ai-usage-monitor --diagnose   # one-shot: transcript counts
-./target/release/ai-usage-monitor              # run the menu-bar app
+./target/release/houdini --diagnose   # one-shot: transcript counts
+./target/release/houdini              # run the menu-bar app
 ```
 
 `--diagnose` prints how many interactions each transcript adapter can read right
@@ -122,7 +122,7 @@ TCC grant, so a rebuild never silently loses anything.
 
 ## Configuration
 
-`~/Library/Application Support/ai.memfold.ai-usage-monitor/config.json` is created
+`~/Library/Application Support/ai.memfold.houdini/config.json` is created
 on first run. Operator knobs:
 
 | Key | Default | Purpose |

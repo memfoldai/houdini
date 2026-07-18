@@ -88,7 +88,7 @@
     const convId = site.conversationId(url) || PAGE_ID;
 
     if (!reply) {
-      console.warn("[aum] captured a", site.tool, "prompt but no assistant reply; the DOM selector may need updating");
+      console.warn("[houdini] captured a", site.tool, "prompt but no assistant reply; the DOM selector may need updating");
     }
 
     const turns = [];

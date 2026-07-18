@@ -349,7 +349,7 @@ mod tests {
 
     #[test]
     fn encrypted_db_roundtrips_and_wrong_key_is_refused_without_data_loss() {
-        let dir = std::env::temp_dir().join(format!("aum-enc-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("houdini-enc-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("enc.sqlite");
         let _ = std::fs::remove_file(&path);
@@ -382,7 +382,7 @@ mod tests {
 
     #[test]
     fn reopening_an_older_version_db_keeps_its_rows() {
-        let dir = std::env::temp_dir().join(format!("aum-nodrop-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("houdini-nodrop-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("v.sqlite");
         let _ = std::fs::remove_file(&path);

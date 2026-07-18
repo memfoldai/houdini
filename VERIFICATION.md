@@ -15,7 +15,7 @@ Do these in order. Each has an explicit pass condition.
 ```bash
 cargo test                 # portable core + integration must be green
 cargo build --release
-./target/release/ai-usage-monitor --diagnose
+./target/release/houdini --diagnose
 ```
 
 **Pass:** `--diagnose` lists your transcript tools with non-zero counts if you
@@ -27,12 +27,12 @@ printed.
 ## 1. A CLI/agent interaction is ingested
 
 1. Run a prompt in Claude Code or Codex (e.g. "explain regenerative agriculture").
-2. Launch the app: `./target/release/ai-usage-monitor` (a ring icon appears in
+2. Launch the app: `./target/release/houdini` (a ring icon appears in
    the menu bar).
 3. Wait ~20 s (one ingest + one flush), then **Show my data**.
 
 **Pass:** today's file
-`~/Library/Application Support/ai.memfold.ai-usage-monitor/data/interactions/YYYY-MM-DD.jsonl`
+`~/Library/Application Support/ai.memfold.houdini/data/interactions/YYYY-MM-DD.jsonl`
 contains flat `"kind":"interaction"` rows (one per turn) whose
 `provider`/`tool`/`surface`/`model` are correct, with your prompt (`role":"user"`)
 and the reply (`role":"assistant"`). The icon fills to a disc while recording.
