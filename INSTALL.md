@@ -86,8 +86,10 @@ Stapling lets Gatekeeper verify offline, so teammates launch with no warning.
 There is no window. Click the menu-bar icon to see live status — current state,
 AI sessions recorded in the last 24 h, and when the last activity was. The icon
 fills to a solid disc while AI activity is being recorded (a hollow ring when
-quiet). Data is stored automatically (redacted) to day
-files; **Show my data** reveals the folder, **Quit** stops it.
+quiet). Data is stored automatically and redacted in an **encrypted SQLite
+database** (the key lives in the macOS Keychain); nothing readable sits in a
+folder. **Export my data…** writes a decrypted snapshot on demand and reveals
+it; **Quit** stops it.
 
 To confirm detection end-to-end (and audit redaction before trusting any data),
 run [VERIFICATION.md](VERIFICATION.md).
@@ -95,46 +97,64 @@ run [VERIFICATION.md](VERIFICATION.md).
 ## 5. Optional: web-chat capture (browser extension)
 
 The app catches AI apps and CLIs on its own. To also capture **web** ChatGPT/Claude,
-install the Chromium extension (see [extension/README.md](extension/README.md)):
+load the Chromium extension (see [extension/README.md](extension/README.md)):
 
-```bash
-ai-usage-monitor --install-browser-host    # registers the local host for every Chromium browser
-```
+`chrome://extensions` → **Developer mode** → **Load unpacked** → select the
+`extension/` folder. Send one web AI message to confirm it's captured.
 
-Then in each browser: `chrome://extensions` → **Developer mode** → **Load unpacked**
-→ select the `extension/` folder. Send one web AI message to confirm it appears in
-your day file.
+**No terminal step is needed.** The app registers the local native-messaging host
+for every installed Chromium browser automatically, every time it launches — so
+installing the DMG and loading the extension is enough. (The `--install-browser-host`
+and `--uninstall-browser-host` CLI flags still exist for manual control.)
 
-The extension and app are a matched pair and **share a version**:
-the extension's fixed id (`jphmlmjmieilhimgemjanlkgfommlife`) is allowlisted by the
-host manifest `--install-browser-host` writes, and they talk only over local native
-messaging. Upgrade them together. Remove with `--uninstall-browser-host` and by
-removing the unpacked extension.
+The extension and app are a matched pair and **share a version**: the extension's
+fixed id (`jphmlmjmieilhimgemjanlkgfommlife`) is allowlisted by the host manifest,
+and they talk only over local native messaging. Upgrade them together.
 
 ## 6. Over-the-air updates
 
-The installed app updates itself from GitHub Releases — no re-download by hand.
+The installed app updates itself from GitHub Releases — silently, with no `gh`
+and no re-download by hand.
 
 **For teammates:** it checks on launch and every ~6 hours. When a newer release
-exists, the menu's update entry reads **Install update X.Y.Z**; click it and the
-app replaces itself and relaunches. There is also a manual **Check for updates…**
-entry. Updates need the app installed in **/Applications** and the GitHub CLI
-(`gh`) authenticated to this private repo (the team already has it); no embedded
-tokens, no notarization.
+exists it downloads the signed `.dmg`, verifies it, replaces itself in
+`/Applications`, and relaunches — automatically, no click. The menu's **Check for
+updates…** entry runs the same check on demand. Nothing to configure; the
+read-only access token is already baked into the build they were given.
 
-**For the maintainer — each release MUST attach the `.dmg`** (the updater
-downloads it):
+### Maintainer: the OTA access token (one-time)
+
+Because the repo is **private**, the app authenticates to the GitHub API with a
+**fine-grained, read-only** token baked in at build time. Create it once:
+
+1. GitHub → Settings → Developer settings → **Fine-grained tokens** → *Generate*.
+2. **Resource owner** `memfoldai`; **Repository access** → *Only select repositories*
+   → `ai-usage-monitor`.
+3. **Permissions** → Repository permissions → **Contents: Read-only** (nothing
+   else). Set a long expiry and note the renewal date.
+4. Save the token string to `packaging/.update-token` (gitignored) — one line, no
+   quotes:
+   ```bash
+   printf '%s' 'github_pat_XXXX…' > packaging/.update-token
+   ```
+
+That's it. `packaging/bundle.sh` picks it up and bakes it in; it's passed to curl
+on stdin, so it never appears in the process list. Rotate by replacing the file
+and cutting a new release. A build **without** the token still works — OTA is just
+inactive (the script prints `OTA update token: ABSENT`).
+
+**Each release MUST attach the `.dmg`** (the updater downloads it):
 
 ```bash
-packaging/bundle.sh                                   # builds dist/*.dmg (signed)
+packaging/bundle.sh                                   # bakes the token, builds dist/*.dmg (signed)
 gh release upload vX.Y.Z dist/AI-Usage-Monitor-X.Y.Z.dmg
 ```
 
 Compatibility: updates ship from **tagged releases** (not raw `main`); the DB
 migrates itself on launch (`PRAGMA user_version`); the native-messaging host path
-stays valid because the app updates in place. The browser extension is separate —
-bump it in lockstep when the native-messaging message shape changes (it rarely
-does).
+stays valid because the app updates in place and re-registers each launch. The
+browser extension is separate — bump it in lockstep when the native-messaging
+message shape changes (it rarely does).
 
 ## Uninstall
 
