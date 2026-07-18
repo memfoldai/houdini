@@ -52,18 +52,30 @@ CREATE TABLE IF NOT EXISTS settings (
 
 const SCHEMA_VERSION: i64 = 5;
 
+const MIGRATIONS: &[&str] = &[];
+
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
-    let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+    let mut version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
+
     if version < SCHEMA_VERSION {
-        conn.execute_batch(
-            "DROP TABLE IF EXISTS presence; DROP TABLE IF EXISTS turns; DROP TABLE IF EXISTS sessions;",
-        )?;
+        step(conn, SCHEMA, SCHEMA_VERSION)?;
+        version = SCHEMA_VERSION;
     }
-    conn.execute_batch(SCHEMA)?;
-    if version < SCHEMA_VERSION {
-        conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    for (offset, sql) in MIGRATIONS.iter().enumerate() {
+        let target = SCHEMA_VERSION + 1 + offset as i64;
+        if version < target {
+            step(conn, sql, target)?;
+            version = target;
+        }
     }
     Ok(())
+}
+
+fn step(conn: &Connection, sql: &str, target: i64) -> rusqlite::Result<()> {
+    let tx = conn.unchecked_transaction()?;
+    tx.execute_batch(sql)?;
+    tx.pragma_update(None, "user_version", target)?;
+    tx.commit()
 }
 
 fn open_keyed(path: &Path, key: &[u8]) -> rusqlite::Result<Connection> {
@@ -365,6 +377,35 @@ mod tests {
             );
         }
         assert!(!std::fs::read(&path).unwrap().starts_with(b"SQLite format 3\0"), "file is encrypted, not plaintext SQLite");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn reopening_an_older_version_db_keeps_its_rows() {
+        let dir = std::env::temp_dir().join(format!("aum-nodrop-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("v.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let key = [3u8; 32];
+
+        {
+            let s = Store::open(&path, &key).unwrap();
+            let (id, _) = s.upsert_session(&upsert("chatgpt-web", "c1", 5, 1)).unwrap();
+            s.add_turn(id, 0, Role::User, "keep me", 1).unwrap();
+        }
+        {
+            let c = open_keyed(&path, &key).unwrap();
+            c.pragma_update(None, "user_version", SCHEMA_VERSION - 1).unwrap();
+        }
+        {
+            let s = Store::open(&path, &key).unwrap();
+            assert_eq!(
+                s.session_count().unwrap(),
+                1,
+                "an older-version DB is migrated in place, never dropped"
+            );
+            assert_eq!(s.session_turns(1).unwrap().len(), 1, "its turns survive too");
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 }
