@@ -3,6 +3,8 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::ptr::NonNull;
 use std::rc::Rc;
+use std::sync::mpsc::{self, Receiver};
+use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use block2::RcBlock;
@@ -21,6 +23,7 @@ use ai_usage_monitor::ingest::Ingestor;
 use ai_usage_monitor::store::{ActivityStats, Store, PAUSE_UNTIL_KEY};
 
 use crate::tray_glyph::{self, Glyph};
+use crate::updater::{self, Update};
 
 const BASE_TICK_S: f64 = 1.0;
 
@@ -29,6 +32,8 @@ const RECENT_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 const ACTIVE_WINDOW_MS: i64 = 45_000;
 
 const HEARTBEAT_MS: i64 = 30_000;
+
+const UPDATE_CHECK_MS: i64 = 6 * 60 * 60 * 1000;
 
 const PAUSE_15M_MS: i64 = 15 * 60 * 1000;
 const PAUSE_1H_MS: i64 = 60 * 60 * 1000;
@@ -55,12 +60,17 @@ struct Runtime {
     paused_until: Cell<Option<i64>>,
     start: Instant,
 
+    last_update_check: Cell<i64>,
+    update_rx: RefCell<Option<Receiver<Option<Update>>>>,
+    available_update: RefCell<Option<Update>>,
+
     tray: RefCell<Option<TrayIcon>>,
     timer: RefCell<Option<Retained<NSTimer>>>,
     painted: Cell<Option<Glyph>>,
     status_item: MenuItem,
     detail_item: MenuItem,
     resume_item: MenuItem,
+    update_item: MenuItem,
     ids: MenuIds,
 }
 
@@ -70,6 +80,7 @@ struct MenuIds {
     pause_indef: MenuId,
     resume: MenuId,
     show_data: MenuId,
+    update: MenuId,
     quit: MenuId,
 }
 
@@ -153,12 +164,14 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         pause_indef: MenuId::new("pause_indef"),
         resume: MenuId::new("resume"),
         show_data: MenuId::new("show_data"),
+        update: MenuId::new("update"),
         quit: MenuId::new("quit"),
     };
 
     let status_item = MenuItem::new("Starting…", false, None);
     let detail_item = MenuItem::new("", false, None);
     let resume_item = MenuItem::with_id(ids.resume.clone(), "Resume now", false, None);
+    let update_item = MenuItem::with_id(ids.update.clone(), "Check for updates…", true, None);
 
     Rc::new(Runtime {
         store,
@@ -172,12 +185,16 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         heartbeat_at: Cell::new(0),
         paused_until: Cell::new(None),
         start: Instant::now(),
+        last_update_check: Cell::new(i64::MIN),
+        update_rx: RefCell::new(None),
+        available_update: RefCell::new(None),
         tray: RefCell::new(None),
         timer: RefCell::new(None),
         painted: Cell::new(None),
         status_item,
         detail_item,
         resume_item,
+        update_item,
         ids,
     })
 }
@@ -225,6 +242,7 @@ fn install_tray(rt: &Rc<Runtime>) {
     menu.append(&rt.resume_item).expect("resume");
     menu.append(&PredefinedMenuItem::separator()).expect("sep2");
     menu.append(&show_data).expect("show_data");
+    menu.append(&rt.update_item).expect("update");
     menu.append(&quit).expect("quit");
 
     let tray = TrayIconBuilder::new()
@@ -285,6 +303,11 @@ fn tick(rt: &Rc<Runtime>) {
         }
     }
 
+    if due(&rt.last_update_check, clock.mono_ms, UPDATE_CHECK_MS) {
+        spawn_update_check(rt);
+    }
+    poll_update_check(rt);
+
     let stats = rt
         .store
         .activity_stats(clock.wall_ms - RECENT_WINDOW_MS)
@@ -293,6 +316,54 @@ fn tick(rt: &Rc<Runtime>) {
     paint(rt, glyph);
     refresh_menu(rt, glyph, clock.wall_ms, &stats);
     drain_menu_events(rt);
+}
+
+fn spawn_update_check(rt: &Rc<Runtime>) {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(updater::check());
+    });
+    *rt.update_rx.borrow_mut() = Some(rx);
+}
+
+fn poll_update_check(rt: &Rc<Runtime>) {
+    let result = rt.update_rx.borrow().as_ref().and_then(|rx| rx.try_recv().ok());
+    let Some(result) = result else { return };
+    *rt.update_rx.borrow_mut() = None;
+    match result {
+        Some(update) => {
+            rt.update_item.set_text(format!("Install update {}", update.version));
+            *rt.available_update.borrow_mut() = Some(update);
+        }
+        None => {
+            rt.update_item.set_text("You're on the latest version");
+            *rt.available_update.borrow_mut() = None;
+        }
+    }
+}
+
+fn do_update(rt: &Rc<Runtime>) {
+    let update = rt.available_update.borrow().clone();
+    match update {
+        Some(update) => {
+            rt.update_item.set_text("Installing update…");
+            match updater::install(&update) {
+                Ok(()) => {
+                    if let Some(mtm) = MainThreadMarker::new() {
+                        NSApplication::sharedApplication(mtm).terminate(None);
+                    }
+                }
+                Err(e) => {
+                    log::error!("update install failed: {e}");
+                    rt.update_item.set_text("Update failed — see log");
+                }
+            }
+        }
+        None => {
+            rt.update_item.set_text("Checking for updates…");
+            spawn_update_check(rt);
+        }
+    }
 }
 
 fn due(last: &Cell<i64>, now_mono_ms: i64, interval_ms: i64) -> bool {
@@ -356,6 +427,8 @@ fn drain_menu_events(rt: &Rc<Runtime>) {
         let id = &ev.id;
         if id == &rt.ids.show_data {
             do_show_data(rt);
+        } else if id == &rt.ids.update {
+            do_update(rt);
         } else if id == &rt.ids.quit {
             do_quit(rt);
         } else if id == &rt.ids.resume {

@@ -111,6 +111,31 @@ host manifest `--install-browser-host` writes, and they talk only over local nat
 messaging. Upgrade them together. Remove with `--uninstall-browser-host` and by
 removing the unpacked extension.
 
+## 6. Over-the-air updates
+
+The installed app updates itself from GitHub Releases — no re-download by hand.
+
+**For teammates:** it checks on launch and every ~6 hours. When a newer release
+exists, the menu's update entry reads **Install update X.Y.Z**; click it and the
+app replaces itself and relaunches. There is also a manual **Check for updates…**
+entry. Updates need the app installed in **/Applications** and the GitHub CLI
+(`gh`) authenticated to this private repo (the team already has it); no embedded
+tokens, no notarization.
+
+**For the maintainer — each release MUST attach the `.dmg`** (the updater
+downloads it):
+
+```bash
+packaging/bundle.sh                                   # builds dist/*.dmg (signed)
+gh release upload vX.Y.Z dist/AI-Usage-Monitor-X.Y.Z.dmg
+```
+
+Compatibility: updates ship from **tagged releases** (not raw `main`); the DB
+migrates itself on launch (`PRAGMA user_version`); the native-messaging host path
+stays valid because the app updates in place. The browser extension is separate —
+bump it in lockstep when the native-messaging message shape changes (it rarely
+does).
+
 ## Uninstall
 
 Quit from the menu, drag the app to the Trash, and remove its local data:

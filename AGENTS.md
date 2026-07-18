@@ -75,6 +75,7 @@ Two content sources, one store:
   `exported_seq` per-session high-water mark. **`export.rs`** — one flat row per
   turn to `data/interactions/YYYY-MM-DD.jsonl`, schema `aum/3`. No content-free
   "presence" signal is collected (it had no research value).
+- **Updates — `updater.rs`** (macOS). Checks GitHub Releases via `gh` (team auth, no embedded token), compares to `CARGO_PKG_VERSION`, and on the menu action downloads the release `.dmg`, verifies signing, atomically swaps the `/Applications` bundle, and relaunches. Gated to an installed `.app`.
 - **`main.rs` → `app.rs`** (NSApplication Accessory, tray, timer). The tray is
   created in `applicationDidFinishLaunching:` — tray-icon requires a *running*
   run loop. The menu shows the app version (`CARGO_PKG_VERSION`).

@@ -8,6 +8,8 @@ mod diagnose;
 mod nativehost;
 #[cfg(target_os = "macos")]
 mod tray_glyph;
+#[cfg(target_os = "macos")]
+mod updater;
 
 #[cfg(target_os = "macos")]
 fn main() {
@@ -31,6 +33,13 @@ fn main() {
 
     if args.iter().any(|a| a == "--diagnose") {
         diagnose::run();
+        return;
+    }
+    if args.iter().any(|a| a == "--check-update") {
+        match updater::check() {
+            Some(u) => println!("update available: {} (current {})", u.version, updater::current_version()),
+            None => println!("up to date ({})", updater::current_version()),
+        }
         return;
     }
 

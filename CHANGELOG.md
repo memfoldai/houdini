@@ -5,6 +5,17 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.4.5] — 2026-07-18
+
+### Added
+- **Over-the-air updates from GitHub Releases.** The installed app checks on
+  launch and every ~6 hours; when a newer release exists the menu offers **Install
+  update X.Y.Z** (plus a manual **Check for updates…**), which downloads the
+  release `.dmg`, verifies its signature, atomically replaces the app in
+  `/Applications`, and relaunches. Uses the team's existing `gh` auth (no embedded
+  tokens, no notarization); self-signed. Gated to an installed `.app` only (dev
+  builds are skipped). Each release must attach the `.dmg` (see INSTALL.md §6).
+
 ## [0.4.4] — 2026-07-18
 
 ### Fixed
@@ -340,6 +351,7 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.4.5]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.5
 [0.4.4]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.4
 [0.4.3]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.3
 [0.4.2]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.2
