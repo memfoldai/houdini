@@ -81,7 +81,7 @@ a wrong export, a span/token mismatch, a corrupt file — `load` returns an erro
 the app logs it, and it continues with **deterministic-only** redaction. A model
 that would silently redact nothing is therefore never trusted to stand in for
 the redaction layer. Verify this yourself with the fail-closed check in
-[../VERIFICATION.md](../VERIFICATION.md) step 5.
+[../CONTRIBUTING.md](../CONTRIBUTING.md) step 5.
 
 ## Default labels (personal identifiers only)
 

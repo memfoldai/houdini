@@ -114,8 +114,10 @@ build alone.
 
 ## Further reading
 
-- [VERIFICATION.md](VERIFICATION.md) — the human-gated checklist.
-- [INSTALL.md](INSTALL.md) — build/sign/notarize the .app, distribute, install.
+- [CONTRIBUTING.md](CONTRIBUTING.md) — build, run, and the human-gated verification checklist.
+- [docs/architecture.md](docs/architecture.md) — how it works: codemap, data flow, invariants.
+- [docs/privacy.md](docs/privacy.md) — the data/consent model.
+- [docs/install.md](docs/install.md) — build/sign/notarize the .app, distribute, install.
 - [docs/grouping.md](docs/grouping.md) — entity grouping + analysis-time clustering.
 - [docs/NER.md](docs/NER.md) — optional GLiNER-PII layer.
 - [README.md](README.md) — what this is and why, for humans.

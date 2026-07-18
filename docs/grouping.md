@@ -28,9 +28,9 @@ one adapter.
 
 The higher-level question — *what* was the AI used for (research, coding,
 writing; which topic) — is the one place semantics are unavoidable. It runs
-**offline, over the exported and redacted day files, never in the daemon**:
+**offline, over the exported, redacted `interactions.jsonl`, never in the app**:
 
-1. Batch a labeler over each `interaction` record's redacted `turns`, emitting a
+1. Batch a labeler over each redacted `interaction` row's text, emitting a
    task/topic label.
 2. An LLM fits here and matches the "async job, not every frame" intuition: it
    runs **once per session, offline, on already-redacted text**, so it sees no
@@ -39,14 +39,15 @@ writing; which topic) — is the one place semantics are unavoidable. It runs
 
 ## Kept out of the daemon, on purpose
 
-- No LLM or network call in the monitor — it would break the
-  [local-only guarantee](../SECURITY.md) for a labeling task that belongs at
-  analysis time.
+- No LLM or network call in the app — it would break the
+  [local-only guarantee](privacy.md) for a labeling task that belongs at analysis
+  time.
 - No content classifier in capture — provider comes from source metadata, task/
   topic comes from the offline analysis pass.
 
 ## Known gap
 
-**Native desktop apps** (ChatGPT.app, Claude.app) keep their content server-side
-and aren't captured. Web ChatGPT/Claude are captured by the browser extension;
-Gemini web isn't parsed yet.
+**Native desktop *chat* apps** (ChatGPT.app, Claude.app) keep conversations
+server-side and are out of scope (see the README's honest limits). Web ChatGPT,
+Claude, and Gemini are captured by the browser extension; Codex run inside the
+ChatGPT desktop app is captured via its `~/.codex` transcripts.

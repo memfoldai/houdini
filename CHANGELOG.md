@@ -116,7 +116,7 @@ include behavior changes.
   release `.dmg`, verifies its signature, atomically replaces the app in
   `/Applications`, and relaunches. Uses the team's existing `gh` auth (no embedded
   tokens, no notarization); self-signed. Gated to an installed `.app` only (dev
-  builds are skipped). Each release must attach the `.dmg` (see INSTALL.md §6).
+  builds are skipped). Each release must attach the `.dmg` (see docs/install.md §6).
 
 ## [0.4.4] — 2026-07-18
 

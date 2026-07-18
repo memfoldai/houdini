@@ -1,150 +1,59 @@
-# houdini
+# Houdini
 
-A minimal, menu-bar-only macOS app that records **what people use AI for** — the
-observation instrument for an internal AI-usage study. It reads the actual
-prompts and replies from AI tools' own local logs and web chats; it does **not**
-capture the screen and does **not** watch network traffic.
+Houdini is a private, local-only macOS menu-bar app that records **what you use AI for** — the observation instrument for an internal AI-usage study. It reads the real prompts and replies from AI tools' own local logs and web chats. It does **not** capture the screen and does **not** watch network traffic.
 
-It is deliberately small and standalone: its own repo, no cloud, no dashboards,
-no coupling to any other product. It runs on the study team's own machines with
-per-install consent and a visible menu-bar indicator.
+[![Release](https://img.shields.io/github/v/release/memfoldai/houdini?sort=semver)](https://github.com/memfoldai/houdini/releases)
+[![Build](https://img.shields.io/github/actions/workflow/status/memfoldai/houdini/ci.yml?branch=main)](https://github.com/memfoldai/houdini/actions/workflows/ci.yml)
+[![Platform](https://img.shields.io/badge/macOS-14%2B-black?logo=apple)](#install)
+[![Downloads](https://img.shields.io/github/downloads/memfoldai/houdini/total)](https://github.com/memfoldai/houdini/releases)
+[![License](https://img.shields.io/github/license/memfoldai/houdini)](LICENSE)
 
-## How it detects AI use
+<!-- Screenshot slot: drop a menu-bar dropdown capture at docs/menu.png and it renders here.
+     ![Houdini menu bar](docs/menu.png) -->
 
-Two content sources, both reading the real messages — no screenshots, no OCR, no
-guessing from pixels, and no content-free "an app was open" noise:
+## Features
 
-**Transcript ingestion (CLI/agent tools).** Coding agents already persist every
-interaction to a structured local transcript. The monitor reads those directly,
-so it gets the exact prompt and reply, real timestamps, the model, and a session
-id — zero false positives, full coverage across desktops and Spaces. Adapters:
+- **Reads the real messages**, from two sources — no screenshots, no OCR, no "an app was open" noise.
+  - **CLI/agent tools** via their local transcripts: Claude Code, Codex (incl. the Codex view of the new ChatGPT desktop app), OpenClaw.
+  - **Web chats** via an optional browser extension: ChatGPT, Claude, and Gemini.
+- **Local-only and encrypted at rest.** Nothing uploads; the store is an encrypted SQLite database whose key lives in the macOS Keychain.
+- **Redacted before it touches disk** — secrets, emails, cards, SSNs, phones.
+- **Menu-bar only**, no window, no permission prompts. Pause anytime.
+- **Updates itself** over the air from GitHub Releases.
 
-| Tool | Reads |
-|---|---|
-| Claude Code | `~/.claude/projects/*/*.jsonl` |
-| Codex | `~/.codex/**/rollout-*.jsonl` |
-| OpenClaw / almaclaw | `~/.openclaw*/agents/*/sessions/*.jsonl` |
+## Install
 
-Adding a tool is adding one small adapter; the rest of the pipeline is shared. New
-transcripts are detected instantly via file-system events (FSEvents), so the
-menu-bar indicator reacts in real time.
+Download the latest [`.dmg`](https://github.com/memfoldai/houdini/releases), drag **Houdini** to Applications, and right-click → **Open** once. To also capture web chats, load the bundled browser extension. Full steps, uninstall, and distribution: **[docs/install.md](docs/install.md)**.
 
-**Browser extension (web chats).** Web ChatGPT/Claude leave no local transcript.
-An optional Chromium extension ([extension/](extension/README.md)) reads each
-exchange — the prompt from the site's own API request, the reply from the rendered
-message — and delivers it to the app over local native messaging, never over the
-network. It works in background tabs. Covers ChatGPT and Claude web today.
+## Usage
 
-Both sources produce the **same standardized record**: the actual prompt/response
-turns with provider/tool/surface/model. Nothing that isn't a real AI message is
-recorded.
+Click the menu-bar icon — its shape is the status: a **hollow ring** when quiet, a **filled disc** while recording, **two bars** when paused. The menu shows today's session count and:
+
+- **Take a break** — pause for 15 min, an hour, or until you're back.
+- **Export my data…** — write a flat, one-row-per-message snapshot (`data/interactions.jsonl`) and reveal it.
+- **Quit**.
+
+## How it works
+
+Every source — CLI transcript or web chat — is normalized into the **same one-row-per-turn record** (provider, tool, surface, model, redacted text) in the encrypted store. The web extension is a thin, local bridge: it reads the exchange in your own tab and hands it to the running app over a local socket; only the app writes the database. See **[docs/architecture.md](docs/architecture.md)**.
+
+## Privacy
+
+Houdini is built for a consenting internal study, so the data model is deliberate: **local-only, encrypted at rest, content redacted, tool/provider identity kept in the clear** (that's the research signal), and pausable at any time. What exactly is recorded, and what never leaves the device, is spelled out in **[docs/privacy.md](docs/privacy.md)**.
 
 ### Honest limits
 
-- **The browser extension is installed per browser**, and its per-site extraction
-  tracks reverse-engineered page shapes, so a site redesign can need a small fix.
-  Without it, web chats are uncaptured (CLI/agent tools are still captured).
-- **Native desktop apps** (ChatGPT.app, Claude.app) keep their content
-  server-side and aren't captured — use the CLI/agent tools or the web with the
-  extension.
-- **Gemini on the web** isn't parsed yet (obfuscated batch transport).
+- The extension is loaded per browser and tracks each site's page shape, so a redesign can need a small selector fix.
+- **Native desktop *chat* apps** (ChatGPT.app, Claude.app) keep conversations server-side/encrypted and are **out of scope** — capturing them would require screen-recording, Accessibility, or a MITM proxy, all of which Houdini refuses. Use the web (extension) or CLI/agent tools. (Codex run inside the ChatGPT desktop app *is* captured, via its `~/.codex` transcripts.)
 
-## Privacy model
+## Contributing
 
-- **Local-only.** No network egress anywhere in the code path. Nothing uploads.
-- **No screen capture, no TCC permission, no network monitoring.** The app reads
-  files the user already owns; the extension reads the page in the user's own
-  browser. It never asks for Screen Recording or Accessibility.
-- **Encrypted at rest.** The store is an encrypted SQLite DB (SQLCipher); the key
-  lives in the macOS Keychain. Nothing readable is written to a folder.
-- **Content is redacted** — offline, before anything touches disk — for secrets
-  (provider API keys, private keys), emails, Luhn-checked cards, SSNs, phones.
-- **Identity is kept in the clear** on purpose: for a consenting internal study
-  the provider/tool (`anthropic`, `claude-code`) *is* the research signal. Only
-  the message content is redacted.
-- Pause anytime from the menu; while paused nothing new is recorded.
-
-## Data storage (encrypted) & export
-
-The store is an **encrypted SQLite database** (SQLCipher, AES-256) — the source of
-truth. The encryption key is generated once and kept in the **macOS Keychain**, so
-the on-disk data is never plaintext; nothing readable sits in a folder. This is the
-production-standard way to hold sensitive local data at rest, and it stays fully
-queryable for on-device analytics (a worker opens it with the Keychain key).
-
-**Export on demand.** The menu's **Export my data…** writes a flat, OLAP-ready
-snapshot to `data/interactions.jsonl` and reveals it — one row per message, so a
-warehouse reads it with no unnesting or joins:
-
-```json
-{"schema":"aum/3","kind":"interaction","event_id":"<device>:<session>:0",
- "device":"…","day":"2026-07-16","ts_ms":…,"provider":"anthropic",
- "tool":"claude-code","surface":"cli","model":"claude-sonnet-5",
- "session_id":"…","turn_index":0,"role":"user","text":"…","text_chars":42}
-```
-
-Every source (Claude Code, Codex, OpenClaw, ChatGPT/Claude web) produces this exact
-row shape, so the table is uniform. Each row has a stable `event_id` and the device
-id, so exports from any number of machines merge trivially:
-`SELECT provider, count(*) FROM read_json_auto('interactions.jsonl') WHERE role='assistant' GROUP BY 1`.
-Provider grouping and semantic clustering are analysis-time jobs — see
-[docs/grouping.md](docs/grouping.md).
-
-## Menu bar & status
-
-The icon is a monochrome template glyph whose **shape** shows state (macOS tints
-it): a **hollow ring** when quiet, a **filled disc** while AI activity is being
-recorded (it decays back to the ring a while after the last interaction), and
-**two bars** when paused. Click it for a header showing the app version, a plain
-status line, a count of sessions recorded today, and:
-
-- **Take a break** — for 15 minutes, an hour, or until you're back. While paused
-  nothing is recorded.
-- **Export my data…** — writes a decrypted snapshot (`data/interactions.jsonl`) and reveals it.
-- **Quit**.
-
-## Develop
-
-Requires a recent stable Rust toolchain and macOS 14+.
-
-```bash
-cargo test                       # portable core + integration (runs anywhere)
-cargo build --release
-./target/release/houdini --diagnose   # one-shot: transcript counts
-./target/release/houdini              # run the menu-bar app
-```
-
-`--diagnose` prints how many interactions each transcript adapter can read right
-now — no content, just counts. (Web chats come via the extension; run the app.)
-
-Signing is recommended for a stable install identity, but the app depends on no
-TCC grant, so a rebuild never silently loses anything.
-
-## Configuration
-
-`~/Library/Application Support/ai.memfold.houdini/config.json` is created
-on first run. Operator knobs:
-
-| Key | Default | Purpose |
-|---|---|---|
-| `transcript_poll_ms` | 2000 | Fallback scan cadence (changes are also caught instantly via FSEvents) |
-| `ner_model_dir` | unset | Enables the [NER redaction layer](docs/NER.md) (`--features ner`) |
-
-`install_id` is a random per-install device id, stable across runs.
-
-## Documentation
-
-- **[INSTALL.md](INSTALL.md)** — build the app, distribute it, install it.
-- **[VERIFICATION.md](VERIFICATION.md)** — the human-gated proof checklist.
-- **[SECURITY.md](SECURITY.md)** — data-handling guarantees and posture.
-- **[CHANGELOG.md](CHANGELOG.md)** — what changed in each version.
-- **[docs/grouping.md](docs/grouping.md)** — entity grouping + analysis-time
-  clustering.
-- **[docs/NER.md](docs/NER.md)** — the optional NER redaction layer.
-- **[AGENTS.md](AGENTS.md)** — for coding agents: commands, invariants.
+Build from source, load the extension, and the verification checklist: **[CONTRIBUTING.md](CONTRIBUTING.md)**. Security posture and how to report a concern: **[SECURITY.md](SECURITY.md)**.
 
 ## Scope
 
-The study's observation instrument, nothing more: for internal, consenting
-participants only. Distributed privately to the team's own machines — not for
-monitoring end-users, and not published.
+The study's observation instrument, nothing more: for internal, consenting participants on their own machines. Not for monitoring end-users. Built by Rahul Biliyar (<rahul@memfold.ai>).
+
+## License
+
+[MIT](LICENSE).
