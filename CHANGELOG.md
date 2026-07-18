@@ -5,6 +5,21 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.4.7] — 2026-07-18
+
+### Changed
+- **Data is now encrypted at rest.** The store is an encrypted SQLite database
+  (SQLCipher / AES-256, `bundled-sqlcipher`), with the key generated once and kept
+  in the **macOS Keychain** (`src/keychain.rs`) — the production-standard way to
+  hold sensitive local data. Nothing readable is written to a folder anymore. On
+  first launch an existing plaintext DB is moved aside (`*.pre-encryption.bak`) and
+  rebuilt encrypted; validated end-to-end on a real DB. DB schema is v5.
+- **Export is now on demand.** The automatic plaintext `data/interactions/…jsonl`
+  day-files are gone. The menu's **Export my data…** writes a single flat,
+  OLAP-ready `data/interactions.jsonl` snapshot (one row per turn) and reveals it —
+  so the default at-rest state is encrypted and plaintext exists only when you ask
+  for it. The `flush_ms` config knob is removed.
+
 ## [0.4.6] — 2026-07-18
 
 ### Added
@@ -370,6 +385,7 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.4.7]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.7
 [0.4.6]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.6
 [0.4.5]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.5
 [0.4.4]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.4

@@ -55,6 +55,8 @@ recorded.
 - **No screen capture, no TCC permission, no network monitoring.** The app reads
   files the user already owns; the extension reads the page in the user's own
   browser. It never asks for Screen Recording or Accessibility.
+- **Encrypted at rest.** The store is an encrypted SQLite DB (SQLCipher); the key
+  lives in the macOS Keychain. Nothing readable is written to a folder.
 - **Content is redacted** — offline, before anything touches disk — for secrets
   (provider API keys, private keys), emails, Luhn-checked cards, SSNs, phones.
 - **Identity is kept in the clear** on purpose: for a consenting internal study
@@ -62,22 +64,17 @@ recorded.
   the message content is redacted.
 - Pause anytime from the menu; while paused nothing new is recorded.
 
-## Data format (OLAP-ready)
+## Data storage (encrypted) & export
 
-The local store is SQLite (the source of truth). New records are written
-automatically — no manual export — into a day-partitioned JSONL **flat fact
-table**, one row per message, so a warehouse reads it with no unnesting or joins:
+The store is an **encrypted SQLite database** (SQLCipher, AES-256) — the source of
+truth. The encryption key is generated once and kept in the **macOS Keychain**, so
+the on-disk data is never plaintext; nothing readable sits in a folder. This is the
+production-standard way to hold sensitive local data at rest, and it stays fully
+queryable for on-device analytics (a worker opens it with the Keychain key).
 
-```
-data/interactions/YYYY-MM-DD.jsonl   # one row per message (turn)
-```
-
-Each row is flat and denormalized, has a stable `event_id` (so a re-load dedupes
-trivially), and carries the day + device (so files from any number of machines
-merge by concatenation). Turns are written **incrementally** — a growing session
-appends only its new turns, never re-emitting the whole thing.
-
-`data/interactions/YYYY-MM-DD.jsonl` — one row per turn:
+**Export on demand.** The menu's **Export my data…** writes a flat, OLAP-ready
+snapshot to `data/interactions.jsonl` and reveals it — one row per message, so a
+warehouse reads it with no unnesting or joins:
 
 ```json
 {"schema":"aum/3","kind":"interaction","event_id":"<device>:<session>:0",
@@ -86,14 +83,12 @@ appends only its new turns, never re-emitting the whole thing.
  "session_id":"…","turn_index":0,"role":"user","text":"…","text_chars":42}
 ```
 
-Every source (Claude Code, Codex, ChatGPT web, Claude web) produces this exact
-row shape, so the table is uniform regardless of where the AI was used.
-
-A query is a flat scan — e.g. DuckDB:
-`SELECT provider, count(*) FROM read_json_auto('data/interactions/*.jsonl') WHERE role='assistant' GROUP BY 1`.
-Provider grouping (Claude app + CLI + web → one entity) is deterministic at
-ingest; higher-level semantic clustering (research vs build, topic) is an
-analysis-time job over these files — see [docs/grouping.md](docs/grouping.md).
+Every source (Claude Code, Codex, OpenClaw, ChatGPT/Claude web) produces this exact
+row shape, so the table is uniform. Each row has a stable `event_id` and the device
+id, so exports from any number of machines merge trivially:
+`SELECT provider, count(*) FROM read_json_auto('interactions.jsonl') WHERE role='assistant' GROUP BY 1`.
+Provider grouping and semantic clustering are analysis-time jobs — see
+[docs/grouping.md](docs/grouping.md).
 
 ## Menu bar & status
 
@@ -105,7 +100,7 @@ status line, a count of sessions recorded today, and:
 
 - **Take a break** — for 15 minutes, an hour, or until you're back. While paused
   nothing is recorded.
-- **Show my data** — reveals the day-partitioned data folder in Finder.
+- **Export my data…** — writes a decrypted snapshot (`data/interactions.jsonl`) and reveals it.
 - **Quit**.
 
 ## Develop
@@ -132,8 +127,7 @@ on first run. Operator knobs:
 
 | Key | Default | Purpose |
 |---|---|---|
-| `transcript_poll_ms` | 5000 | How often to scan transcripts for new interactions |
-| `flush_ms` | 15000 | How often to write new records to day files |
+| `transcript_poll_ms` | 2000 | Fallback scan cadence (changes are also caught instantly via FSEvents) |
 | `ner_model_dir` | unset | Enables the [NER redaction layer](docs/NER.md) (`--features ner`) |
 
 `install_id` is a random per-install device id, stable across runs.
@@ -148,9 +142,6 @@ on first run. Operator knobs:
   clustering.
 - **[docs/NER.md](docs/NER.md)** — the optional NER redaction layer.
 - **[AGENTS.md](AGENTS.md)** — for coding agents: commands, invariants.
-
-Per-module design and rationale live in the doc comment at the top of each file
-in `src/`, next to the code they explain.
 
 ## Scope
 

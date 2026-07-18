@@ -3,8 +3,7 @@ use std::io::{Read, Write};
 use serde::Deserialize;
 
 use ai_usage_monitor::attribution::provider;
-use ai_usage_monitor::config::{self, Paths};
-use ai_usage_monitor::export;
+use ai_usage_monitor::config::Paths;
 use ai_usage_monitor::redact;
 use ai_usage_monitor::store::{Role, SessionUpsert, Store};
 
@@ -35,22 +34,14 @@ pub fn run() {
         }
     };
     ai_usage_monitor::logging::init(&paths.log_file);
-    let cfg = config::load_or_init(&paths.config_file).expect("load config");
-    let store = Store::open(&paths.db_file).expect("open store");
+    let store = Store::open(&paths.db_file, &crate::keychain::db_key()).expect("open store");
     log::info!("native-host: started (browser web-chat capture)");
 
     let mut stdin = std::io::stdin().lock();
     while let Some(bytes) = read_message(&mut stdin) {
         match handle(&store, &bytes) {
             Ok(0) => {}
-            Ok(n) => {
-                log::info!("native-host: stored {n} web turn(s)");
-                if let Err(e) =
-                    export::flush_pending(&store, &cfg.install_id, &paths.export_dir, now_ms())
-                {
-                    log::error!("native-host: flush error: {e}");
-                }
-            }
+            Ok(n) => log::info!("native-host: stored {n} web turn(s)"),
             Err(e) => log::warn!("native-host: dropped a message: {e}"),
         }
     }
@@ -99,12 +90,11 @@ fn handle(store: &Store, bytes: &[u8]) -> Result<usize, String> {
         })
         .map_err(|e| e.to_string())?;
 
-    let mut prev = store
-        .session_turns_from(id, (existing - 1).max(0))
-        .map_err(|e| e.to_string())?
-        .pop()
-        .filter(|_| existing > 0)
-        .map(|t| (t.role, t.redacted_text));
+    let mut prev = if existing > 0 {
+        store.session_turns(id).map_err(|e| e.to_string())?.pop().map(|t| (t.role, t.redacted_text))
+    } else {
+        None
+    };
 
     let mut added = 0i64;
     for turn in &msg.turns {

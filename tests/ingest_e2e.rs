@@ -1,9 +1,3 @@
-//! End-to-end of the Layer A pipeline as the running daemon drives it:
-//! discover a transcript under a temp HOME, ingest it (with incremental
-//! fingerprinting), redact + store, export to a day file, and verify the
-//! structured record. Then prove the incremental path: an unchanged file is
-//! skipped, and appended turns are picked up.
-
 use std::fs;
 
 use ai_usage_monitor::export;
@@ -24,7 +18,6 @@ fn running_pipeline_ingests_redacts_and_exports() {
     let _ = fs::remove_dir_all(&home);
     let data_dir = home.join("data");
 
-    // A fresh transcript with a seeded secret in the prompt.
     let path = write_transcript(
         &home,
         &[
@@ -34,19 +27,15 @@ fn running_pipeline_ingests_redacts_and_exports() {
     );
 
     let store = Store::open_in_memory().unwrap();
-    // since_ms = 0 so the fresh file always qualifies regardless of wall clock.
+
     let mut ingestor = Ingestor::new(home.clone(), 0);
 
     let stats = ingestor.poll(&store);
     assert_eq!(stats.sessions, 1);
     assert_eq!(stats.new_turns, 2);
 
-    // Export and read the OLAP-flat interaction rows back (one row per turn).
-    assert_eq!(
-        export::flush_pending(&store, "dev-1", &data_dir, 1).unwrap(),
-        2
-    );
-    let body = fs::read_to_string(data_dir.join("interactions/2026-07-16.jsonl")).unwrap();
+    let path = export::export_snapshot(&store, "dev-1", &data_dir).unwrap();
+    let body = fs::read_to_string(&path).unwrap();
     let rows: Vec<serde_json::Value> = body
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
@@ -63,15 +52,12 @@ fn running_pipeline_ingests_redacts_and_exports() {
         "secret must be redacted before storage"
     );
 
-    // Unchanged file on the next poll → nothing re-ingested.
     assert_eq!(
         ingestor.poll(&store).new_turns,
         0,
         "unchanged transcript is skipped"
     );
 
-    // The session grew by one turn → only that turn is picked up.
-    // (Rewrite with an extra line and bump mtime so the fingerprint changes.)
     std::thread::sleep(std::time::Duration::from_millis(10));
     write_transcript(
         &home,
@@ -85,6 +71,6 @@ fn running_pipeline_ingests_redacts_and_exports() {
     assert_eq!(grown.new_turns, 1, "only the appended turn is added");
     assert_eq!(store.session_turns(1).unwrap().len(), 3);
 
-    let _ = path; // path handle kept for clarity
+    let _ = path;
     fs::remove_dir_all(&home).ok();
 }

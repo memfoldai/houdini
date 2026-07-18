@@ -32,7 +32,6 @@ CREATE TABLE IF NOT EXISTS sessions (
     started_at    INTEGER NOT NULL,
     ended_at      INTEGER NOT NULL,
     message_count INTEGER NOT NULL DEFAULT 0,
-    exported_seq  INTEGER NOT NULL DEFAULT 0,
     UNIQUE (tool, external_id)
 );
 CREATE TABLE IF NOT EXISTS turns (
@@ -51,7 +50,7 @@ CREATE TABLE IF NOT EXISTS settings (
 );
 "#;
 
-const SCHEMA_VERSION: i64 = 4;
+const SCHEMA_VERSION: i64 = 5;
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -67,16 +66,59 @@ fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
+fn open_keyed(path: &Path, key: &[u8]) -> rusqlite::Result<Connection> {
+    let conn = Connection::open(path)?;
+    conn.execute_batch(&format!("PRAGMA key = \"x'{}'\";", to_hex(key)))?;
+    Ok(conn)
+}
+
+fn is_readable(conn: &Connection) -> bool {
+    conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0)).is_ok()
+}
+
+fn configure(conn: &Connection) -> rusqlite::Result<()> {
+    conn.pragma_update(None, "journal_mode", "WAL")?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    migrate(conn)
+}
+
+fn move_aside_incompatible_db(path: &Path) {
+    for suffix in ["-wal", "-shm"] {
+        let sidecar = path.with_file_name(format!(
+            "{}{suffix}",
+            path.file_name().and_then(|n| n.to_str()).unwrap_or("sessions.sqlite")
+        ));
+        let _ = std::fs::remove_file(&sidecar);
+    }
+    let backup = path.with_extension("sqlite.pre-encryption.bak");
+    let _ = std::fs::rename(path, &backup);
+    log::warn!("store: existing DB is not encrypted or the key changed; moved it to {}", backup.display());
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push(char::from_digit((b >> 4) as u32, 16).unwrap());
+        s.push(char::from_digit((b & 0xf) as u32, 16).unwrap());
+    }
+    s
+}
+
 pub struct Store {
     conn: Connection,
 }
 
 impl Store {
-    pub fn open(path: &Path) -> rusqlite::Result<Self> {
-        let conn = Connection::open(path)?;
-        conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "foreign_keys", "ON")?;
-        migrate(&conn)?;
+    pub fn open(path: &Path, key: &[u8]) -> rusqlite::Result<Self> {
+        let conn = open_keyed(path, key)?;
+        if is_readable(&conn) {
+            configure(&conn)?;
+            return Ok(Self { conn });
+        }
+        drop(conn);
+        move_aside_incompatible_db(path);
+        let conn = open_keyed(path, key)?;
+        configure(&conn)?;
         Ok(Self { conn })
     }
 
@@ -195,15 +237,11 @@ impl Store {
         })
     }
 
-    pub fn pending_interactions(&self) -> rusqlite::Result<Vec<SessionRow>> {
+    pub fn all_sessions(&self) -> rusqlite::Result<Vec<SessionRow>> {
         let mut stmt = self.conn.prepare(
-            "SELECT s.id, s.tool, s.external_id, s.provider, s.surface, s.model,
-                    s.started_at, s.ended_at, s.message_count, s.exported_seq,
-                    COUNT(t.id) AS turn_count
-             FROM sessions s LEFT JOIN turns t ON t.session_id = s.id
-             GROUP BY s.id
-             HAVING turn_count > s.exported_seq
-             ORDER BY s.started_at",
+            "SELECT id, tool, external_id, provider, surface, model,
+                    started_at, ended_at, message_count
+             FROM sessions ORDER BY started_at",
         )?;
         let rows = stmt.query_map([], |r| {
             Ok(SessionRow {
@@ -216,34 +254,17 @@ impl Store {
                 started_at_ms: r.get(6)?,
                 ended_at_ms: r.get(7)?,
                 message_count: r.get(8)?,
-                exported_seq: r.get(9)?,
             })
         })?;
         rows.collect()
     }
 
-    pub fn set_exported_seq(&self, id: i64, seq: i64) -> rusqlite::Result<()> {
-        self.conn.execute(
-            "UPDATE sessions SET exported_seq = ?1 WHERE id = ?2",
-            params![seq, id],
-        )?;
-        Ok(())
-    }
-
     pub fn session_turns(&self, session_id: i64) -> rusqlite::Result<Vec<TurnRow>> {
-        self.session_turns_from(session_id, 0)
-    }
-
-    pub fn session_turns_from(
-        &self,
-        session_id: i64,
-        from_seq: i64,
-    ) -> rusqlite::Result<Vec<TurnRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT seq, role, redacted_text, ts FROM turns
-             WHERE session_id = ?1 AND seq >= ?2 ORDER BY seq",
+             WHERE session_id = ?1 ORDER BY seq",
         )?;
-        let rows = stmt.query_map(params![session_id, from_seq], |r| {
+        let rows = stmt.query_map(params![session_id], |r| {
             Ok(TurnRow {
                 seq: r.get(0)?,
                 role: r.get(1)?,
@@ -284,8 +305,6 @@ pub struct SessionRow {
     pub started_at_ms: i64,
     pub ended_at_ms: i64,
     pub message_count: i64,
-
-    pub exported_seq: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -356,45 +375,42 @@ mod tests {
             .unwrap();
         }
 
-        let store = Store::open(&path).unwrap();
+        let store = Store::open(&path, &[7u8; 32]).unwrap();
         assert_eq!(
             store.session_count().unwrap(),
             0,
-            "incompatible legacy rows dropped"
+            "incompatible (unencrypted, legacy) DB is moved aside and rebuilt"
         );
         let (id, _) = store
             .upsert_session(&upsert("claude-code", "s", 2, 1))
             .unwrap();
         store.add_turn(id, 0, Role::User, "hi", 1).unwrap();
-        assert_eq!(
-            store.pending_interactions().unwrap().len(),
-            1,
-            "new schema is usable"
-        );
+        assert_eq!(store.all_sessions().unwrap().len(), 1, "new schema is usable");
         std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
-    fn only_new_turns_are_pending_after_exported_seq_advances() {
-        let s = Store::open_in_memory().unwrap();
-        let (id, _) = s.upsert_session(&upsert("codex", "c1", 2000, 1)).unwrap();
-        s.add_turn(id, 0, Role::User, "q", 1000).unwrap();
-        let pending = s.pending_interactions().unwrap();
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].exported_seq, 0);
+    fn encrypted_db_roundtrips_and_wrong_key_is_rebuilt() {
+        let dir = std::env::temp_dir().join(format!("aum-enc-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("enc.sqlite");
+        let _ = std::fs::remove_file(&path);
+        let key = [42u8; 32];
 
-        s.set_exported_seq(id, 1).unwrap();
-        assert_eq!(s.pending_interactions().unwrap().len(), 0);
-
-        s.add_turn(id, 1, Role::Assistant, "a", 1500).unwrap();
-        let pending = s.pending_interactions().unwrap();
-        assert_eq!(pending.len(), 1);
-        assert_eq!(
-            s.session_turns_from(id, pending[0].exported_seq)
-                .unwrap()
-                .len(),
-            1,
-            "only the new turn"
-        );
+        {
+            let s = Store::open(&path, &key).unwrap();
+            let (id, _) = s.upsert_session(&upsert("codex", "c1", 2000, 1)).unwrap();
+            s.add_turn(id, 0, Role::User, "hello", 1000).unwrap();
+        }
+        {
+            let s = Store::open(&path, &key).unwrap();
+            assert_eq!(s.session_count().unwrap(), 1, "same key reopens the data");
+        }
+        {
+            let s = Store::open(&path, &[9u8; 32]).unwrap();
+            assert_eq!(s.session_count().unwrap(), 0, "wrong key can't read: rebuilt empty");
+        }
+        assert!(!std::fs::read(&path).unwrap().starts_with(b"SQLite format 3\0"), "file is encrypted, not plaintext SQLite");
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

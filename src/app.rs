@@ -55,10 +55,8 @@ struct Runtime {
     export_dir: PathBuf,
 
     transcript_poll_ms: i64,
-    flush_ms: i64,
 
     last_transcript_ms: Cell<i64>,
-    last_flush_ms: Cell<i64>,
     heartbeat_at: Cell<i64>,
     transcripts_changed: Arc<AtomicBool>,
     #[allow(dead_code)]
@@ -157,7 +155,7 @@ pub fn run() {
 }
 
 fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
-    let store = Rc::new(Store::open(&paths.db_file).expect("open store"));
+    let store = Rc::new(Store::open(&paths.db_file, &crate::keychain::db_key()).expect("open store"));
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -189,9 +187,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         install_id: cfg.install_id.clone(),
         export_dir: paths.export_dir.clone(),
         transcript_poll_ms: cfg.transcript_poll_ms as i64,
-        flush_ms: cfg.flush_ms as i64,
         last_transcript_ms: Cell::new(i64::MIN),
-        last_flush_ms: Cell::new(0),
         heartbeat_at: Cell::new(0),
         transcripts_changed,
         watcher: RefCell::new(watcher),
@@ -255,7 +251,7 @@ fn install_tray(rt: &Rc<Runtime>) {
         )))
         .expect("build pause submenu");
 
-    let show_data = MenuItem::with_id(rt.ids.show_data.clone(), "Show my data", true, None);
+    let show_data = MenuItem::with_id(rt.ids.show_data.clone(), "Export my data…", true, None);
     let quit = MenuItem::with_id(rt.ids.quit.clone(), "Quit", true, None);
 
     let title = MenuItem::new(
@@ -323,13 +319,6 @@ fn tick(rt: &Rc<Runtime>) {
                     stats.new_turns,
                     stats.sessions
                 );
-            }
-        }
-        if due(&rt.last_flush_ms, clock.mono_ms, rt.flush_ms) {
-            if let Err(e) =
-                export::flush_pending(&rt.store, &rt.install_id, &rt.export_dir, clock.wall_ms)
-            {
-                log::error!("day-file flush error: {e}");
             }
         }
         if due(&rt.heartbeat_at, clock.mono_ms, HEARTBEAT_MS) {
@@ -478,7 +467,7 @@ fn drain_menu_events(rt: &Rc<Runtime>) {
         } else if id == &rt.ids.update {
             do_update(rt);
         } else if id == &rt.ids.quit {
-            do_quit(rt);
+            do_quit();
         } else if id == &rt.ids.resume {
             set_pause(rt, None, "resumed by user");
         } else if id == &rt.ids.pause_15m {
@@ -519,23 +508,18 @@ fn set_pause(rt: &Rc<Runtime>, until: Option<i64>, why: &str) {
 }
 
 fn do_show_data(rt: &Rc<Runtime>) {
-    let _ = export::flush_pending(
-        &rt.store,
-        &rt.install_id,
-        &rt.export_dir,
-        rt.clock().wall_ms,
-    );
-    let dir = export::data_dir_path(&rt.export_dir);
-    let _ = Command::new("open").arg(&dir).spawn();
+    match export::export_snapshot(&rt.store, &rt.install_id, &rt.export_dir) {
+        Ok(path) => {
+            let _ = Command::new("open").arg("-R").arg(&path).spawn();
+        }
+        Err(e) => {
+            log::error!("export failed: {e}");
+            let _ = Command::new("open").arg(export::data_dir_path(&rt.export_dir)).spawn();
+        }
+    }
 }
 
-fn do_quit(rt: &Rc<Runtime>) {
-    let _ = export::flush_pending(
-        &rt.store,
-        &rt.install_id,
-        &rt.export_dir,
-        rt.clock().wall_ms,
-    );
+fn do_quit() {
     if let Some(mtm) = MainThreadMarker::new() {
         NSApplication::sharedApplication(mtm).terminate(None);
     }

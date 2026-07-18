@@ -15,9 +15,6 @@ pub struct AppConfig {
     #[serde(default = "d_transcript_poll_ms")]
     pub transcript_poll_ms: u64,
 
-    #[serde(default = "d_flush_ms")]
-    pub flush_ms: u64,
-
     #[serde(default)]
     pub ner_model_dir: Option<PathBuf>,
 }
@@ -25,16 +22,12 @@ pub struct AppConfig {
 fn d_transcript_poll_ms() -> u64 {
     2_000
 }
-fn d_flush_ms() -> u64 {
-    15_000
-}
 
 impl AppConfig {
     fn fresh(install_id: String) -> Self {
         Self {
             install_id,
             transcript_poll_ms: d_transcript_poll_ms(),
-            flush_ms: d_flush_ms(),
             ner_model_dir: None,
         }
     }
@@ -147,7 +140,7 @@ mod tests {
         assert_eq!(cfg.install_id, "keep-me", "existing id preserved");
         assert_eq!(cfg.transcript_poll_ms, 2_000, "missing field takes default");
         let reread = fs::read_to_string(&cf).unwrap();
-        assert!(reread.contains("flush_ms"), "file upgraded on load");
+        assert!(reread.contains("transcript_poll_ms"), "file upgraded on load");
         fs::remove_dir_all(&dir).ok();
     }
 

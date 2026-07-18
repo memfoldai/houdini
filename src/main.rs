@@ -5,6 +5,8 @@ mod browserhost;
 #[cfg(target_os = "macos")]
 mod diagnose;
 #[cfg(target_os = "macos")]
+mod keychain;
+#[cfg(target_os = "macos")]
 mod nativehost;
 #[cfg(target_os = "macos")]
 mod tray_glyph;

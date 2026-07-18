@@ -18,6 +18,12 @@ It is an internal tool. Report a concern privately to the maintainer
   reads the screen, never watches network traffic, and never requests Screen
   Recording or Accessibility. It reads transcript files the user already owns;
   the extension reads the page in the user's own browser.
+- **Encrypted at rest.** The store is an encrypted SQLite database (SQLCipher,
+  AES-256). The key is generated once and held in the **macOS Keychain**
+  (`src/keychain.rs`), never on disk beside the data. Nothing readable is written
+  to a folder; a plaintext snapshot is produced only on the explicit
+  **Export my data…** action. An older plaintext DB is moved aside and rebuilt
+  encrypted on first launch.
 - **Redaction is a hard gate.** Secrets and structured PII are removed *before*
   any interaction text reaches disk (`src/redact.rs`); the store never holds raw
   content — including web chats received from the extension.
