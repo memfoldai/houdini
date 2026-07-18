@@ -5,6 +5,16 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.4.8] — 2026-07-18
+
+### Fixed
+- **The app crashed on launch** (`RefCell already borrowed`). The update-check
+  poller held a `borrow()` of the result channel across a `borrow_mut()` of the
+  same cell, which panics the instant a check result arrives — so the menu-bar app
+  aborted shortly after starting. Fixed by scoping the read borrow before the
+  write. (This is a runtime-only failure a unit test can't see; the fix was
+  verified by running the signed app.)
+
 ## [0.4.7] — 2026-07-18
 
 ### Changed
@@ -385,6 +395,7 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.4.8]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.8
 [0.4.7]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.7
 [0.4.6]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.6
 [0.4.5]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.5

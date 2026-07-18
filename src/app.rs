@@ -353,8 +353,12 @@ const UPDATE_DEFAULT: &str = "Check for updates…";
 const UPDATE_NOTICE_MS: i64 = 4_000;
 
 fn poll_update_check(rt: &Rc<Runtime>, now_mono_ms: i64) {
-    if let Some(result) = rt.update_rx.borrow().as_ref().and_then(|rx| rx.try_recv().ok()) {
-        drop(rt.update_rx.borrow_mut().take());
+    let received = {
+        let rx = rt.update_rx.borrow();
+        rx.as_ref().and_then(|rx| rx.try_recv().ok())
+    };
+    if let Some(result) = received {
+        *rt.update_rx.borrow_mut() = None;
         match result {
             Some(update) => {
                 rt.update_item.set_text(format!("Install update {}", update.version));
