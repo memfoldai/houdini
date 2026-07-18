@@ -24,8 +24,8 @@ pub mod provider {
     pub const ANTHROPIC: &str = "anthropic";
     pub const OPENAI: &str = "openai";
     pub const GOOGLE: &str = "google";
-
     pub const LOCAL: &str = "local";
+    pub const OPENCLAW: &str = "openclaw";
 }
 
 pub fn provider_for_model(model: &str) -> Option<&'static str> {

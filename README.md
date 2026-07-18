@@ -23,8 +23,11 @@ id — zero false positives, full coverage across desktops and Spaces. Adapters:
 |---|---|
 | Claude Code | `~/.claude/projects/*/*.jsonl` |
 | Codex | `~/.codex/**/rollout-*.jsonl` |
+| OpenClaw / almaclaw | `~/.openclaw*/agents/*/sessions/*.jsonl` |
 
-Adding a tool is adding one small adapter; the rest of the pipeline is shared.
+Adding a tool is adding one small adapter; the rest of the pipeline is shared. New
+transcripts are detected instantly via file-system events (FSEvents), so the
+menu-bar indicator reacts in real time.
 
 **Browser extension (web chats).** Web ChatGPT/Claude leave no local transcript.
 An optional Chromium extension ([extension/](extension/README.md)) reads each

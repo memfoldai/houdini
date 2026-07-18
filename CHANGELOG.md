@@ -5,6 +5,25 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.4.6] — 2026-07-18
+
+### Added
+- **OpenClaw / almaclaw is now tracked** as its own `openclaw` app entity (like
+  Claude Code and Codex), reading `~/.openclaw*/agents/*/sessions/*.jsonl`.
+  Provider comes from the model (Anthropic/OpenAI/…) or falls back to `openclaw`.
+  Validated against real data: 136 sessions parsed. Handles OpenClaw's mixed
+  string/numeric timestamps and strips its inbound-message envelope.
+
+### Fixed
+- **Menu-bar icon is now real-time.** Transcript changes are detected instantly
+  via file-system events (FSEvents, `notify`) instead of a 2 s poll, and the
+  "active" window dropped from 45 s to 6 s — so the icon lights up as soon as a
+  message is recorded and clears a few seconds after you stop, instead of being
+  stuck Active during a whole session and lingering.
+- **The update menu no longer gets stuck** on "You're on the latest version"; the
+  transient states (up-to-date, install failed) auto-revert to "Check for updates…"
+  after a few seconds.
+
 ## [0.4.5] — 2026-07-18
 
 ### Added
@@ -351,6 +370,7 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.4.6]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.6
 [0.4.5]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.5
 [0.4.4]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.4
 [0.4.3]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.3

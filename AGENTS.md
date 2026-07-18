@@ -89,7 +89,7 @@ Two clocks: **monotonic** drives cadence, **wall-clock** is stored.
   AGENTS, CHANGELOG). Do not add inline or doc comments — if a piece of code needs
   explaining, restructure or rename it, or record the rationale in the docs.
 - Prefer typed shapes over positional tuples crossing a boundary.
-- Registry-driven, source-agnostic: a new transcript tool is one `Adapter`; a new
+- Registry-driven, source-agnostic: a new transcript tool is one `Adapter` (Claude Code, Codex, OpenClaw); a new
   web site is one `SITES` entry + one `resolve_tool` arm. No content classification
   or hardcoded per-app behavior — provider comes from tool/model metadata only.
 - Config over constants for anything an operator may tune; see `config.rs`.

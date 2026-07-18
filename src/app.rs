@@ -3,9 +3,13 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::ptr::NonNull;
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
 use block2::RcBlock;
 use objc2::rc::Retained;
@@ -25,11 +29,11 @@ use ai_usage_monitor::store::{ActivityStats, Store, PAUSE_UNTIL_KEY};
 use crate::tray_glyph::{self, Glyph};
 use crate::updater::{self, Update};
 
-const BASE_TICK_S: f64 = 1.0;
+const BASE_TICK_S: f64 = 0.5;
 
 const RECENT_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
 
-const ACTIVE_WINDOW_MS: i64 = 45_000;
+const ACTIVE_WINDOW_MS: i64 = 6_000;
 
 const HEARTBEAT_MS: i64 = 30_000;
 
@@ -56,6 +60,9 @@ struct Runtime {
     last_transcript_ms: Cell<i64>,
     last_flush_ms: Cell<i64>,
     heartbeat_at: Cell<i64>,
+    transcripts_changed: Arc<AtomicBool>,
+    #[allow(dead_code)]
+    watcher: RefCell<Option<RecommendedWatcher>>,
 
     paused_until: Cell<Option<i64>>,
     start: Instant,
@@ -63,6 +70,7 @@ struct Runtime {
     last_update_check: Cell<i64>,
     update_rx: RefCell<Option<Receiver<Option<Update>>>>,
     available_update: RefCell<Option<Update>>,
+    update_notice_until: Cell<i64>,
 
     tray: RefCell<Option<TrayIcon>>,
     timer: RefCell<Option<Retained<NSTimer>>>,
@@ -156,7 +164,9 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
 
-    let ingestor = Ingestor::new(home, now_ms);
+    let ingestor = Ingestor::new(home.clone(), now_ms);
+    let transcripts_changed = Arc::new(AtomicBool::new(false));
+    let watcher = start_watcher(&home, transcripts_changed.clone());
 
     let ids = MenuIds {
         pause_15m: MenuId::new("pause_15m"),
@@ -183,11 +193,14 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         last_transcript_ms: Cell::new(i64::MIN),
         last_flush_ms: Cell::new(0),
         heartbeat_at: Cell::new(0),
+        transcripts_changed,
+        watcher: RefCell::new(watcher),
         paused_until: Cell::new(None),
         start: Instant::now(),
         last_update_check: Cell::new(i64::MIN),
         update_rx: RefCell::new(None),
         available_update: RefCell::new(None),
+        update_notice_until: Cell::new(0),
         tray: RefCell::new(None),
         timer: RefCell::new(None),
         painted: Cell::new(None),
@@ -197,6 +210,24 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         update_item,
         ids,
     })
+}
+
+fn start_watcher(home: &PathBuf, changed: Arc<AtomicBool>) -> Option<RecommendedWatcher> {
+    let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
+        if res.is_ok() {
+            changed.store(true, Ordering::Relaxed);
+        }
+    })
+    .ok()?;
+    let dirs = [".claude/projects", ".codex", ".openclaw"];
+    let mut watched = 0;
+    for dir in dirs {
+        let path = home.join(dir);
+        if path.exists() && watcher.watch(&path, RecursiveMode::Recursive).is_ok() {
+            watched += 1;
+        }
+    }
+    (watched > 0).then_some(watcher)
 }
 
 fn install_tray(rt: &Rc<Runtime>) {
@@ -281,7 +312,10 @@ fn tick(rt: &Rc<Runtime>) {
     }
 
     if !rt.is_paused() {
-        if due(&rt.last_transcript_ms, clock.mono_ms, rt.transcript_poll_ms) {
+        let changed = rt.transcripts_changed.swap(false, Ordering::Relaxed);
+        let due_poll = clock.mono_ms.saturating_sub(rt.last_transcript_ms.get()) >= rt.transcript_poll_ms;
+        if changed || due_poll {
+            rt.last_transcript_ms.set(clock.mono_ms);
             let stats = rt.ingestor.borrow_mut().poll(&rt.store);
             if stats.new_turns > 0 {
                 log::info!(
@@ -306,7 +340,7 @@ fn tick(rt: &Rc<Runtime>) {
     if due(&rt.last_update_check, clock.mono_ms, UPDATE_CHECK_MS) {
         spawn_update_check(rt);
     }
-    poll_update_check(rt);
+    poll_update_check(rt, clock.mono_ms);
 
     let stats = rt
         .store
@@ -326,20 +360,33 @@ fn spawn_update_check(rt: &Rc<Runtime>) {
     *rt.update_rx.borrow_mut() = Some(rx);
 }
 
-fn poll_update_check(rt: &Rc<Runtime>) {
-    let result = rt.update_rx.borrow().as_ref().and_then(|rx| rx.try_recv().ok());
-    let Some(result) = result else { return };
-    *rt.update_rx.borrow_mut() = None;
-    match result {
-        Some(update) => {
-            rt.update_item.set_text(format!("Install update {}", update.version));
-            *rt.available_update.borrow_mut() = Some(update);
-        }
-        None => {
-            rt.update_item.set_text("You're on the latest version");
-            *rt.available_update.borrow_mut() = None;
+const UPDATE_DEFAULT: &str = "Check for updates…";
+const UPDATE_NOTICE_MS: i64 = 4_000;
+
+fn poll_update_check(rt: &Rc<Runtime>, now_mono_ms: i64) {
+    if let Some(result) = rt.update_rx.borrow().as_ref().and_then(|rx| rx.try_recv().ok()) {
+        drop(rt.update_rx.borrow_mut().take());
+        match result {
+            Some(update) => {
+                rt.update_item.set_text(format!("Install update {}", update.version));
+                *rt.available_update.borrow_mut() = Some(update);
+                rt.update_notice_until.set(0);
+            }
+            None => set_update_notice(rt, "You're on the latest version", now_mono_ms),
         }
     }
+
+    let until = rt.update_notice_until.get();
+    if until != 0 && now_mono_ms >= until {
+        rt.update_notice_until.set(0);
+        rt.update_item.set_text(UPDATE_DEFAULT);
+    }
+}
+
+fn set_update_notice(rt: &Rc<Runtime>, text: &str, now_mono_ms: i64) {
+    rt.update_item.set_text(text);
+    *rt.available_update.borrow_mut() = None;
+    rt.update_notice_until.set(now_mono_ms + UPDATE_NOTICE_MS);
 }
 
 fn do_update(rt: &Rc<Runtime>) {
@@ -355,11 +402,12 @@ fn do_update(rt: &Rc<Runtime>) {
                 }
                 Err(e) => {
                     log::error!("update install failed: {e}");
-                    rt.update_item.set_text("Update failed — see log");
+                    set_update_notice(rt, "Update failed — see the log", rt.clock().mono_ms);
                 }
             }
         }
         None => {
+            rt.update_notice_until.set(0);
             rt.update_item.set_text("Checking for updates…");
             spawn_update_check(rt);
         }

@@ -1,5 +1,6 @@
 pub mod claude_code;
 pub mod codex;
+pub mod openclaw;
 
 use std::collections::HashMap;
 use std::fs;
@@ -39,7 +40,11 @@ pub trait Adapter: Send {
 }
 
 pub fn default_adapters() -> Vec<Box<dyn Adapter>> {
-    vec![Box::new(claude_code::ClaudeCode), Box::new(codex::Codex)]
+    vec![
+        Box::new(claude_code::ClaudeCode),
+        Box::new(codex::Codex),
+        Box::new(openclaw::OpenClaw),
+    ]
 }
 
 type Fingerprint = (i64, u64);
