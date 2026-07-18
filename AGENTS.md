@@ -79,15 +79,18 @@ Two content sources, one store:
   created in `applicationDidFinishLaunching:` — tray-icon requires a *running*
   run loop. The menu shows the app version (`CARGO_PKG_VERSION`).
 
-Two clocks: **monotonic** drives cadence, **wall-clock** is stored. Read the
-module doc comment atop each file — that is where per-module rationale lives.
+Two clocks: **monotonic** drives cadence, **wall-clock** is stored.
 
 ## Conventions
 
-- Comments state **why** a thing exists / what breaks without it. Never narrate
-  syntax. Cite the header/doc that justifies a non-obvious API call (e.g. the
-  native-messaging framing).
+- **Code carries no comments.** The code is self-documenting (clear names, small
+  functions, obvious control flow); the "why" lives in these docs (README,
+  AGENTS, CHANGELOG). Do not add inline or doc comments — if a piece of code needs
+  explaining, restructure or rename it, or record the rationale in the docs.
 - Prefer typed shapes over positional tuples crossing a boundary.
+- Registry-driven, source-agnostic: a new transcript tool is one `Adapter`; a new
+  web site is one `SITES` entry + one `resolve_tool` arm. No content classification
+  or hardcoded per-app behavior — provider comes from tool/model metadata only.
 - Config over constants for anything an operator may tune; see `config.rs`.
 - Bound every loop that touches the system; log what you skipped.
 

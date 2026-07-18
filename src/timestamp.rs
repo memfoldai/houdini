@@ -1,23 +1,10 @@
-//! Minimal UTC time helpers, no date-library dependency.
-//!
-//! Transcripts stamp their events as RFC 3339 strings (`2026-07-02T07:50:50.556Z`);
-//! the store and day-file partitions use unix-ms. Both directions use Howard
-//! Hinnant's civil-from-days / days-from-civil algorithms, which are exact for
-//! all dates without a leap-second table.
-
-/// Parse an RFC 3339 / ISO 8601 timestamp to unix milliseconds. Accepts a `Z`
-/// suffix or a `±HH:MM` offset, and optional fractional seconds. Returns `None`
-/// on anything malformed rather than guessing a time.
 pub fn parse_rfc3339_ms(s: &str) -> Option<i64> {
     let s = s.trim();
     let (date, rest) = s.split_once(['T', 't', ' '])?;
 
-    // Split the time from an optional trailing zone (Z or ±HH:MM).
     let (time, offset_min) = if let Some(t) = rest.strip_suffix(['Z', 'z']) {
         (t, 0i64)
     } else if let Some(pos) = rest.rfind(['+', '-']) {
-        // Guard against a lone '-' inside the time (there isn't one) — the zone
-        // sign is always after the seconds, so `pos` past a ':' is the zone.
         let (t, zone) = rest.split_at(pos);
         (t, parse_offset_min(zone)?)
     } else {
@@ -44,12 +31,10 @@ pub fn parse_rfc3339_ms(s: &str) -> Option<i64> {
     }
 
     let days = days_from_civil(y, mo, d);
-    let ms = days * 86_400_000 + (h * 3600 + mi * 60 + sec) * 1000 + frac_ms
-        - offset_min * 60_000;
+    let ms = days * 86_400_000 + (h * 3600 + mi * 60 + sec) * 1000 + frac_ms - offset_min * 60_000;
     Some(ms)
 }
 
-/// `YYYY-MM-DD` (UTC) for a unix-ms instant — day-file partition names.
 pub fn ymd_utc(unix_ms: i64) -> String {
     let days = unix_ms.div_euclid(86_400_000);
     let z = days + 719_468;
@@ -65,7 +50,6 @@ pub fn ymd_utc(unix_ms: i64) -> String {
     format!("{year:04}-{m:02}-{d:02}")
 }
 
-/// Days since the unix epoch for a civil (proleptic Gregorian) date.
 fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     let y = if m <= 2 { y - 1 } else { y };
     let era = if y >= 0 { y } else { y - 399 } / 400;
@@ -76,7 +60,6 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
     era * 146_097 + doe - 719_468
 }
 
-/// Seconds with optional `.fff…` fraction → `(whole_seconds, milliseconds)`.
 fn parse_seconds_ms(s: &str) -> Option<(i64, i64)> {
     let (whole, frac) = match s.split_once('.') {
         Some((w, f)) => (w, f),
@@ -86,10 +69,15 @@ fn parse_seconds_ms(s: &str) -> Option<(i64, i64)> {
     if frac.is_empty() {
         return Some((sec, 0));
     }
-    // Take the first three fractional digits as ms (pad/truncate).
+
     let mut ms = 0i64;
     for i in 0..3 {
-        ms = ms * 10 + frac.as_bytes().get(i).map(|b| (b - b'0') as i64).unwrap_or(0);
+        ms = ms * 10
+            + frac
+                .as_bytes()
+                .get(i)
+                .map(|b| (b - b'0') as i64)
+                .unwrap_or(0);
     }
     if !frac.bytes().all(|b| b.is_ascii_digit()) {
         return None;
@@ -97,7 +85,6 @@ fn parse_seconds_ms(s: &str) -> Option<(i64, i64)> {
     Some((sec, ms))
 }
 
-/// `±HH:MM` (or `±HHMM`) → signed minutes.
 fn parse_offset_min(zone: &str) -> Option<i64> {
     let (sign, rest) = match zone.as_bytes().first()? {
         b'+' => (1, &zone[1..]),
@@ -126,10 +113,9 @@ mod tests {
 
     #[test]
     fn parses_transcript_timestamps() {
-        // Claude Code / Codex shape, milliseconds + Z.
         let ms = parse_rfc3339_ms("2026-07-02T07:50:50.556Z").unwrap();
         assert_eq!(ymd_utc(ms), "2026-07-02");
-        // Second resolution, no fraction.
+
         assert!(parse_rfc3339_ms("2026-07-01T09:32:06Z").is_some());
     }
 
@@ -151,7 +137,6 @@ mod tests {
 
     #[test]
     fn fractional_padding_is_milliseconds() {
-        // ".5" is 500ms, not 5ms.
         let a = parse_rfc3339_ms("2026-07-02T00:00:00.5Z").unwrap();
         let b = parse_rfc3339_ms("2026-07-02T00:00:00.500Z").unwrap();
         assert_eq!(a, b);

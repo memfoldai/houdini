@@ -1,15 +1,3 @@
-// MAIN-world content script (runs in the PAGE's context, at document_start).
-//
-// We wrap the page's own `window.fetch` to DETECT each conversation exchange and
-// read the user's prompt from the request body (reliable, structured). For the
-// assistant REPLY we read the completed message from the DOM after the stream
-// ends, rather than parsing the provider's internal SSE — that internal format
-// is undocumented and changes (it silently broke reply capture once), whereas the
-// rendered message is stable and is what the user actually saw. The conversation
-// id comes from the stable page URL. This works in background tabs because the
-// page's fetch and DOM update regardless of tab focus. We never throw into the
-// page and never disturb the response (the page's own fetch result is untouched).
-
 (function () {
   "use strict";
 
@@ -34,12 +22,10 @@
         }
         return null;
       },
-      // ChatGPT puts the conversation id in the page path (/c/<id>).
       conversationId: () => {
         const m = location.pathname.match(/\/c\/([\w-]+)/);
         return m ? m[1] : null;
       },
-      // The rendered assistant turns carry a stable author-role attribute.
       replyFromDom: () => {
         const els = document.querySelectorAll('[data-message-author-role="assistant"]');
         const last = els[els.length - 1];
@@ -80,9 +66,7 @@
     p.then((resp) => {
       try {
         if (site.isConversation(url, method)) captureExchange(site, url, reqBody, resp.clone());
-      } catch (e) {
-        /* never break the page */
-      }
+      } catch (e) {}
     }).catch(() => {});
     return p;
   };
@@ -90,8 +74,6 @@
   async function captureExchange(site, url, reqBody, respClone) {
     const prompt = site.extractPrompt(reqBody);
 
-    // Drain the response clone to know when streaming has finished (we don't
-    // parse it — the reply comes from the DOM once it's rendered).
     const reader = respClone.body && respClone.body.getReader();
     if (reader) {
       try {
@@ -99,25 +81,16 @@
           const { done } = await reader.read();
           if (done) break;
         }
-      } catch (e) {
-        /* ignore */
-      }
+      } catch (e) {}
     }
 
-    // Poll the rendered DOM until the assistant reply stops growing (handles long
-    // answers), rather than a fixed wait.
     const reply = await waitForStableReply(site);
-
-    // Read the conversation id AFTER settling: a brand-new chat's URL only becomes
-    // /c/<id> once the first response lands, so reading it here (not before)
-    // groups the first exchange with the rest instead of using a throwaway id.
     const convId = site.conversationId(url) || PAGE_ID;
 
     if (!reply) {
-      console.warn("[aum] captured a", site.tool, "prompt but no assistant reply — the DOM selector may need updating");
+      console.warn("[aum] captured a", site.tool, "prompt but no assistant reply; the DOM selector may need updating");
     }
 
-    // Both turns in ONE message so their order is fixed (host appends in order).
     const turns = [];
     if (prompt && prompt.trim()) turns.push({ role: "user", text: prompt, ts_ms: Date.now() });
     if (reply && reply.trim()) turns.push({ role: "assistant", text: reply, ts_ms: Date.now() });
@@ -126,8 +99,6 @@
     }
   }
 
-  /// Poll the assistant message until its text is unchanged across two polls
-  /// (~1s stable) or a ~12s ceiling — so a long streamed answer is captured whole.
   async function waitForStableReply(site) {
     if (!site.replyFromDom) return "";
     let last = "";
@@ -147,7 +118,7 @@
 
   function asJson(body) {
     if (typeof body === "string") return tryJson(body);
-    return null; // Blob/FormData/stream bodies aren't used by these endpoints.
+    return null;
   }
   function tryJson(s) {
     try {

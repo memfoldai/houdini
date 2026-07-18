@@ -1,14 +1,3 @@
-//! Claude Code adapter.
-//!
-//! Claude Code writes one JSONL transcript per session at
-//! `~/.claude/projects/<slug>/<session-uuid>.jsonl`. Each line is an event; the
-//! ones that carry a real exchange are `type:"user"` (a typed prompt, whose
-//! `message.content` is a plain string) and `type:"assistant"` (whose
-//! `message.content` is a block list — we keep the `text` blocks, dropping
-//! `thinking` and `tool_use` noise). Tool-result lines are also `type:"user"`
-//! but with a LIST content; skipping non-string user content drops them, so what
-//! remains is the human prompt / model reply pair.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -43,7 +32,9 @@ impl Adapter for ClaudeCode {
             if line.is_empty() {
                 continue;
             }
-            let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+            let Ok(v) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
 
             if session_id.is_none() {
                 if let Some(id) = v.get("sessionId").and_then(Value::as_str) {
@@ -52,13 +43,15 @@ impl Adapter for ClaudeCode {
             }
 
             let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
-            let ts = v.get("timestamp").and_then(Value::as_str).and_then(parse_rfc3339_ms);
+            let ts = v
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .and_then(parse_rfc3339_ms);
             let Some(ts) = ts else { continue };
             let message = v.get("message");
 
             match kind {
                 "user" => {
-                    // A typed prompt has STRING content; tool results have a list.
                     if let Some(text) = message
                         .and_then(|m| m.get("content"))
                         .and_then(Value::as_str)
@@ -66,7 +59,11 @@ impl Adapter for ClaudeCode {
                         .filter(|s| !s.is_empty())
                         .filter(|s| !is_command_noise(s))
                     {
-                        turns.push(IngestedTurn { role: Role::User, text: text.to_string(), ts_ms: ts });
+                        turns.push(IngestedTurn {
+                            role: Role::User,
+                            text: text.to_string(),
+                            ts_ms: ts,
+                        });
                     }
                 }
                 "assistant" => {
@@ -76,7 +73,11 @@ impl Adapter for ClaudeCode {
                         }
                         let text = assistant_text(m);
                         if !text.is_empty() {
-                            turns.push(IngestedTurn { role: Role::Assistant, text, ts_ms: ts });
+                            turns.push(IngestedTurn {
+                                role: Role::Assistant,
+                                text,
+                                ts_ms: ts,
+                            });
                         }
                     }
                 }
@@ -87,8 +88,11 @@ impl Adapter for ClaudeCode {
         if turns.is_empty() {
             return None;
         }
-        let external_id =
-            session_id.or_else(|| path.file_stem().and_then(|s| s.to_str()).map(str::to_string))?;
+        let external_id = session_id.or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        })?;
         let started = turns.iter().map(|t| t.ts_ms).min().unwrap_or(0);
         let ended = turns.iter().map(|t| t.ts_ms).max().unwrap_or(started);
 
@@ -105,11 +109,6 @@ impl Adapter for ClaudeCode {
     }
 }
 
-/// Claude Code injects synthetic `type:"user"` entries for slash commands and
-/// their output, wrapped in marker tags — these are not human prompts and were
-/// polluting the record. Drop content that begins with one of Claude Code's own
-/// command/caveat markers. (These tags are the tool's contract for non-prompt
-/// content, not a guessed heuristic.)
 fn is_command_noise(text: &str) -> bool {
     const MARKERS: &[&str] = &[
         "<local-command-caveat>",
@@ -123,8 +122,6 @@ fn is_command_noise(text: &str) -> bool {
     MARKERS.iter().any(|m| head.starts_with(m))
 }
 
-/// Concatenate the visible `text` blocks of an assistant message, dropping
-/// `thinking` and `tool_use` blocks (not part of the delivered reply).
 fn assistant_text(message: &Value) -> String {
     let Some(blocks) = message.get("content").and_then(Value::as_array) else {
         return String::new();
@@ -143,7 +140,6 @@ fn assistant_text(message: &Value) -> String {
 mod tests {
     use super::*;
 
-    // A synthetic transcript in the EXACT shape observed in the real files.
     const SAMPLE: &str = r#"
 {"type":"queue-operation","sessionId":"abc-123","timestamp":"2026-07-02T07:50:50.556Z"}
 {"type":"user","message":{"role":"user","content":"explain regenerative agriculture"},"timestamp":"2026-07-02T07:50:51.000Z","sessionId":"abc-123"}
@@ -164,23 +160,28 @@ mod tests {
         assert_eq!(sess.external_id, "abc-123");
         assert_eq!(sess.provider, provider::ANTHROPIC);
         assert_eq!(sess.model.as_deref(), Some("claude-sonnet-5"));
-        // user prompt, assistant reply, assistant "Done." — the tool_result user
-        // line is dropped, thinking block is dropped.
+
         let roles: Vec<_> = sess.turns.iter().map(|t| t.role).collect();
         assert_eq!(roles, vec![Role::User, Role::Assistant, Role::Assistant]);
         assert_eq!(sess.turns[0].text, "explain regenerative agriculture");
-        assert_eq!(sess.turns[1].text, "Regenerative agriculture rebuilds soil.");
+        assert_eq!(
+            sess.turns[1].text,
+            "Regenerative agriculture rebuilds soil."
+        );
 
-        // discover finds it under the projects root.
         assert_eq!(ClaudeCode.discover(&dir).len(), 1);
         fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
     fn slash_command_noise_is_not_a_user_prompt() {
-        assert!(is_command_noise("<local-command-caveat>Caveat: ...</local-command-caveat>"));
+        assert!(is_command_noise(
+            "<local-command-caveat>Caveat: ...</local-command-caveat>"
+        ));
         assert!(is_command_noise("<command-name>/model</command-name>"));
-        assert!(is_command_noise("<local-command-stdout>Set model to Sonnet 5</local-command-stdout>"));
+        assert!(is_command_noise(
+            "<local-command-stdout>Set model to Sonnet 5</local-command-stdout>"
+        ));
         assert!(!is_command_noise("explain regenerative agriculture"));
         assert!(!is_command_noise("what does <div> mean in html"));
     }

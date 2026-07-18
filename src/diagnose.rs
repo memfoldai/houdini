@@ -1,8 +1,3 @@
-//! `--diagnose`: a one-shot probe that prints how many real interactions the app
-//! can read from each tool's transcripts right now, without starting the menu-bar
-//! app. This is the "is it working?" answer for the transcript layer. Web chats
-//! arrive via the browser extension (not visible here); no content is printed.
-
 use std::path::PathBuf;
 
 use ai_usage_monitor::ingest::default_adapters;

@@ -1,14 +1,3 @@
-//! Codex adapter.
-//!
-//! Codex writes one JSONL rollout per session under `~/.codex/sessions/<date>/`
-//! (active) and `~/.codex/archived_sessions/` (rolled over), named
-//! `rollout-*.jsonl`. Every line wraps a `payload`. The visible exchange is
-//! carried by `event_msg` payloads: `user_message` (the human's text) and
-//! `agent_message` (the model's reply), each in `payload.message`. The session
-//! id comes from the `session_meta` line and the model from a `turn_context`
-//! line. Reasoning, function calls, and tool output are separate payloads we
-//! skip — leaving a clean prompt/response transcript.
-
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -28,7 +17,9 @@ impl Adapter for Codex {
 
     fn discover(&self, home: &Path) -> Vec<PathBuf> {
         let root = home.join(".codex");
-        find_files(&root, &|name| name.starts_with("rollout-") && name.ends_with(".jsonl"))
+        find_files(&root, &|name| {
+            name.starts_with("rollout-") && name.ends_with(".jsonl")
+        })
     }
 
     fn parse_file(&self, path: &Path) -> Option<IngestedSession> {
@@ -43,10 +34,15 @@ impl Adapter for Codex {
             if line.is_empty() {
                 continue;
             }
-            let Ok(v) = serde_json::from_str::<Value>(line) else { continue };
+            let Ok(v) = serde_json::from_str::<Value>(line) else {
+                continue;
+            };
             let kind = v.get("type").and_then(Value::as_str).unwrap_or("");
             let payload = v.get("payload");
-            let ts = v.get("timestamp").and_then(Value::as_str).and_then(parse_rfc3339_ms);
+            let ts = v
+                .get("timestamp")
+                .and_then(Value::as_str)
+                .and_then(parse_rfc3339_ms);
 
             match kind {
                 "session_meta" => {
@@ -79,7 +75,11 @@ impl Adapter for Codex {
                         .map(str::trim)
                         .filter(|s| !s.is_empty())
                     {
-                        turns.push(IngestedTurn { role, text: text.to_string(), ts_ms: ts });
+                        turns.push(IngestedTurn {
+                            role,
+                            text: text.to_string(),
+                            ts_ms: ts,
+                        });
                     }
                 }
                 _ => {}
@@ -89,12 +89,18 @@ impl Adapter for Codex {
         if turns.is_empty() {
             return None;
         }
-        let external_id =
-            session_id.or_else(|| path.file_stem().and_then(|s| s.to_str()).map(str::to_string))?;
+        let external_id = session_id.or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        })?;
         let started = turns.iter().map(|t| t.ts_ms).min().unwrap_or(0);
         let ended = turns.iter().map(|t| t.ts_ms).max().unwrap_or(started);
-        // Codex is OpenAI's tool; if the model names another vendor, trust it.
-        let resolved = model.as_deref().and_then(provider_for_model).unwrap_or(provider::OPENAI);
+
+        let resolved = model
+            .as_deref()
+            .and_then(provider_for_model)
+            .unwrap_or(provider::OPENAI);
 
         Some(IngestedSession {
             tool: "codex",
@@ -126,7 +132,12 @@ mod tests {
     #[test]
     fn parses_user_and_agent_messages_only() {
         let dir = std::env::temp_dir().join(format!("cx-{}", std::process::id()));
-        let day = dir.join(".codex").join("sessions").join("2026").join("07").join("01");
+        let day = dir
+            .join(".codex")
+            .join("sessions")
+            .join("2026")
+            .join("07")
+            .join("01");
         fs::create_dir_all(&day).unwrap();
         let f = day.join("rollout-2026-07-01T09-32-06-019f-abc.jsonl");
         fs::write(&f, SAMPLE).unwrap();

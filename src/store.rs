@@ -1,26 +1,13 @@
-//! Local-only SQLite store — the source of truth. Text-only; nothing here
-//! uploads anything.
-//!
-//! One shape: `sessions` + `turns` — real AI interactions read from a tool's own
-//! transcript or the browser extension, with provider/tool/surface/model and the
-//! redacted prompt/response turns. Keyed `UNIQUE(tool, external_id)` so re-reading
-//! a growing conversation upserts the same row instead of duplicating it, and an
-//! `exported_seq` high-water mark makes export emit each turn exactly once.
-//!
-//! The app/provider identity is stored in the CLEAR (`anthropic`, `claude-code`,
-//! …): for a consenting internal study the provider entity IS the research
-//! signal, not something to hash away. Only the CONTENT of turns is redacted
-//! (before it is ever written).
-
 use rusqlite::{params, Connection};
 use std::path::Path;
 
-/// A turn's speaker, taken straight from the transcript's own role field.
+pub const PAUSE_UNTIL_KEY: &str = "paused_until_ms";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     User,
     Assistant,
-    /// The transcript had a role we don't map to user/assistant (tool/system).
+
     Unknown,
 }
 
@@ -37,40 +24,35 @@ impl Role {
 const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS sessions (
     id            INTEGER PRIMARY KEY,
-    tool          TEXT NOT NULL,       -- concrete source: claude-code, codex, cursor
-    external_id   TEXT NOT NULL,       -- the tool's own session id (idempotency key)
-    provider      TEXT NOT NULL,       -- grouped entity: anthropic, openai, google, local
-    surface       TEXT NOT NULL,       -- cli | ide | app | web
-    model         TEXT,                -- model id if the transcript names one
-    started_at    INTEGER NOT NULL,    -- unix ms
-    ended_at      INTEGER NOT NULL,    -- unix ms (last activity seen)
+    tool          TEXT NOT NULL,
+    external_id   TEXT NOT NULL,
+    provider      TEXT NOT NULL,
+    surface       TEXT NOT NULL,
+    model         TEXT,
+    started_at    INTEGER NOT NULL,
+    ended_at      INTEGER NOT NULL,
     message_count INTEGER NOT NULL DEFAULT 0,
-    exported_seq  INTEGER NOT NULL DEFAULT 0, -- turns already written to a day file (high-water mark)
+    exported_seq  INTEGER NOT NULL DEFAULT 0,
     UNIQUE (tool, external_id)
 );
 CREATE TABLE IF NOT EXISTS turns (
     id            INTEGER PRIMARY KEY,
     session_id    INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    seq           INTEGER NOT NULL,    -- 0-based order within the session
+    seq           INTEGER NOT NULL,
     role          TEXT NOT NULL CHECK (role IN ('user','assistant','unknown')),
-    redacted_text TEXT NOT NULL,       -- ALWAYS post-redaction; raw never stored
-    ts            INTEGER NOT NULL,    -- unix ms
+    redacted_text TEXT NOT NULL,
+    ts            INTEGER NOT NULL,
     UNIQUE (session_id, seq)
 );
 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id, seq);
+CREATE TABLE IF NOT EXISTS settings (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 "#;
 
-/// Current on-disk schema version (tracked via SQLite `PRAGMA user_version`).
-/// Bumped on an incompatible change. v3 moved to an `exported_seq` high-water
-/// mark (OLAP-flat, one row per new turn); v4 removed the `presence` table (the
-/// content-free network signal is no longer collected).
 const SCHEMA_VERSION: i64 = 4;
 
-/// Ensure the schema is current. Pre-0.4 DBs have an incompatible
-/// `sessions`/`turns` shape that `CREATE TABLE IF NOT EXISTS` would silently
-/// leave in place; that data is from retired approaches with no contract to
-/// preserve, so we drop and rebuild rather than migrate rows. The retired
-/// `presence` table is dropped too. The version gate makes this run once.
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     if version < SCHEMA_VERSION {
@@ -90,7 +72,6 @@ pub struct Store {
 }
 
 impl Store {
-    /// Open (creating if needed) the store at `path`, migrating an older schema.
     pub fn open(path: &Path) -> rusqlite::Result<Self> {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
@@ -99,7 +80,6 @@ impl Store {
         Ok(Self { conn })
     }
 
-    /// In-memory store for tests.
     pub fn open_in_memory() -> rusqlite::Result<Self> {
         let conn = Connection::open_in_memory()?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
@@ -107,11 +87,6 @@ impl Store {
         Ok(Self { conn })
     }
 
-    /// Insert or update a session by its `(tool, external_id)` identity and
-    /// return `(session_id, existing_turn_count)`. The count lets the ingest
-    /// append only turns it has not stored yet, so re-reading a transcript that
-    /// grew by three messages inserts exactly those three. `ended_at`, `model`,
-    /// and `message_count` are refreshed on every upsert.
     pub fn upsert_session(&self, s: &SessionUpsert) -> rusqlite::Result<(i64, i64)> {
         self.conn.execute(
             "INSERT INTO sessions
@@ -122,10 +97,6 @@ impl Store {
                  surface       = excluded.surface,
                  model         = COALESCE(excluded.model, sessions.model),
                  ended_at      = MAX(excluded.ended_at, sessions.ended_at),
-                 -- MAX so a caller that appends incrementally (the browser host,
-                 -- which passes 0 because it learns the running count only after
-                 -- the upsert) never shrinks a session; the transcript path passes
-                 -- the full count, which always grows.
                  message_count = MAX(excluded.message_count, sessions.message_count)",
             params![
                 s.tool,
@@ -143,19 +114,21 @@ impl Store {
             params![s.tool, s.external_id],
             |r| r.get(0),
         )?;
-        let existing: i64 =
-            self.conn.query_row("SELECT COUNT(*) FROM turns WHERE session_id = ?1", params![id], |r| {
-                r.get(0)
-            })?;
-        // New turns are picked up for export by the exported_seq high-water mark
-        // (turn_count > exported_seq) — no per-session re-flush flag needed.
+        let existing: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM turns WHERE session_id = ?1",
+            params![id],
+            |r| r.get(0),
+        )?;
+
         Ok((id, existing))
     }
 
-    /// Set a session's running end time and message count after appending turns
-    /// incrementally (the browser host path). New turns are exported via the
-    /// exported_seq high-water mark, so no re-flush flag is needed. Idempotent.
-    pub fn set_progress(&self, session_id: i64, ended_at_ms: i64, message_count: i64) -> rusqlite::Result<()> {
+    pub fn set_progress(
+        &self,
+        session_id: i64,
+        ended_at_ms: i64,
+        message_count: i64,
+    ) -> rusqlite::Result<()> {
         self.conn.execute(
             "UPDATE sessions SET ended_at = MAX(ended_at, ?2), message_count = ?3 WHERE id = ?1",
             params![session_id, ended_at_ms, message_count],
@@ -163,7 +136,6 @@ impl Store {
         Ok(())
     }
 
-    /// Append one already-redacted turn. Idempotent on `(session_id, seq)`.
     pub fn add_turn(
         &self,
         session_id: i64,
@@ -180,13 +152,34 @@ impl Store {
         Ok(())
     }
 
-    /// Count of stored sessions (tests / status).
     pub fn session_count(&self) -> rusqlite::Result<i64> {
-        self.conn.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
+        self.conn
+            .query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
     }
 
-    /// Status-line stats: interactions touched since `since_ms` and the most
-    /// recent activity time.
+    pub fn set_setting(&self, key: &str, value: &str) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            params![key, value],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_setting(&self, key: &str) -> rusqlite::Result<Option<String>> {
+        self.conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = ?1",
+                params![key],
+                |r| r.get(0),
+            )
+            .map(Some)
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })
+    }
+
     pub fn activity_stats(&self, since_ms: i64) -> rusqlite::Result<ActivityStats> {
         let interactions: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM sessions WHERE ended_at >= ?1",
@@ -194,13 +187,14 @@ impl Store {
             |r| r.get(0),
         )?;
         let last: Option<i64> =
-            self.conn.query_row("SELECT MAX(ended_at) FROM sessions", [], |r| r.get(0))?;
-        Ok(ActivityStats { recent_interactions: interactions, last_activity_ms: last })
+            self.conn
+                .query_row("SELECT MAX(ended_at) FROM sessions", [], |r| r.get(0))?;
+        Ok(ActivityStats {
+            recent_interactions: interactions,
+            last_activity_ms: last,
+        })
     }
 
-    /// Sessions that have turns not yet exported (turn count beyond the
-    /// exported_seq high-water mark). Each carries its `exported_seq` so the
-    /// exporter emits only the new turns (seq >= exported_seq).
     pub fn pending_interactions(&self) -> rusqlite::Result<Vec<SessionRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT s.id, s.tool, s.external_id, s.provider, s.surface, s.model,
@@ -228,34 +222,39 @@ impl Store {
         rows.collect()
     }
 
-    /// Advance a session's exported-turn high-water mark after its new turns are
-    /// written to the day file.
     pub fn set_exported_seq(&self, id: i64, seq: i64) -> rusqlite::Result<()> {
-        self.conn
-            .execute("UPDATE sessions SET exported_seq = ?1 WHERE id = ?2", params![seq, id])?;
+        self.conn.execute(
+            "UPDATE sessions SET exported_seq = ?1 WHERE id = ?2",
+            params![seq, id],
+        )?;
         Ok(())
     }
 
-    /// Read a session's turns in order (for export).
     pub fn session_turns(&self, session_id: i64) -> rusqlite::Result<Vec<TurnRow>> {
         self.session_turns_from(session_id, 0)
     }
 
-    /// Read a session's turns with `seq >= from_seq`, in order — the new turns to
-    /// export incrementally.
-    pub fn session_turns_from(&self, session_id: i64, from_seq: i64) -> rusqlite::Result<Vec<TurnRow>> {
+    pub fn session_turns_from(
+        &self,
+        session_id: i64,
+        from_seq: i64,
+    ) -> rusqlite::Result<Vec<TurnRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT seq, role, redacted_text, ts FROM turns
              WHERE session_id = ?1 AND seq >= ?2 ORDER BY seq",
         )?;
         let rows = stmt.query_map(params![session_id, from_seq], |r| {
-            Ok(TurnRow { seq: r.get(0)?, role: r.get(1)?, redacted_text: r.get(2)?, ts_ms: r.get(3)? })
+            Ok(TurnRow {
+                seq: r.get(0)?,
+                role: r.get(1)?,
+                redacted_text: r.get(2)?,
+                ts_ms: r.get(3)?,
+            })
         })?;
         rows.collect()
     }
 }
 
-/// Fields to insert/update for a session upsert.
 #[derive(Debug, Clone)]
 pub struct SessionUpsert<'a> {
     pub tool: &'a str,
@@ -268,13 +267,12 @@ pub struct SessionUpsert<'a> {
     pub message_count: i64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct ActivityStats {
     pub recent_interactions: i64,
     pub last_activity_ms: Option<i64>,
 }
 
-/// One session row as read back for export/analytics.
 #[derive(Debug, Clone)]
 pub struct SessionRow {
     pub id: i64,
@@ -286,11 +284,10 @@ pub struct SessionRow {
     pub started_at_ms: i64,
     pub ended_at_ms: i64,
     pub message_count: i64,
-    /// Turns already exported (rows with seq < this are on disk).
+
     pub exported_seq: i64,
 }
 
-/// One turn row. `redacted_text` is always post-redaction.
 #[derive(Debug, Clone)]
 pub struct TurnRow {
     pub seq: i64,
@@ -304,7 +301,6 @@ mod tests {
     use super::*;
 
     fn upsert(tool: &str, id: &str, ended: i64, count: i64) -> SessionUpsert<'static> {
-        // Leak small test strings to get 'static borrows — fine for a unit test.
         SessionUpsert {
             tool: Box::leak(tool.to_string().into_boxed_str()),
             external_id: Box::leak(id.to_string().into_boxed_str()),
@@ -321,15 +317,17 @@ mod tests {
     fn upsert_is_idempotent_and_appends_only_new_turns() {
         let s = Store::open_in_memory().unwrap();
 
-        // First read: session with 2 turns.
-        let (id, existing) = s.upsert_session(&upsert("claude-code", "sess-1", 2000, 2)).unwrap();
+        let (id, existing) = s
+            .upsert_session(&upsert("claude-code", "sess-1", 2000, 2))
+            .unwrap();
         assert_eq!(existing, 0);
         s.add_turn(id, 0, Role::User, "hello", 1000).unwrap();
-        s.add_turn(id, 1, Role::Assistant, "hi there", 1500).unwrap();
+        s.add_turn(id, 1, Role::Assistant, "hi there", 1500)
+            .unwrap();
 
-        // Transcript grew: same session, now 4 turns. Upsert returns the 2 we
-        // already stored, so ingest appends only seq 2 and 3.
-        let (id2, existing2) = s.upsert_session(&upsert("claude-code", "sess-1", 4000, 4)).unwrap();
+        let (id2, existing2) = s
+            .upsert_session(&upsert("claude-code", "sess-1", 4000, 4))
+            .unwrap();
         assert_eq!(id2, id, "same session identity → same row");
         assert_eq!(existing2, 2, "already-stored turns are reported");
         s.add_turn(id, 2, Role::User, "more", 3000).unwrap();
@@ -338,16 +336,12 @@ mod tests {
         assert_eq!(s.session_count().unwrap(), 1, "no duplicate session");
         assert_eq!(s.session_turns(id).unwrap().len(), 4);
 
-        // A re-inserted duplicate seq is ignored, never duplicated.
         s.add_turn(id, 0, Role::User, "hello again", 9999).unwrap();
         assert_eq!(s.session_turns(id).unwrap().len(), 4);
     }
 
     #[test]
     fn legacy_pre_0_4_schema_is_migrated_not_left_broken() {
-        // A DB written by the screen-scrape era: incompatible `sessions` shape,
-        // user_version 0. Opening it must rebuild to the current schema so the
-        // new columns exist (the "no such column: tool" production bug).
         let dir = std::env::temp_dir().join(format!("aum-mig-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("legacy.sqlite");
@@ -360,15 +354,23 @@ mod tests {
                  INSERT INTO sessions (started_at, source_kind, app_hash) VALUES (1, 'ocr', 'deadbeef');",
             )
             .unwrap();
-            // user_version defaults to 0 — the legacy state.
         }
-        // Opening through Store must migrate: the new `tool` column now exists,
-        // the incompatible legacy row is gone, and writes work.
+
         let store = Store::open(&path).unwrap();
-        assert_eq!(store.session_count().unwrap(), 0, "incompatible legacy rows dropped");
-        let (id, _) = store.upsert_session(&upsert("claude-code", "s", 2, 1)).unwrap();
+        assert_eq!(
+            store.session_count().unwrap(),
+            0,
+            "incompatible legacy rows dropped"
+        );
+        let (id, _) = store
+            .upsert_session(&upsert("claude-code", "s", 2, 1))
+            .unwrap();
         store.add_turn(id, 0, Role::User, "hi", 1).unwrap();
-        assert_eq!(store.pending_interactions().unwrap().len(), 1, "new schema is usable");
+        assert_eq!(
+            store.pending_interactions().unwrap().len(),
+            1,
+            "new schema is usable"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -380,13 +382,19 @@ mod tests {
         let pending = s.pending_interactions().unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].exported_seq, 0);
-        // Export the one turn, advance the high-water mark → nothing pending.
+
         s.set_exported_seq(id, 1).unwrap();
         assert_eq!(s.pending_interactions().unwrap().len(), 0);
-        // A new turn makes it pending again, and only that turn is unexported.
+
         s.add_turn(id, 1, Role::Assistant, "a", 1500).unwrap();
         let pending = s.pending_interactions().unwrap();
         assert_eq!(pending.len(), 1);
-        assert_eq!(s.session_turns_from(id, pending[0].exported_seq).unwrap().len(), 1, "only the new turn");
+        assert_eq!(
+            s.session_turns_from(id, pending[0].exported_seq)
+                .unwrap()
+                .len(),
+            1,
+            "only the new turn"
+        );
     }
 }

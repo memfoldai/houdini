@@ -1,16 +1,3 @@
-//! The macOS app shell: `NSApplication` (Accessory) + status-bar menu + a
-//! main-thread timer that scans AI-tool transcripts.
-//!
-//! There is no screen capture and no TCC permission. The timer, on the main run
-//! loop (serially, so the shared `Rc<Runtime>` never re-enters), does two cheap
-//! things on their own cadences: scan tool transcripts for new interactions and
-//! flush new turns to day files. Web chats arrive separately via the browser
-//! extension's native-messaging host. Everything is read-only observation of
-//! files the user already owns.
-//!
-//! Pause is GLOBAL: while paused, ingestion is skipped, so nothing new is
-//! recorded — the switch protects whatever the user is doing, in any app.
-
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::process::Command;
@@ -31,37 +18,27 @@ use tray_icon::{TrayIcon, TrayIconBuilder};
 use ai_usage_monitor::config::{self, AppConfig, Paths};
 use ai_usage_monitor::export;
 use ai_usage_monitor::ingest::Ingestor;
-use ai_usage_monitor::store::Store;
+use ai_usage_monitor::store::{ActivityStats, Store, PAUSE_UNTIL_KEY};
 
 use crate::tray_glyph::{self, Glyph};
 
-/// Base run-loop tick; each detector runs on its own multiple of this.
 const BASE_TICK_S: f64 = 1.0;
-/// Refresh menu text at least this often (ticks) even without a state change.
-const MENU_REFRESH_EVERY_TICKS: u64 = 3;
-/// Window for the "recorded today" status count.
+
 const RECENT_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
-/// After the last interaction is recorded, keep showing the "active" disc this
-/// long before decaying to the idle ring — long enough to track a live session
-/// (turns arrive every few seconds), short enough not to stick on.
+
 const ACTIVE_WINDOW_MS: i64 = 45_000;
-/// Content-free heartbeat cadence.
+
 const HEARTBEAT_MS: i64 = 30_000;
 
-/// Timed-pause durations (monotonic ms). Indefinite uses an i64::MAX sentinel.
 const PAUSE_15M_MS: i64 = 15 * 60 * 1000;
 const PAUSE_1H_MS: i64 = 60 * 60 * 1000;
 
-/// Monotonic + wall clock for one tick. Detection cadence uses the monotonic
-/// value (immune to wall-clock jumps); stored timestamps use the wall clock.
 #[derive(Clone, Copy)]
 struct Clock {
     mono_ms: i64,
     wall_ms: i64,
 }
 
-/// Shared, main-thread-only runtime. Every field a tick or menu action touches
-/// lives here behind a `Cell`/`RefCell`; nothing crosses threads.
 struct Runtime {
     store: Rc<Store>,
     ingestor: RefCell<Ingestor>,
@@ -71,15 +48,10 @@ struct Runtime {
     transcript_poll_ms: i64,
     flush_ms: i64,
 
-    tick_count: Cell<u64>,
     last_transcript_ms: Cell<i64>,
     last_flush_ms: Cell<i64>,
     heartbeat_at: Cell<i64>,
-    /// Monotonic ms of the last newly-ingested turn (drives the "catching" glyph).
-    last_ingest_ms: Cell<i64>,
 
-    /// `None` = active; `Some(t)` = paused until monotonic ms `t` (i64::MAX =
-    /// until the user resumes).
     paused_until: Cell<Option<i64>>,
     start: Instant,
 
@@ -92,7 +64,6 @@ struct Runtime {
     ids: MenuIds,
 }
 
-/// Command menu-item ids, matched in the event drain.
 struct MenuIds {
     pause_15m: MenuId,
     pause_1h: MenuId,
@@ -148,7 +119,6 @@ impl Delegate {
     }
 }
 
-/// Build the runtime, wire up the delegate, and run the app. Blocks until quit.
 pub fn run() {
     let mtm = MainThreadMarker::new().expect("must run on the main thread");
 
@@ -170,8 +140,11 @@ pub fn run() {
 fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
     let store = Rc::new(Store::open(&paths.db_file).expect("open store"));
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
-    let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
-    // Ingest activity from launch onward, not the whole archive.
+    let now_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+
     let ingestor = Ingestor::new(home, now_ms);
 
     let ids = MenuIds {
@@ -194,11 +167,9 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         export_dir: paths.export_dir.clone(),
         transcript_poll_ms: cfg.transcript_poll_ms as i64,
         flush_ms: cfg.flush_ms as i64,
-        tick_count: Cell::new(0),
         last_transcript_ms: Cell::new(i64::MIN),
         last_flush_ms: Cell::new(0),
         heartbeat_at: Cell::new(0),
-        last_ingest_ms: Cell::new(i64::MIN),
         paused_until: Cell::new(None),
         start: Instant::now(),
         tray: RefCell::new(None),
@@ -216,17 +187,34 @@ fn install_tray(rt: &Rc<Runtime>) {
 
     let pause = Submenu::new("Take a break", true);
     pause
-        .append(&MenuItem::with_id(rt.ids.pause_15m.clone(), "For 15 minutes", true, None))
-        .and(pause.append(&MenuItem::with_id(rt.ids.pause_1h.clone(), "For an hour", true, None)))
-        .and(pause.append(&MenuItem::with_id(rt.ids.pause_indef.clone(), "Until I'm back", true, None)))
+        .append(&MenuItem::with_id(
+            rt.ids.pause_15m.clone(),
+            "For 15 minutes",
+            true,
+            None,
+        ))
+        .and(pause.append(&MenuItem::with_id(
+            rt.ids.pause_1h.clone(),
+            "For an hour",
+            true,
+            None,
+        )))
+        .and(pause.append(&MenuItem::with_id(
+            rt.ids.pause_indef.clone(),
+            "Until I'm back",
+            true,
+            None,
+        )))
         .expect("build pause submenu");
 
     let show_data = MenuItem::with_id(rt.ids.show_data.clone(), "Show my data", true, None);
     let quit = MenuItem::with_id(rt.ids.quit.clone(), "Quit", true, None);
 
-    // Disabled title header showing the app name + version — the standard place a
-    // menu-bar app surfaces its version (mirrors CFBundleShortVersionString).
-    let title = MenuItem::new(concat!("AI Usage Monitor ", env!("CARGO_PKG_VERSION")), false, None);
+    let title = MenuItem::new(
+        concat!("AI Usage Monitor ", env!("CARGO_PKG_VERSION")),
+        false,
+        None,
+    );
 
     menu.append(&title).expect("title");
     menu.append(&PredefinedMenuItem::separator()).expect("sep0");
@@ -247,8 +235,12 @@ fn install_tray(rt: &Rc<Runtime>) {
         .expect("build tray icon");
     *rt.tray.borrow_mut() = Some(tray);
     let clock = rt.clock();
+    let stats = rt
+        .store
+        .activity_stats(clock.wall_ms - RECENT_WINDOW_MS)
+        .unwrap_or_default();
     paint(rt, Glyph::Idle);
-    refresh_menu(rt, Glyph::Idle, clock.wall_ms);
+    refresh_menu(rt, Glyph::Idle, clock.wall_ms, &stats);
 }
 
 fn install_timer(rt: &Rc<Runtime>) {
@@ -259,81 +251,66 @@ fn install_timer(rt: &Rc<Runtime>) {
     *rt.timer.borrow_mut() = Some(timer);
 }
 
-/// One tick: honor pause, run each detector on its cadence, repaint on change,
-/// flush, and drain menu clicks.
 fn tick(rt: &Rc<Runtime>) {
     let clock = rt.clock();
 
     if let Some(until) = rt.paused_until.get() {
         if clock.mono_ms >= until {
             rt.paused_until.set(None);
+            let _ = rt.store.set_setting(PAUSE_UNTIL_KEY, "0");
             log::info!("auto-resumed after timed pause");
         }
     }
 
-    if rt.is_paused() {
-        paint(rt, Glyph::Paused);
-        refresh_menu(rt, Glyph::Paused, clock.wall_ms);
-        drain_menu_events(rt);
-        return;
-    }
-
-    let n = rt.tick_count.get().wrapping_add(1);
-    rt.tick_count.set(n);
-
-    // Layer A — transcript ingestion. saturating_sub, never `-`: the timers init
-    // to i64::MIN ("due immediately"), and `mono - i64::MIN` OVERFLOWS in release
-    // and wraps negative, which would make every poll read as "not due" and stop
-    // detection entirely. Saturating gives i64::MAX (== due) on the first tick.
-    if clock.mono_ms.saturating_sub(rt.last_transcript_ms.get()) >= rt.transcript_poll_ms {
-        rt.last_transcript_ms.set(clock.mono_ms);
-        let stats = rt.ingestor.borrow_mut().poll(&rt.store);
-        if stats.new_turns > 0 {
-            rt.last_ingest_ms.set(clock.mono_ms);
-            log::info!(
-                "ingested {} new message(s) across {} session(s)",
-                stats.new_turns,
-                stats.sessions
-            );
+    if !rt.is_paused() {
+        if due(&rt.last_transcript_ms, clock.mono_ms, rt.transcript_poll_ms) {
+            let stats = rt.ingestor.borrow_mut().poll(&rt.store);
+            if stats.new_turns > 0 {
+                log::info!(
+                    "ingested {} new message(s) across {} session(s)",
+                    stats.new_turns,
+                    stats.sessions
+                );
+            }
+        }
+        if due(&rt.last_flush_ms, clock.mono_ms, rt.flush_ms) {
+            if let Err(e) =
+                export::flush_pending(&rt.store, &rt.install_id, &rt.export_dir, clock.wall_ms)
+            {
+                log::error!("day-file flush error: {e}");
+            }
+        }
+        if due(&rt.heartbeat_at, clock.mono_ms, HEARTBEAT_MS) {
+            log::info!("heartbeat: watching for new AI messages");
         }
     }
 
-    if clock.mono_ms.saturating_sub(rt.heartbeat_at.get()) > HEARTBEAT_MS {
-        rt.heartbeat_at.set(clock.mono_ms);
-        log::info!("heartbeat: watching transcripts for new AI messages");
-    }
-
-    let glyph = glyph_for(rt, clock.mono_ms);
-    let changed = rt.painted.get() != Some(glyph);
+    let stats = rt
+        .store
+        .activity_stats(clock.wall_ms - RECENT_WINDOW_MS)
+        .unwrap_or_default();
+    let glyph = glyph_for(rt, clock.wall_ms, &stats);
     paint(rt, glyph);
-    if changed || n % MENU_REFRESH_EVERY_TICKS == 0 {
-        refresh_menu(rt, glyph, clock.wall_ms);
-    }
-
-    if clock.mono_ms.saturating_sub(rt.last_flush_ms.get()) > rt.flush_ms {
-        rt.last_flush_ms.set(clock.mono_ms);
-        match export::flush_pending(&rt.store, &rt.install_id, &rt.export_dir, clock.wall_ms) {
-            Ok(n) if n > 0 => log::info!("wrote {n} record(s) to the day file"),
-            Ok(_) => {}
-            Err(e) => log::error!("day-file flush error: {e}"),
-        }
-    }
-
+    refresh_menu(rt, glyph, clock.wall_ms, &stats);
     drain_menu_events(rt);
 }
 
-/// Icon state: a real interaction just recorded flashes the disc briefly;
-/// otherwise the steady monitoring glyph. Network presence (an app merely open)
-/// deliberately does NOT drive the icon — that state never cleared and read as
-/// stale; it lives in the data and the dropdown detail instead.
-fn glyph_for(rt: &Rc<Runtime>, now_mono_ms: i64) -> Glyph {
-    // saturating_sub: last_ingest_ms init is i64::MIN, and `now - i64::MIN`
-    // overflows/wraps in release to a small value → the icon would read "active"
-    // forever. Saturating gives i64::MAX (not recent) → Idle.
-    if now_mono_ms.saturating_sub(rt.last_ingest_ms.get()) < ACTIVE_WINDOW_MS {
-        Glyph::Active
+fn due(last: &Cell<i64>, now_mono_ms: i64, interval_ms: i64) -> bool {
+    if now_mono_ms.saturating_sub(last.get()) >= interval_ms {
+        last.set(now_mono_ms);
+        true
     } else {
-        Glyph::Idle
+        false
+    }
+}
+
+fn glyph_for(rt: &Rc<Runtime>, wall_now_ms: i64, stats: &ActivityStats) -> Glyph {
+    if rt.is_paused() {
+        return Glyph::Paused;
+    }
+    match stats.last_activity_ms {
+        Some(t) if wall_now_ms.saturating_sub(t) < ACTIVE_WINDOW_MS => Glyph::Active,
+        _ => Glyph::Idle,
     }
 }
 
@@ -348,7 +325,7 @@ fn paint(rt: &Rc<Runtime>, glyph: Glyph) {
     rt.painted.set(Some(glyph));
 }
 
-fn refresh_menu(rt: &Rc<Runtime>, glyph: Glyph, now_ms: i64) {
+fn refresh_menu(rt: &Rc<Runtime>, glyph: Glyph, now_ms: i64, stats: &ActivityStats) {
     let status = match glyph {
         Glyph::Paused => "Paused",
         Glyph::Active => "Recording AI activity",
@@ -356,17 +333,19 @@ fn refresh_menu(rt: &Rc<Runtime>, glyph: Glyph, now_ms: i64) {
     };
     rt.status_item.set_text(status);
 
-    match rt.store.activity_stats(now_ms - RECENT_WINDOW_MS) {
-        Ok(stats) if stats.recent_interactions == 0 && stats.last_activity_ms.is_none() => {
-            rt.detail_item.set_text("Nothing recorded yet today");
-        }
-        Ok(stats) => rt.detail_item.set_text(format!(
+    if stats.recent_interactions == 0 && stats.last_activity_ms.is_none() {
+        rt.detail_item.set_text("Nothing recorded yet today");
+    } else {
+        rt.detail_item.set_text(format!(
             "{} AI session{} today · last {}",
             stats.recent_interactions,
-            if stats.recent_interactions == 1 { "" } else { "s" },
+            if stats.recent_interactions == 1 {
+                ""
+            } else {
+                "s"
+            },
             relative_time(stats.last_activity_ms, now_ms)
-        )),
-        Err(e) => log::error!("status stats error: {e}"),
+        ));
     }
 
     rt.resume_item.set_enabled(rt.is_paused());
@@ -391,27 +370,51 @@ fn drain_menu_events(rt: &Rc<Runtime>) {
     }
 }
 
-/// Apply a pause/resume. On pause, close any open presence interval so a
-/// half-observed span is finalized rather than left dangling.
 fn set_pause(rt: &Rc<Runtime>, until: Option<i64>, why: &str) {
-    if until.is_some() {
-    }
+    let clock = rt.clock();
     rt.paused_until.set(until);
+
+    let deadline_wall = match until {
+        None => 0,
+        Some(i64::MAX) => i64::MAX,
+        Some(mono) => clock.wall_ms + (mono - clock.mono_ms).max(0),
+    };
+    let _ = rt
+        .store
+        .set_setting(PAUSE_UNTIL_KEY, &deadline_wall.to_string());
     log::info!("{why}");
-    let glyph = if until.is_some() { Glyph::Paused } else { Glyph::Idle };
+
+    let glyph = if until.is_some() {
+        Glyph::Paused
+    } else {
+        Glyph::Idle
+    };
+    let stats = rt
+        .store
+        .activity_stats(clock.wall_ms - RECENT_WINDOW_MS)
+        .unwrap_or_default();
     paint(rt, glyph);
-    refresh_menu(rt, glyph, rt.clock().wall_ms);
+    refresh_menu(rt, glyph, clock.wall_ms, &stats);
 }
 
-/// Reveal the day-partitioned data folder in Finder, flushing pending first.
 fn do_show_data(rt: &Rc<Runtime>) {
-    let _ = export::flush_pending(&rt.store, &rt.install_id, &rt.export_dir, rt.clock().wall_ms);
+    let _ = export::flush_pending(
+        &rt.store,
+        &rt.install_id,
+        &rt.export_dir,
+        rt.clock().wall_ms,
+    );
     let dir = export::data_dir_path(&rt.export_dir);
     let _ = Command::new("open").arg(&dir).spawn();
 }
 
 fn do_quit(rt: &Rc<Runtime>) {
-    let _ = export::flush_pending(&rt.store, &rt.install_id, &rt.export_dir, rt.clock().wall_ms);
+    let _ = export::flush_pending(
+        &rt.store,
+        &rt.install_id,
+        &rt.export_dir,
+        rt.clock().wall_ms,
+    );
     if let Some(mtm) = MainThreadMarker::new() {
         NSApplication::sharedApplication(mtm).terminate(None);
     }
@@ -425,7 +428,6 @@ fn tooltip_for(glyph: Glyph) -> &'static str {
     }
 }
 
-/// Human "N ago" for a past unix-ms instant, or "never".
 fn relative_time(then_ms: Option<i64>, now_ms: i64) -> String {
     let Some(then) = then_ms else {
         return "never".to_string();

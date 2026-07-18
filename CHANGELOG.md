@@ -5,6 +5,27 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.4.4] — 2026-07-18
+
+### Fixed
+- **Menu-bar icon now updates immediately.** It previously reacted only to the
+  app's own transcript poll (up to 5 s late) and **not at all to web chats** (the
+  native host writes separately). The icon now reflects the store's latest
+  activity every second, so a web reply lights it up within ~1 s and short
+  interactions no longer go unshown. Transcript polling also tightened to 2 s.
+- **Pause now covers web chats.** The pause deadline is shared via the store, so
+  the browser native host drops web turns while paused (it is a separate process
+  and previously kept recording).
+- **Retry/edit no longer duplicate a turn.** An exact consecutive-duplicate turn
+  (e.g. a regenerate that re-sends the same prompt) is suppressed; history stays
+  append-only otherwise, so every prior state is still recorded.
+
+### Changed
+- **Code carries no comments.** Per the project's convention, the source is
+  self-documenting and the rationale lives in the docs (README/AGENTS/CHANGELOG);
+  all inline and doc comments were removed across Rust and the extension JS. New
+  `settings` table (additive, no data migration) backs the shared pause state.
+
 ## [0.4.3] — 2026-07-18
 
 ### Removed
@@ -319,6 +340,7 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.4.4]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.4
 [0.4.3]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.3
 [0.4.2]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.2
 [0.4.1]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.1
