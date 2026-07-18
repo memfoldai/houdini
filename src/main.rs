@@ -19,8 +19,6 @@ mod diagnose;
 #[cfg(target_os = "macos")]
 mod nativehost;
 #[cfg(target_os = "macos")]
-mod netpresence;
-#[cfg(target_os = "macos")]
 mod tray_glyph;
 
 #[cfg(target_os = "macos")]

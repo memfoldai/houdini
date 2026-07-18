@@ -80,13 +80,13 @@ Stapling lets Gatekeeper verify offline, so teammates launch with no warning.
    - Self-signed build: **right-click → Open**, then **Open** in the dialog.
      (Only the first launch; macOS remembers thereafter.)
 3. A ring appears in the menu bar. **No permission prompt** — the app reads the
-   AI tools' own local logs and observes its own network connections; it never
+   AI tools' own local logs (and web chats via the optional extension); it never
    asks for Screen Recording or Accessibility.
 
 There is no window. Click the menu-bar icon to see live status — current state,
 AI sessions recorded in the last 24 h, and when the last activity was. The icon
-briefly fills to a solid disc when a new interaction is recorded and shows a dot
-when an AI is in use nearby. Data is stored automatically (redacted) to day
+fills to a solid disc while AI activity is being recorded (a hollow ring when
+quiet). Data is stored automatically (redacted) to day
 files; **Show my data** reveals the folder, **Quit** stops it.
 
 To confirm detection end-to-end (and audit redaction before trusting any data),
@@ -105,7 +105,7 @@ Then in each browser: `chrome://extensions` → **Developer mode** → **Load un
 → select the `extension/` folder. Send one web AI message to confirm it appears in
 your day file.
 
-The extension and app are a matched pair and **share a version** (both `0.4.0`):
+The extension and app are a matched pair and **share a version**:
 the extension's fixed id (`jphmlmjmieilhimgemjanlkgfommlife`) is allowlisted by the
 host manifest `--install-browser-host` writes, and they talk only over local native
 messaging. Upgrade them together. Remove with `--uninstall-browser-host` and by

@@ -1,9 +1,9 @@
 # ai-usage-monitor
 
 A minimal, menu-bar-only macOS app that records **what people use AI for** — the
-observation instrument for an internal AI-usage study. It reads AI tools' own
-structured logs and observes AI network activity; it does **not** capture the
-screen.
+observation instrument for an internal AI-usage study. It reads the actual
+prompts and replies from AI tools' own local logs and web chats; it does **not**
+capture the screen and does **not** watch network traffic.
 
 It is deliberately small and standalone: its own repo, no cloud, no dashboards,
 no coupling to any other product. It runs on the study team's own machines with
@@ -11,14 +11,13 @@ per-install consent and a visible menu-bar indicator.
 
 ## How it detects AI use
 
-Two independent, reliable signals — no screenshots, no OCR, no guessing from
-pixels:
+Two content sources, both reading the real messages — no screenshots, no OCR, no
+guessing from pixels, and no content-free "an app was open" noise:
 
-**Layer A — transcript ingestion (the rich signal).** Coding agents already
-persist every interaction to a structured local transcript. The monitor reads
-those directly, so it gets the exact prompt and reply, the real timestamps, the
-model, and a session id — with zero false positives and full coverage across
-desktops and Spaces. Adapters ship for:
+**Transcript ingestion (CLI/agent tools).** Coding agents already persist every
+interaction to a structured local transcript. The monitor reads those directly,
+so it gets the exact prompt and reply, real timestamps, the model, and a session
+id — zero false positives, full coverage across desktops and Spaces. Adapters:
 
 | Tool | Reads |
 |---|---|
@@ -27,42 +26,32 @@ desktops and Spaces. Adapters ship for:
 
 Adding a tool is adding one small adapter; the rest of the pipeline is shared.
 
-**Layer B — network presence (the coverage signal).** For AI used where no local
-transcript exists (web chats, native apps), the monitor observes which process
-connects to which AI endpoint, read from the process table with `libproc` — the
-same information `lsof` shows, **no root and no entitlement**. A known AI tool or
-app is attributed by its process identity (so the ChatGPT app, the Codex CLI, and
-Claude Code all register even though OpenAI's traffic rides Cloudflare); a browser
-is attributed only when its destination is a provider-owned IP range. This is a
-content-free "an AI tool was active" signal — who, when, and how often, never
-what was said.
+**Browser extension (web chats).** Web ChatGPT/Claude leave no local transcript.
+An optional Chromium extension ([extension/](extension/README.md)) reads each
+exchange — the prompt from the site's own API request, the reply from the rendered
+message — and delivers it to the app over local native messaging, never over the
+network. It works in background tabs. Covers ChatGPT and Claude web today.
 
-Everything that is not identifiably AI resolves to nothing, which is why Slack, an
-editor, or a browser to an unrelated site never register.
-
-**Layer C — browser web chats (optional extension).** Web ChatGPT/Claude leave no
-local transcript and ride shared CDNs, so neither layer above reads their content.
-An optional Chromium extension ([extension/](extension/README.md)) captures them
-by intercepting the site's **own API calls** (the reliable technique, and it works
-in background tabs), delivering each exchange to the app over local native
-messaging — never over the network. Covers ChatGPT and Claude on the web today.
+Both sources produce the **same standardized record**: the actual prompt/response
+turns with provider/tool/surface/model. Nothing that isn't a real AI message is
+recorded.
 
 ### Honest limits
 
-- **The browser extension is installed per browser**, and its per-site parsers
-  track reverse-engineered endpoint shapes, so a site redesign can need a small
-  parser fix. Without it, web chats are uncaptured (their native apps/CLIs are
-  still caught).
+- **The browser extension is installed per browser**, and its per-site extraction
+  tracks reverse-engineered page shapes, so a site redesign can need a small fix.
+  Without it, web chats are uncaptured (CLI/agent tools are still captured).
+- **Native desktop apps** (ChatGPT.app, Claude.app) keep their content
+  server-side and aren't captured — use the CLI/agent tools or the web with the
+  extension.
 - **Gemini on the web** isn't parsed yet (obfuscated batch transport).
-- Network presence means "an AI tool was connected/active," coarser than a
-  discrete message. The transcript and extension layers supply exact interactions.
 
 ## Privacy model
 
 - **Local-only.** No network egress anywhere in the code path. Nothing uploads.
-- **No screen capture, no TCC permission.** The app reads files the user already
-  owns and observes its own user's sockets — it never asks for Screen Recording
-  or Accessibility.
+- **No screen capture, no TCC permission, no network monitoring.** The app reads
+  files the user already owns; the extension reads the page in the user's own
+  browser. It never asks for Screen Recording or Accessibility.
 - **Content is redacted** — offline, before anything touches disk — for secrets
   (provider API keys, private keys), emails, Luhn-checked cards, SSNs, phones.
 - **Identity is kept in the clear** on purpose: for a consenting internal study
@@ -73,13 +62,11 @@ messaging — never over the network. Covers ChatGPT and Claude on the web today
 ## Data format (OLAP-ready)
 
 The local store is SQLite (the source of truth). New records are written
-automatically — no manual export — into day-partitioned JSONL, laid out as two
-**flat, single-grain fact tables** so a warehouse reads them with no unnesting or
-joins:
+automatically — no manual export — into a day-partitioned JSONL **flat fact
+table**, one row per message, so a warehouse reads it with no unnesting or joins:
 
 ```
 data/interactions/YYYY-MM-DD.jsonl   # one row per message (turn)
-data/presence/YYYY-MM-DD.jsonl       # one row per network-presence interval
 ```
 
 Each row is flat and denormalized, has a stable `event_id` (so a re-load dedupes
@@ -87,7 +74,7 @@ trivially), and carries the day + device (so files from any number of machines
 merge by concatenation). Turns are written **incrementally** — a growing session
 appends only its new turns, never re-emitting the whole thing.
 
-**`data/interactions`** — one row per turn:
+`data/interactions/YYYY-MM-DD.jsonl` — one row per turn:
 
 ```json
 {"schema":"aum/3","kind":"interaction","event_id":"<device>:<session>:0",
@@ -96,14 +83,8 @@ appends only its new turns, never re-emitting the whole thing.
  "session_id":"…","turn_index":0,"role":"user","text":"…","text_chars":42}
 ```
 
-**`data/presence`** — one row per interval:
-
-```json
-{"schema":"aum/3","kind":"presence","event_id":"<device>:presence:7",
- "device":"…","day":"2026-07-16","ts_ms":…,"provider":"openai",
- "process":"ChatGPT","surface":"app","started_ms":…,"ended_ms":…,
- "duration_ms":30000,"observations":12}
-```
+Every source (Claude Code, Codex, ChatGPT web, Claude web) produces this exact
+row shape, so the table is uniform regardless of where the AI was used.
 
 A query is a flat scan — e.g. DuckDB:
 `SELECT provider, count(*) FROM read_json_auto('data/interactions/*.jsonl') WHERE role='assistant' GROUP BY 1`.
@@ -114,9 +95,10 @@ analysis-time job over these files — see [docs/grouping.md](docs/grouping.md).
 ## Menu bar & status
 
 The icon is a monochrome template glyph whose **shape** shows state (macOS tints
-it): a hollow ring when idle, a ring-with-dot when an AI is in use nearby, a
-solid disc the moment a new interaction is recorded, two bars when paused. Click
-it for a friendly readout and:
+it): a **hollow ring** when quiet, a **filled disc** while AI activity is being
+recorded (it decays back to the ring a while after the last interaction), and
+**two bars** when paused. Click it for a header showing the app version, a plain
+status line, a count of sessions recorded today, and:
 
 - **Take a break** — for 15 minutes, an hour, or until you're back. While paused
   nothing is recorded.
@@ -130,16 +112,15 @@ Requires a recent stable Rust toolchain and macOS 14+.
 ```bash
 cargo test                       # portable core + integration (runs anywhere)
 cargo build --release
-./target/release/ai-usage-monitor --diagnose   # one-shot: what each layer sees now
+./target/release/ai-usage-monitor --diagnose   # one-shot: transcript counts
 ./target/release/ai-usage-monitor              # run the menu-bar app
 ```
 
-`--diagnose` is the "is it working?" answer: it prints how many interactions each
-transcript adapter can read and every AI network connection live on the machine
-right now — no content, just counts and endpoints.
+`--diagnose` prints how many interactions each transcript adapter can read right
+now — no content, just counts. (Web chats come via the extension; run the app.)
 
-Signing is still recommended for a stable install identity, but the app no longer
-depends on any TCC grant, so a rebuild never silently loses capture.
+Signing is recommended for a stable install identity, but the app depends on no
+TCC grant, so a rebuild never silently loses anything.
 
 ## Configuration
 
@@ -149,8 +130,6 @@ on first run. Operator knobs:
 | Key | Default | Purpose |
 |---|---|---|
 | `transcript_poll_ms` | 5000 | How often to scan transcripts for new interactions |
-| `network_poll_ms` | 5000 | How often to poll the process table for AI connections |
-| `presence_gap_ms` | 60000 | A provider unseen this long closes its presence interval |
 | `flush_ms` | 15000 | How often to write new records to day files |
 | `ner_model_dir` | unset | Enables the [NER redaction layer](docs/NER.md) (`--features ner`) |
 

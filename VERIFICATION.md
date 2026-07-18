@@ -18,37 +18,36 @@ cargo build --release
 ./target/release/ai-usage-monitor --diagnose
 ```
 
-**Pass:** `--diagnose` prints two sections. Layer A lists your transcript tools
-with non-zero counts if you have used them (e.g. `claude-code  N file(s) → M
-session(s)`). Layer B lists AI network connections active right now (open an AI
-app or run an AI CLI first, or it will be empty). No content is printed.
+**Pass:** `--diagnose` lists your transcript tools with non-zero counts if you
+have used them (e.g. `claude-code  N file(s) → M session(s)`). No content is
+printed.
 
 ---
 
-## 1. Layer A — a real interaction is ingested
+## 1. A CLI/agent interaction is ingested
 
 1. Run a prompt in Claude Code or Codex (e.g. "explain regenerative agriculture").
 2. Launch the app: `./target/release/ai-usage-monitor` (a ring icon appears in
    the menu bar).
 3. Wait ~20 s (one ingest + one flush), then **Show my data**.
 
-**Pass:** today's day file
-`~/Library/Application Support/ai.memfold.ai-usage-monitor/data/YYYY-MM-DD.jsonl`
-contains an `"kind":"interaction"` line whose `provider`/`tool`/`surface`/`model`
-are correct and whose `turns` hold your prompt and the reply. The icon briefly
-shows the solid disc when a new interaction is recorded.
+**Pass:** today's file
+`~/Library/Application Support/ai.memfold.ai-usage-monitor/data/interactions/YYYY-MM-DD.jsonl`
+contains flat `"kind":"interaction"` rows (one per turn) whose
+`provider`/`tool`/`surface`/`model` are correct, with your prompt (`role":"user"`)
+and the reply (`role":"assistant"`). The icon fills to a disc while recording.
 
 ---
 
-## 2. Layer B — apps and CLIs are detected across desktops
+## 2. A web chat is captured (needs the extension)
 
-With ChatGPT (app), Claude (app), and/or a running AI CLI open — including on
-other desktops/Spaces — run `--diagnose` again (or watch the running app).
+With the browser extension installed (see [extension/README.md](extension/README.md)),
+send a message in ChatGPT or Claude on the web.
 
-**Pass:** each open AI app/CLI appears in the Layer B list with the right
-provider (`ChatGPT → openai`, `Claude → anthropic`, `codex → openai`, …).
-Note the documented gap: **ChatGPT/Gemini in a browser tab will not appear** (CDN
-IPs are not provider-identifying) — their native apps do.
+**Pass:** the interactions file gains a `tool":"chatgpt-web"` (or `claude-web`) row
+pair — **both** a `role":"user"` and a `role":"assistant"` row for the exchange,
+grouped under one `session_id`. If the assistant row is missing, the DOM selector
+needs updating for the current site (see the extension README).
 
 ---
 
@@ -56,10 +55,9 @@ IPs are not provider-identifying) — their native apps do.
 
 With Slack, an editor, email, and unrelated browser tabs open and busy:
 
-**Pass:** none of them appear in the Layer B list, and no `interaction`/`presence`
-record is written for them. (Slack has no AI transcript and its endpoints are not
-AI providers, so it is structurally invisible — this is the class of false
-positive the old screen-scraper produced.)
+**Pass:** no `interaction` row is written for any of them. Only real AI transcripts
+and matched web-chat pages are recorded — everything else is structurally
+invisible.
 
 ---
 
@@ -89,10 +87,9 @@ deterministic-only redaction, never crash).
 
 ## Known limits (state these when sharing results)
 
-- **Browser web chats** (ChatGPT/Gemini) are not attributed by the network layer;
-  only their native apps/CLIs are. Reliable browser-content capture is a future
-  browser-extension layer.
-- **Network presence** means "an AI tool was connected/active," coarser than a
-  discrete message; the transcript layer supplies exact interactions.
-- **Adapters are per-tool.** A tool without an adapter is not ingested (its
-  network presence is still observed generically). Adding one is a small change.
+- **Native desktop apps** (ChatGPT.app, Claude.app) keep their content
+  server-side and are not captured — use the CLI/agent tools or the web extension.
+- **Web extraction is per-site and reverse-engineered**; a site redesign can need
+  a small selector fix. Gemini web is not parsed yet.
+- **Adapters are per-tool.** A CLI tool without an adapter is not ingested; adding
+  one is a small change.

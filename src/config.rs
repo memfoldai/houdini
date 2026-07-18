@@ -28,13 +28,6 @@ pub struct AppConfig {
     /// How often to scan transcripts for new interactions (ms).
     #[serde(default = "d_transcript_poll_ms")]
     pub transcript_poll_ms: u64,
-    /// How often to poll the process table for AI network connections (ms).
-    #[serde(default = "d_network_poll_ms")]
-    pub network_poll_ms: u64,
-    /// A provider unseen on the network for this long closes its presence
-    /// interval (ms). Bridges brief connection churn into one "was active" span.
-    #[serde(default = "d_presence_gap_ms")]
-    pub presence_gap_ms: u64,
     /// How often to flush new/closed records to day files (ms).
     #[serde(default = "d_flush_ms")]
     pub flush_ms: u64,
@@ -48,12 +41,6 @@ pub struct AppConfig {
 fn d_transcript_poll_ms() -> u64 {
     5_000
 }
-fn d_network_poll_ms() -> u64 {
-    5_000
-}
-fn d_presence_gap_ms() -> u64 {
-    60_000
-}
 fn d_flush_ms() -> u64 {
     15_000
 }
@@ -63,8 +50,6 @@ impl AppConfig {
         Self {
             install_id,
             transcript_poll_ms: d_transcript_poll_ms(),
-            network_poll_ms: d_network_poll_ms(),
-            presence_gap_ms: d_presence_gap_ms(),
             flush_ms: d_flush_ms(),
             ner_model_dir: None,
         }
@@ -169,7 +154,7 @@ mod tests {
         assert_eq!(cfg.install_id, "keep-me", "existing id preserved");
         assert_eq!(cfg.transcript_poll_ms, 5_000, "missing field takes default");
         let reread = fs::read_to_string(&cf).unwrap();
-        assert!(reread.contains("network_poll_ms"), "file upgraded on load");
+        assert!(reread.contains("flush_ms"), "file upgraded on load");
         fs::remove_dir_all(&dir).ok();
     }
 

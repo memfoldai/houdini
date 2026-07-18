@@ -1,25 +1,31 @@
-# AI Usage Monitor — browser extension (Layer C)
+# AI Usage Monitor — browser extension (web chats)
 
 Captures **web AI chats** (ChatGPT, Claude on the web) that leave no local
-transcript, and delivers them to the local monitor. It intercepts the AI site's
-**own API calls** — the reliable, documented technique — rather than scraping the
-rendered DOM, and it works in **background tabs** because the page's own code runs
-regardless of tab focus.
+transcript, and delivers them to the local monitor. It reads the **prompt from the
+site's own API request** and the **reply from the rendered message in the DOM**
+after the response finishes — and it works in **background tabs** because the
+page's own code and DOM update regardless of tab focus.
+
+Reading the reply from the rendered DOM (not the provider's internal streaming
+format) is deliberate: that internal format is undocumented and changes, and it
+silently broke reply capture once; the rendered message is stable and is what the
+user actually saw.
 
 ## How it works
 
 ```
 page (MAIN world)          isolated world        service worker         native app
 interceptor.js  ──window──▶ relay.js ──runtime──▶ background.js ──stdio──▶ ai-usage-monitor
-  wraps fetch, reads          forwards              connectNative           --native-host:
-  the conversation API        the captured          per message             validate → redact
-  request + SSE reply         turn                                          → store → day file
+  reads prompt (request)      forwards              connectNative           --native-host:
+  + reply (rendered DOM)      the captured          per message             validate → redact
+  + id (page URL)             turn                                          → store → day file
 ```
 
 - `interceptor.js` runs in the page's MAIN world at `document_start`, wraps
-  `window.fetch`, and reads a **clone** of the response stream (never affecting
-  the page). Per-site parsers extract the prompt (request body) and the streamed
-  reply (SSE). See [Chrome: content script `world`](https://developer.chrome.com/docs/extensions/reference/manifest/content-scripts).
+  `window.fetch` to detect each exchange and read the prompt from the request,
+  then polls the DOM until the assistant message stabilizes to read the reply. The
+  conversation id comes from the page URL (`/c/<id>`). See
+  [Chrome: content script `world`](https://developer.chrome.com/docs/extensions/reference/manifest/content-scripts).
 - `relay.js` (isolated world) bridges the MAIN world to the extension.
 - `background.js` relays each captured exchange to the native host over
   [native messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging)
@@ -52,17 +58,17 @@ removing the unpacked extension.
 
 ## Supported sites and the honest caveat
 
-| Site | Status |
-|---|---|
-| `chatgpt.com` / `chat.openai.com` | prompt from request, reply from the cumulative SSE `message.content.parts` |
-| `claude.ai` | prompt from request `prompt`, reply from SSE `completion` / `text_delta` |
+| Site | Prompt | Reply | Conversation id |
+|---|---|---|---|
+| `chatgpt.com` / `chat.openai.com` | `/backend-api/conversation` request `messages[].content.parts` | rendered `[data-message-author-role="assistant"]` | page URL `/c/<id>` |
+| `claude.ai` | `…/completion` request `prompt` | rendered `.font-claude-message` | page URL `/chat/<id>` |
 
-These endpoint/SSE shapes are **reverse-engineered, not official contracts**, so a
-site redesign can break a parser — each is a small, isolated, defensive function
-in `interceptor.js` that fails silently (captures nothing) rather than storing
-garbage. The parsers are validated against the documented shapes; **each needs one
-live confirmation in a logged-in browser**, and adjusting one is a localized edit.
-Gemini uses an obfuscated batch transport and is intentionally not implemented.
+The request shapes and DOM selectors are **reverse-engineered, not official
+contracts**, so a site redesign can need a small fix — each is an isolated function
+in `interceptor.js` that captures nothing (rather than garbage) when it doesn't
+match, logging a console warning so the gap is visible. **The DOM selectors need
+one live confirmation in a logged-in browser.** Gemini uses an obfuscated batch
+transport and is intentionally not implemented.
 
 ## Development & versioning
 
@@ -75,5 +81,5 @@ Validate the parsers without a browser (CI runs this too):
 node extension/test/interceptor.test.mjs
 ```
 
-It drives the real `interceptor.js` against realistic ChatGPT/Claude SSE and
-asserts the extracted prompt/reply/conversation-id.
+It drives the real `interceptor.js` against a stubbed page (request body + a
+rendered assistant element) and asserts the extracted prompt/reply/conversation-id.

@@ -1,14 +1,14 @@
 //! The macOS app shell: `NSApplication` (Accessory) + status-bar menu + a
-//! main-thread timer that drives the two detectors.
+//! main-thread timer that scans AI-tool transcripts.
 //!
-//! There is no screen capture and no TCC permission here anymore. The timer, on
-//! the main run loop (serially, so the shared `Rc<Runtime>` never re-enters),
-//! does three cheap things on their own cadences: scan tool transcripts for new
-//! interactions (Layer A), poll the process table for AI network connections
-//! (Layer B), and flush finished records to day files. Everything is read-only
-//! observation of files and sockets the user already owns.
+//! There is no screen capture and no TCC permission. The timer, on the main run
+//! loop (serially, so the shared `Rc<Runtime>` never re-enters), does two cheap
+//! things on their own cadences: scan tool transcripts for new interactions and
+//! flush new turns to day files. Web chats arrive separately via the browser
+//! extension's native-messaging host. Everything is read-only observation of
+//! files the user already owns.
 //!
-//! Pause is GLOBAL: while paused, neither detector runs, so nothing new is
+//! Pause is GLOBAL: while paused, ingestion is skipped, so nothing new is
 //! recorded — the switch protects whatever the user is doing, in any app.
 
 use std::cell::{Cell, RefCell};
@@ -33,7 +33,6 @@ use ai_usage_monitor::export;
 use ai_usage_monitor::ingest::Ingestor;
 use ai_usage_monitor::store::Store;
 
-use crate::netpresence::NetPresence;
 use crate::tray_glyph::{self, Glyph};
 
 /// Base run-loop tick; each detector runs on its own multiple of this.
@@ -66,23 +65,18 @@ struct Clock {
 struct Runtime {
     store: Rc<Store>,
     ingestor: RefCell<Ingestor>,
-    net: RefCell<NetPresence>,
     install_id: String,
     export_dir: PathBuf,
 
     transcript_poll_ms: i64,
-    network_poll_ms: i64,
     flush_ms: i64,
 
     tick_count: Cell<u64>,
     last_transcript_ms: Cell<i64>,
-    last_network_ms: Cell<i64>,
     last_flush_ms: Cell<i64>,
     heartbeat_at: Cell<i64>,
     /// Monotonic ms of the last newly-ingested turn (drives the "catching" glyph).
     last_ingest_ms: Cell<i64>,
-    /// Distinct AI providers seen active on the network at the last poll.
-    net_active: Cell<usize>,
 
     /// `None` = active; `Some(t)` = paused until monotonic ms `t` (i64::MAX =
     /// until the user resumes).
@@ -142,7 +136,7 @@ define_class!(
             let rt = self.ivars().rt.clone();
             install_tray(&rt);
             install_timer(&rt);
-            log::info!("ai-usage-monitor started (transcript ingest + network presence)");
+            log::info!("ai-usage-monitor started (transcript ingest)");
         }
     }
 );
@@ -179,7 +173,6 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
     let now_ms = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as i64).unwrap_or(0);
     // Ingest activity from launch onward, not the whole archive.
     let ingestor = Ingestor::new(home, now_ms);
-    let net = NetPresence::new(cfg.presence_gap_ms as i64);
 
     let ids = MenuIds {
         pause_15m: MenuId::new("pause_15m"),
@@ -197,19 +190,15 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
     Rc::new(Runtime {
         store,
         ingestor: RefCell::new(ingestor),
-        net: RefCell::new(net),
         install_id: cfg.install_id.clone(),
         export_dir: paths.export_dir.clone(),
         transcript_poll_ms: cfg.transcript_poll_ms as i64,
-        network_poll_ms: cfg.network_poll_ms as i64,
         flush_ms: cfg.flush_ms as i64,
         tick_count: Cell::new(0),
         last_transcript_ms: Cell::new(i64::MIN),
-        last_network_ms: Cell::new(i64::MIN),
         last_flush_ms: Cell::new(0),
         heartbeat_at: Cell::new(0),
         last_ingest_ms: Cell::new(i64::MIN),
-        net_active: Cell::new(0),
         paused_until: Cell::new(None),
         start: Instant::now(),
         tray: RefCell::new(None),
@@ -235,6 +224,12 @@ fn install_tray(rt: &Rc<Runtime>) {
     let show_data = MenuItem::with_id(rt.ids.show_data.clone(), "Show my data", true, None);
     let quit = MenuItem::with_id(rt.ids.quit.clone(), "Quit", true, None);
 
+    // Disabled title header showing the app name + version — the standard place a
+    // menu-bar app surfaces its version (mirrors CFBundleShortVersionString).
+    let title = MenuItem::new(concat!("AI Usage Monitor ", env!("CARGO_PKG_VERSION")), false, None);
+
+    menu.append(&title).expect("title");
+    menu.append(&PredefinedMenuItem::separator()).expect("sep0");
     menu.append(&rt.status_item).expect("status");
     menu.append(&rt.detail_item).expect("detail");
     menu.append(&PredefinedMenuItem::separator()).expect("sep1");
@@ -303,19 +298,9 @@ fn tick(rt: &Rc<Runtime>) {
         }
     }
 
-    // Layer B — network presence.
-    if clock.mono_ms.saturating_sub(rt.last_network_ms.get()) >= rt.network_poll_ms {
-        rt.last_network_ms.set(clock.mono_ms);
-        let active = rt.net.borrow_mut().poll(&rt.store, clock.wall_ms);
-        rt.net_active.set(active);
-    }
-
     if clock.mono_ms.saturating_sub(rt.heartbeat_at.get()) > HEARTBEAT_MS {
         rt.heartbeat_at.set(clock.mono_ms);
-        log::info!(
-            "heartbeat: {} AI provider(s) active on the network; watching transcripts for new messages",
-            rt.net_active.get()
-        );
+        log::info!("heartbeat: watching transcripts for new AI messages");
     }
 
     let glyph = glyph_for(rt, clock.mono_ms);
@@ -365,9 +350,9 @@ fn paint(rt: &Rc<Runtime>, glyph: Glyph) {
 
 fn refresh_menu(rt: &Rc<Runtime>, glyph: Glyph, now_ms: i64) {
     let status = match glyph {
-        Glyph::Paused => "Taking a break ☕".to_string(),
-        Glyph::Active => "Recording AI activity ✨".to_string(),
-        Glyph::Idle => "Watching for AI use 👀".to_string(),
+        Glyph::Paused => "Paused",
+        Glyph::Active => "Recording AI activity",
+        Glyph::Idle => "Watching for AI use",
     };
     rt.status_item.set_text(status);
 
@@ -410,7 +395,6 @@ fn drain_menu_events(rt: &Rc<Runtime>) {
 /// half-observed span is finalized rather than left dangling.
 fn set_pause(rt: &Rc<Runtime>, until: Option<i64>, why: &str) {
     if until.is_some() {
-        rt.net.borrow_mut().flush_open(&rt.store, rt.clock().wall_ms);
     }
     rt.paused_until.set(until);
     log::info!("{why}");
@@ -421,14 +405,12 @@ fn set_pause(rt: &Rc<Runtime>, until: Option<i64>, why: &str) {
 
 /// Reveal the day-partitioned data folder in Finder, flushing pending first.
 fn do_show_data(rt: &Rc<Runtime>) {
-    rt.net.borrow_mut().flush_open(&rt.store, rt.clock().wall_ms);
     let _ = export::flush_pending(&rt.store, &rt.install_id, &rt.export_dir, rt.clock().wall_ms);
     let dir = export::data_dir_path(&rt.export_dir);
     let _ = Command::new("open").arg(&dir).spawn();
 }
 
 fn do_quit(rt: &Rc<Runtime>) {
-    rt.net.borrow_mut().flush_open(&rt.store, rt.clock().wall_ms);
     let _ = export::flush_pending(&rt.store, &rt.install_id, &rt.export_dir, rt.clock().wall_ms);
     if let Some(mtm) = MainThreadMarker::new() {
         NSApplication::sharedApplication(mtm).terminate(None);

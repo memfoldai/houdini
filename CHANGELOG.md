@@ -5,6 +5,35 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.4.3] — 2026-07-18
+
+### Removed
+- **Network-presence collection is gone entirely** (Layer B: `libproc` process →
+  AI-endpoint polling). It only produced content-free "an app was open" intervals
+  with no research value and added noise, a dependency, and complexity. The
+  `presence` table, its day-file table, the `libproc` dependency, and the network
+  attribution code are all removed. The monitor now records only the actual
+  messages: transcripts (CLI/agents) and web chats (extension). Native desktop
+  apps are consequently not captured — a deliberate trade for signal quality.
+
+### Changed
+- **One standardized record shape.** Day files are a single flat table
+  `data/interactions/YYYY-MM-DD.jsonl` (the `presence` table is gone); every
+  source emits the identical row. Schema stays `aum/3`; DB schema is v4.
+- **Menu bar UX.** No emojis — plain status text ("Watching for AI use",
+  "Recording AI activity", "Paused"). Added a version header (`AI Usage Monitor
+  <version>`) — the standard place a menu-bar app shows its version. Icon: hollow
+  ring when quiet, filled disc while recording, bars when paused.
+
+### Fixed
+- **Web chats now capture the assistant reply and don't double-record.** The
+  reply is read from the rendered DOM after the response settles (polling until it
+  stabilizes) instead of the provider's undocumented streaming format, and the
+  conversation id is read from the page URL *after* settling — so a new chat's
+  first message no longer lands under a throwaway id separate from the rest.
+- **Claude Code slash-command noise** (`<local-command-*>` / `<command-*>`) is
+  filtered from prompts.
+
 ## [0.4.2] — 2026-07-17
 
 ### Changed
@@ -290,6 +319,7 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.4.3]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.3
 [0.4.2]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.2
 [0.4.1]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.1
 [0.4.0]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.0

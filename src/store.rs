@@ -1,22 +1,16 @@
 //! Local-only SQLite store — the source of truth. Text-only; nothing here
 //! uploads anything.
 //!
-//! Two kinds of signal live here, in their own tables because they are
-//! genuinely different shapes, not two views of one thing:
+//! One shape: `sessions` + `turns` — real AI interactions read from a tool's own
+//! transcript or the browser extension, with provider/tool/surface/model and the
+//! redacted prompt/response turns. Keyed `UNIQUE(tool, external_id)` so re-reading
+//! a growing conversation upserts the same row instead of duplicating it, and an
+//! `exported_seq` high-water mark makes export emit each turn exactly once.
 //!
-//! - `sessions` + `turns`: real AI interactions read from a tool's own local
-//!   transcript (Layer A). Rich: provider, tool, surface, model, and the
-//!   redacted prompt/response turns. Keyed `UNIQUE(tool, external_id)` so
-//!   re-reading a growing transcript upserts the same row instead of duplicating
-//!   it — the ingest is idempotent.
-//! - `presence`: content-free "an AI tool was active" intervals derived from
-//!   network connections (Layer B), for usage that leaves no local transcript
-//!   (web chats, apps). No turns, ever.
-//!
-//! Unlike the old capture store, the app/provider identity is stored in the
-//! CLEAR (`anthropic`, `claude-code`, …): for a consenting internal study the
-//! provider entity IS the research signal, not something to hash away. Only the
-//! CONTENT of turns is redacted (before it is ever written).
+//! The app/provider identity is stored in the CLEAR (`anthropic`, `claude-code`,
+//! …): for a consenting internal study the provider entity IS the research
+//! signal, not something to hash away. Only the CONTENT of turns is redacted
+//! (before it is ever written).
 
 use rusqlite::{params, Connection};
 use std::path::Path;
@@ -64,34 +58,25 @@ CREATE TABLE IF NOT EXISTS turns (
     UNIQUE (session_id, seq)
 );
 CREATE INDEX IF NOT EXISTS idx_turns_session ON turns(session_id, seq);
-CREATE TABLE IF NOT EXISTS presence (
-    id           INTEGER PRIMARY KEY,
-    provider     TEXT NOT NULL,        -- anthropic, openai, ...
-    process      TEXT NOT NULL,        -- observed process name (e.g. Google Chrome)
-    surface      TEXT NOT NULL,        -- app | cli | web
-    started_at   INTEGER NOT NULL,     -- unix ms (interval start)
-    ended_at     INTEGER NOT NULL,     -- unix ms (interval end)
-    observations INTEGER NOT NULL DEFAULT 1,
-    exported_at  INTEGER
-);
 "#;
 
 /// Current on-disk schema version (tracked via SQLite `PRAGMA user_version`).
-/// Bumped when the `sessions`/`turns` shape changes incompatibly. v3 replaced the
-/// per-session `exported_at` flag with an `exported_seq` high-water mark so export
-/// emits one row per NEW turn (OLAP-flat, no re-emitted whole sessions).
-const SCHEMA_VERSION: i64 = 3;
+/// Bumped on an incompatible change. v3 moved to an `exported_seq` high-water
+/// mark (OLAP-flat, one row per new turn); v4 removed the `presence` table (the
+/// content-free network signal is no longer collected).
+const SCHEMA_VERSION: i64 = 4;
 
-/// Ensure the schema is current. A DB written before 0.4.0 has an incompatible
-/// `sessions`/`turns` shape (the screen-scrape era: `source_kind`/`app_hash`,
-/// no `tool`/`provider`) that `CREATE TABLE IF NOT EXISTS` silently leaves in
-/// place — so every new query failed with "no such column: tool". That data is
-/// from the retired approach with no contract to preserve, so we drop and
-/// rebuild rather than migrate rows; the version gate makes this run once.
+/// Ensure the schema is current. Pre-0.4 DBs have an incompatible
+/// `sessions`/`turns` shape that `CREATE TABLE IF NOT EXISTS` would silently
+/// leave in place; that data is from retired approaches with no contract to
+/// preserve, so we drop and rebuild rather than migrate rows. The retired
+/// `presence` table is dropped too. The version gate makes this run once.
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
     if version < SCHEMA_VERSION {
-        conn.execute_batch("DROP TABLE IF EXISTS turns; DROP TABLE IF EXISTS sessions;")?;
+        conn.execute_batch(
+            "DROP TABLE IF EXISTS presence; DROP TABLE IF EXISTS turns; DROP TABLE IF EXISTS sessions;",
+        )?;
     }
     conn.execute_batch(SCHEMA)?;
     if version < SCHEMA_VERSION {
@@ -195,37 +180,21 @@ impl Store {
         Ok(())
     }
 
-    /// Record a closed network-presence interval.
-    pub fn insert_presence(&self, p: &PresenceRow) -> rusqlite::Result<()> {
-        self.conn.execute(
-            "INSERT INTO presence (provider, process, surface, started_at, ended_at, observations)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![p.provider, p.process, p.surface, p.started_at_ms, p.ended_at_ms, p.observations],
-        )?;
-        Ok(())
-    }
-
     /// Count of stored sessions (tests / status).
     pub fn session_count(&self) -> rusqlite::Result<i64> {
         self.conn.query_row("SELECT COUNT(*) FROM sessions", [], |r| r.get(0))
     }
 
-    /// Status-line stats: interactions touched since `since_ms` (started or
-    /// updated) and the most recent activity time across both signals.
+    /// Status-line stats: interactions touched since `since_ms` and the most
+    /// recent activity time.
     pub fn activity_stats(&self, since_ms: i64) -> rusqlite::Result<ActivityStats> {
         let interactions: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM sessions WHERE ended_at >= ?1",
             params![since_ms],
             |r| r.get(0),
         )?;
-        let last: Option<i64> = self.conn.query_row(
-            "SELECT MAX(t) FROM (
-                 SELECT MAX(ended_at) AS t FROM sessions
-                 UNION ALL SELECT MAX(ended_at) FROM presence
-             )",
-            [],
-            |r| r.get(0),
-        )?;
+        let last: Option<i64> =
+            self.conn.query_row("SELECT MAX(ended_at) FROM sessions", [], |r| r.get(0))?;
         Ok(ActivityStats { recent_interactions: interactions, last_activity_ms: last })
     }
 
@@ -259,39 +228,11 @@ impl Store {
         rows.collect()
     }
 
-    /// Presence intervals not yet written to a day file.
-    pub fn pending_presence(&self) -> rusqlite::Result<Vec<PendingPresence>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, provider, process, surface, started_at, ended_at, observations
-             FROM presence WHERE exported_at IS NULL ORDER BY started_at",
-        )?;
-        let rows = stmt.query_map([], |r| {
-            Ok(PendingPresence {
-                id: r.get(0)?,
-                row: PresenceRow {
-                    provider: r.get(1)?,
-                    process: r.get(2)?,
-                    surface: r.get(3)?,
-                    started_at_ms: r.get(4)?,
-                    ended_at_ms: r.get(5)?,
-                    observations: r.get(6)?,
-                },
-            })
-        })?;
-        rows.collect()
-    }
-
     /// Advance a session's exported-turn high-water mark after its new turns are
     /// written to the day file.
     pub fn set_exported_seq(&self, id: i64, seq: i64) -> rusqlite::Result<()> {
         self.conn
             .execute("UPDATE sessions SET exported_seq = ?1 WHERE id = ?2", params![seq, id])?;
-        Ok(())
-    }
-
-    pub fn mark_presence_exported(&self, id: i64, at_ms: i64) -> rusqlite::Result<()> {
-        self.conn
-            .execute("UPDATE presence SET exported_at = ?1 WHERE id = ?2", params![at_ms, id])?;
         Ok(())
     }
 
@@ -325,23 +266,6 @@ pub struct SessionUpsert<'a> {
     pub started_at_ms: i64,
     pub ended_at_ms: i64,
     pub message_count: i64,
-}
-
-/// A closed presence interval.
-#[derive(Debug, Clone)]
-pub struct PresenceRow {
-    pub provider: String,
-    pub process: String,
-    pub surface: String,
-    pub started_at_ms: i64,
-    pub ended_at_ms: i64,
-    pub observations: i64,
-}
-
-#[derive(Debug, Clone)]
-pub struct PendingPresence {
-    pub id: i64,
-    pub row: PresenceRow,
 }
 
 #[derive(Debug, Clone)]
@@ -446,25 +370,6 @@ mod tests {
         store.add_turn(id, 0, Role::User, "hi", 1).unwrap();
         assert_eq!(store.pending_interactions().unwrap().len(), 1, "new schema is usable");
         std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn presence_roundtrips_and_pends_for_export() {
-        let s = Store::open_in_memory().unwrap();
-        s.insert_presence(&PresenceRow {
-            provider: "openai".into(),
-            process: "codex".into(),
-            surface: "cli".into(),
-            started_at_ms: 100,
-            ended_at_ms: 500,
-            observations: 4,
-        })
-        .unwrap();
-        let pending = s.pending_presence().unwrap();
-        assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].row.provider, "openai");
-        s.mark_presence_exported(pending[0].id, 600).unwrap();
-        assert_eq!(s.pending_presence().unwrap().len(), 0);
     }
 
     #[test]

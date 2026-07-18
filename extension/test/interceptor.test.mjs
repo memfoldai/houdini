@@ -40,7 +40,7 @@ async function run({ hostname, pathname, url, reqBody, assistantText }) {
   const code = readFileSync(fileURLToPath(new URL("../interceptor.js", import.meta.url)), "utf8");
   vm.runInContext(code, sandbox);
   await sandbox.window.fetch(url, { method: "POST", body: reqBody });
-  await new Promise((r) => setTimeout(r, 1100)); // > the interceptor's 800ms render wait
+  await new Promise((r) => setTimeout(r, 2500)); // > the interceptor's poll-until-stable (~1.5s)
   return posted;
 }
 

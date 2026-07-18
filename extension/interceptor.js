@@ -89,7 +89,6 @@
 
   async function captureExchange(site, url, reqBody, respClone) {
     const prompt = site.extractPrompt(reqBody);
-    const convId = site.conversationId(url) || PAGE_ID;
 
     // Drain the response clone to know when streaming has finished (we don't
     // parse it — the reply comes from the DOM once it's rendered).
@@ -104,9 +103,19 @@
         /* ignore */
       }
     }
-    // Let the final tokens render, then read the completed assistant message.
-    await sleep(800);
-    const reply = site.replyFromDom ? site.replyFromDom() : "";
+
+    // Poll the rendered DOM until the assistant reply stops growing (handles long
+    // answers), rather than a fixed wait.
+    const reply = await waitForStableReply(site);
+
+    // Read the conversation id AFTER settling: a brand-new chat's URL only becomes
+    // /c/<id> once the first response lands, so reading it here (not before)
+    // groups the first exchange with the rest instead of using a throwaway id.
+    const convId = site.conversationId(url) || PAGE_ID;
+
+    if (!reply) {
+      console.warn("[aum] captured a", site.tool, "prompt but no assistant reply — the DOM selector may need updating");
+    }
 
     // Both turns in ONE message so their order is fixed (host appends in order).
     const turns = [];
@@ -115,6 +124,25 @@
     if (turns.length) {
       window.postMessage({ __aum: true, payload: { tool: site.tool, external_id: convId, turns } }, location.origin);
     }
+  }
+
+  /// Poll the assistant message until its text is unchanged across two polls
+  /// (~1s stable) or a ~12s ceiling — so a long streamed answer is captured whole.
+  async function waitForStableReply(site) {
+    if (!site.replyFromDom) return "";
+    let last = "";
+    let stableFor = 0;
+    for (let i = 0; i < 24; i++) {
+      await sleep(500);
+      const text = site.replyFromDom();
+      if (text && text === last) {
+        if (++stableFor >= 2) return text;
+      } else {
+        stableFor = 0;
+        last = text;
+      }
+    }
+    return last;
   }
 
   function asJson(body) {

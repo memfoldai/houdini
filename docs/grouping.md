@@ -10,22 +10,19 @@ rules.
 Unlike the old screen-scraping approach, the provider is now known for free from
 the source, so grouping does not need an LLM or a guess:
 
-- **Transcript sessions (Layer A)** carry the provider directly. The adapter
-  reads a single-vendor tool (`claude-code` → `anthropic`); a multi-model tool is
-  resolved by the model name it records (`claude-*` → anthropic, `gpt-*`/`o*` →
-  openai, `gemini-*` → google — see `src/attribution.rs`).
-- **Network presence (Layer B)** resolves the provider from the process identity
-  (the `codex`/`ChatGPT`/`Claude` binaries) or a provider-owned destination
-  range.
+Every record carries the provider directly. A transcript adapter or web site
+knows its single-vendor tool (`claude-code` → `anthropic`, `chatgpt-web` →
+`openai`); a multi-model tool is resolved by the model name it records
+(`claude-*` → anthropic, `gpt-*`/`o*` → openai, `gemini-*` → google — see
+`src/attribution.rs`).
 
-So every exported record already names its `provider`, `tool`, and `surface`.
-Rolling "Claude app + Claude Code + claude.ai" into one `anthropic` entity is a
-`GROUP BY provider` over the day files — no labeling step required.
+So every exported row already names its `provider`, `tool`, and `surface`. Rolling
+"Claude Code + claude.ai" into one `anthropic` entity is a `GROUP BY provider`
+over the interactions file — no labeling step required.
 
-This is a small, maintained registry of provider *metadata* (which tool/binary/
-range belongs to which vendor), not content classification. A brand-new tool is
-covered by adding one adapter/rule; until then Layer B still catches its network
-presence generically.
+This is a small, maintained registry of provider *metadata* (which tool belongs to
+which vendor), not content classification. A brand-new tool is covered by adding
+one adapter.
 
 ## Semantic clustering is an analysis-time job (optional LLM)
 
@@ -50,7 +47,6 @@ writing; which topic) — is the one place semantics are unavoidable. It runs
 
 ## Known gap
 
-ChatGPT/Gemini used **in a browser tab** are not attributed by the network layer
-(shared CDNs; see the README). Their transcript-less content is only reachable
-via a browser extension, a later layer; today those show up only when used
-through their native apps or CLIs.
+**Native desktop apps** (ChatGPT.app, Claude.app) keep their content server-side
+and aren't captured. Web ChatGPT/Claude are captured by the browser extension;
+Gemini web isn't parsed yet.
