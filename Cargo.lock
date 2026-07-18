@@ -1080,7 +1080,7 @@ dependencies = [
 
 [[package]]
 name = "houdini"
-version = "0.4.10"
+version = "0.5.0"
 dependencies = [
  "block2",
  "directories",

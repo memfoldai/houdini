@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Houdini (internal study)",
-  "version": "0.4.10",
+  "version": "0.5.0",
   "minimum_chrome_version": "111",
   "description": "Internal study only. Records your AI web-chat prompts/replies LOCALLY to the Houdini app. No data leaves your machine.",
   "author": "Rahul Biliyar <rahul@memfold.ai>",

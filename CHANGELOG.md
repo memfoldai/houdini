@@ -5,6 +5,32 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.5.0] — 2026-07-18
+
+First release as **Houdini** (was "AI Usage Monitor"). By Rahul Biliyar.
+
+### Changed
+- **Renamed to Houdini** — app, crate, bundle id (`ai.memfold.houdini`), data dir,
+  Keychain, native-host name, and the repo (`memfoldai/houdini`, now public so OTA
+  needs no token). Fresh start: the old-name store is not migrated (CLI chats
+  re-import from transcripts).
+- **Web capture is now a uniform DOM registry.** One ISOLATED content script polls
+  each site's rendered reply until it stabilizes and emits the exchange — dropping
+  the MAIN-world fetch hook. One adapter per site; the core is site-agnostic.
+
+### Added
+- **Gemini web capture**, alongside hardened ChatGPT and Claude adapters.
+
+### Fixed
+- **Schema migrations never drop data.** Forward-only, additive, per-step
+  transactional (DDL + version bump commit together), so a crash or restart
+  mid-migration rolls back and re-runs cleanly.
+
+### Docs
+- Restructured to an agent-first, single-source-of-truth set: rewritten README
+  (+badges), new `docs/{architecture,privacy,install}.md`, `CONTRIBUTING.md`,
+  trimmed `SECURITY.md`; removed duplication.
+
 ## [0.4.10] — 2026-07-18
 
 ### Fixed
@@ -453,6 +479,7 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.5.0]: https://github.com/memfoldai/houdini/releases/tag/v0.5.0
 [0.4.10]: https://github.com/memfoldai/houdini/releases/tag/v0.4.10
 [0.4.9]: https://github.com/memfoldai/houdini/releases/tag/v0.4.9
 [0.4.8]: https://github.com/memfoldai/houdini/releases/tag/v0.4.8
