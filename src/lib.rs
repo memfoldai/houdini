@@ -6,6 +6,7 @@ pub mod logging;
 pub mod redact;
 pub mod store;
 pub mod timestamp;
+pub mod webingest;
 
 #[cfg(feature = "ner")]
 pub mod ner;

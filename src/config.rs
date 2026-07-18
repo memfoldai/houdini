@@ -38,6 +38,7 @@ pub struct Paths {
     pub db_file: PathBuf,
     pub export_dir: PathBuf,
     pub data_dir: PathBuf,
+    pub sock_file: PathBuf,
 
     pub log_file: PathBuf,
 }
@@ -58,6 +59,7 @@ impl Paths {
             config_file: data_dir.join("config.json"),
             db_file: data_dir.join("sessions.sqlite"),
             export_dir,
+            sock_file: data_dir.join("host.sock"),
             log_file: data_dir.join("ai-usage-monitor.log"),
             data_dir,
         })

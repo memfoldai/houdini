@@ -5,6 +5,37 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.4.10] — 2026-07-18
+
+### Fixed
+- **Web chats are captured again, and the password prompt storm is gone.** The
+  native-messaging host used to open the encrypted database itself on every web
+  message, so macOS re-authorized its Keychain access each time (a password
+  prompt per ChatGPT message, and twice on app launch). It is now a thin
+  **forwarder**: it hands each captured chat to the running app over a local Unix
+  socket, and **only the long-lived app** reads the Keychain (once at launch) and
+  writes the store — the documented single-writer pattern. Silent no-prompt
+  Keychain access (the data-protection keychain) requires an Apple Developer team
+  ID, which a self-signed app can't have, so this architecture is the correct fix;
+  at most one "Always Allow" is needed, once.
+- **Data-loss bug removed.** `db_key()` used to fabricate a *random* key on **any**
+  Keychain read error — including a denied or no-UI read — and a wrong key then
+  triggered a "rebuild empty" path that discarded the database. It now creates a
+  new key **only** on `errSecItemNotFound` (genuinely absent); any other error
+  aborts without fabricating. The destructive wrong-key rebuild in the store is
+  removed entirely — a bad key is refused, never silently wiped.
+
+### Changed
+- **OTA needs no access token.** With the repo public, the updater reads the
+  GitHub releases API unauthenticated and downloads the asset's
+  `browser_download_url`. Removed all embedded-token machinery (`build.rs`, the
+  build-time env var, the gitignored token file).
+
+### Added
+- The DMG now ships the **browser extension** and a plain-language
+  **EXTENSION-SETUP.md** guide, so web-chat capture is set up by loading a folder
+  — no terminal, no Chrome Web Store.
+
 ## [0.4.9] — 2026-07-18
 
 ### Changed
@@ -422,6 +453,7 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.4.10]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.10
 [0.4.9]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.9
 [0.4.8]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.8
 [0.4.7]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.7

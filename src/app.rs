@@ -1,10 +1,12 @@
 use std::cell::{Cell, RefCell};
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr::NonNull;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
@@ -25,6 +27,7 @@ use ai_usage_monitor::config::{self, AppConfig, Paths};
 use ai_usage_monitor::export;
 use ai_usage_monitor::ingest::Ingestor;
 use ai_usage_monitor::store::{ActivityStats, Store, PAUSE_UNTIL_KEY};
+use ai_usage_monitor::webingest;
 
 use crate::tray_glyph::{self, Glyph};
 use crate::updater;
@@ -64,6 +67,8 @@ struct Runtime {
 
     paused_until: Cell<Option<i64>>,
     start: Instant,
+
+    web_rx: Receiver<Vec<u8>>,
 
     last_update_check: Cell<i64>,
     update_rx: RefCell<Option<Receiver<(bool, UpdateOutcome)>>>,
@@ -155,7 +160,18 @@ pub fn run() {
 }
 
 fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
-    let store = Rc::new(Store::open(&paths.db_file, &crate::keychain::db_key()).expect("open store"));
+    let key = crate::keychain::db_key().unwrap_or_else(|e| {
+        log::error!("{e}");
+        std::process::exit(1);
+    });
+    let store = Rc::new(Store::open(&paths.db_file, &key).unwrap_or_else(|e| {
+        log::error!("cannot open the encrypted store: {e}");
+        std::process::exit(1);
+    }));
+
+    let (web_tx, web_rx) = mpsc::channel();
+    start_web_listener(paths.sock_file.clone(), web_tx);
+
     let home = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into()));
     let now_ms = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -193,6 +209,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         watcher: RefCell::new(watcher),
         paused_until: Cell::new(None),
         start: Instant::now(),
+        web_rx,
         last_update_check: Cell::new(i64::MIN),
         update_rx: RefCell::new(None),
         update_notice_until: Cell::new(0),
@@ -205,6 +222,32 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         update_item,
         ids,
     })
+}
+
+fn start_web_listener(sock: PathBuf, tx: Sender<Vec<u8>>) {
+    let _ = std::fs::remove_file(&sock);
+    let listener = match UnixListener::bind(&sock) {
+        Ok(l) => l,
+        Err(e) => {
+            log::error!("web listener: cannot bind {}: {e}", sock.display());
+            return;
+        }
+    };
+    let _ = std::fs::set_permissions(&sock, std::fs::Permissions::from_mode(0o600));
+
+    thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let tx = tx.clone();
+            thread::spawn(move || {
+                while let Some(bytes) = webingest::read_frame(&mut stream) {
+                    if tx.send(bytes).is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+    });
 }
 
 fn start_watcher(home: &PathBuf, changed: Arc<AtomicBool>) -> Option<RecommendedWatcher> {
@@ -325,6 +368,8 @@ fn tick(rt: &Rc<Runtime>) {
         }
     }
 
+    drain_web_messages(rt);
+
     if due(&rt.last_update_check, clock.mono_ms, UPDATE_CHECK_MS) {
         spawn_update_check(rt, false);
     }
@@ -344,6 +389,16 @@ enum UpdateOutcome {
     UpToDate,
     Staged(PathBuf),
     Failed(String),
+}
+
+fn drain_web_messages(rt: &Rc<Runtime>) {
+    while let Ok(bytes) = rt.web_rx.try_recv() {
+        match webingest::ingest(&rt.store, &bytes) {
+            Ok(0) => {}
+            Ok(n) => log::info!("web: stored {n} chat turn(s)"),
+            Err(e) => log::warn!("web: dropped a message: {e}"),
+        }
+    }
 }
 
 fn spawn_update_check(rt: &Rc<Runtime>, manual: bool) {

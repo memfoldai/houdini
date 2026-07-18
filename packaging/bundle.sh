@@ -35,22 +35,6 @@ VERSION="$(grep -m1 '^version' Cargo.toml | sed -E 's/.*"(.*)".*/\1/')"
 FEATURES_ARG=()
 [[ -n "${AUM_FEATURES:-}" ]] && FEATURES_ARG=(--features "$AUM_FEATURES")
 
-# Over-the-air updates read the private repo's releases with a fine-grained
-# read-only GitHub token, baked in at compile time (see src/updater.rs). Supply
-# it via the AUM_UPDATE_TOKEN env var or a gitignored packaging/.update-token
-# file. Without it the build still works — OTA is simply inactive.
-TOKEN_FILE="$ROOT/packaging/.update-token"
-if [[ -z "${AUM_UPDATE_TOKEN:-}" && -f "$TOKEN_FILE" ]]; then
-  AUM_UPDATE_TOKEN="$(tr -d '[:space:]' <"$TOKEN_FILE")"
-fi
-if [[ -n "${AUM_UPDATE_TOKEN:-}" ]]; then
-  export AUM_UPDATE_TOKEN
-  echo "==> OTA update token: present (auto-update enabled)"
-else
-  echo "==> OTA update token: ABSENT — building without auto-update."
-  echo "    Add a fine-grained read-only PAT to packaging/.update-token to enable it."
-fi
-
 DIST="$ROOT/dist"
 APP="$DIST/$APP_NAME.app"
 CONTENTS="$APP/Contents"
@@ -122,6 +106,10 @@ if [[ "$MAKE_DMG" -eq 1 ]]; then
   mkdir -p "$STAGE"
   cp -R "$APP" "$STAGE/"
   ln -s /Applications "$STAGE/Applications" # drag-to-install target
+  # Ship the browser extension + its guide alongside the app so a teammate has
+  # everything in one download (web-chat capture is opt-in; see EXTENSION-SETUP.md).
+  cp -R "$ROOT/extension" "$STAGE/Browser Extension"
+  cp "$ROOT/EXTENSION-SETUP.md" "$STAGE/Browser Extension/INSTALL-ME-FIRST.md"
   rm -f "$DMG"
   hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
   echo "    wrote: $DMG"

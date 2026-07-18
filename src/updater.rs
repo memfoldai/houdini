@@ -1,12 +1,11 @@
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
 
 use serde::Deserialize;
 
 pub const REPO: &str = "memfoldai/ai-usage-monitor";
 
-const UPDATE_TOKEN: Option<&str> = option_env!("AUM_UPDATE_TOKEN");
+const USER_AGENT: &str = "ai-usage-monitor";
 
 pub fn current_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
@@ -16,7 +15,7 @@ pub fn current_version() -> &'static str {
 pub struct Update {
     pub tag: String,
     pub version: String,
-    pub asset_id: u64,
+    pub dmg_url: String,
 }
 
 #[derive(Deserialize)]
@@ -28,12 +27,11 @@ struct Release {
 #[derive(Deserialize)]
 struct Asset {
     name: String,
-    id: u64,
+    browser_download_url: String,
 }
 
 pub fn check() -> Option<Update> {
-    let token = UPDATE_TOKEN?;
-    let body = run_curl(&config(token, &latest_release_url(), "application/vnd.github+json", None)).ok()?;
+    let body = api_get(&format!("https://api.github.com/repos/{REPO}/releases/latest")).ok()?;
     let release: Release = serde_json::from_slice(&body).ok()?;
 
     let version = release.tag_name.trim_start_matches('v').to_string();
@@ -41,11 +39,10 @@ pub fn check() -> Option<Update> {
         return None;
     }
     let asset = release.assets.into_iter().find(|a| a.name.ends_with(".dmg"))?;
-    Some(Update { tag: release.tag_name, version, asset_id: asset.id })
+    Some(Update { tag: release.tag_name, version, dmg_url: asset.browser_download_url })
 }
 
 pub fn download_and_stage(update: &Update) -> Result<PathBuf, String> {
-    let token = UPDATE_TOKEN.ok_or("no update token embedded")?;
     let bundle = installed_app_bundle()
         .ok_or_else(|| "not running from an installed .app in /Applications".to_string())?;
 
@@ -54,7 +51,7 @@ pub fn download_and_stage(update: &Update) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
 
     let dmg = work.join("update.dmg");
-    run_curl(&config(token, &asset_url(update.asset_id), "application/octet-stream", Some(&dmg)))?;
+    run("curl", &["-fsSL", "-A", USER_AGENT, "-o", &dmg.to_string_lossy(), &update.dmg_url])?;
 
     let mount = work.join("mnt");
     std::fs::create_dir_all(&mount).map_err(|e| e.to_string())?;
@@ -67,12 +64,25 @@ pub fn download_and_stage(update: &Update) -> Result<PathBuf, String> {
     Ok(bundle)
 }
 
-fn latest_release_url() -> String {
-    format!("https://api.github.com/repos/{REPO}/releases/latest")
-}
-
-fn asset_url(asset_id: u64) -> String {
-    format!("https://api.github.com/repos/{REPO}/releases/assets/{asset_id}")
+fn api_get(url: &str) -> Result<Vec<u8>, String> {
+    let out = Command::new("curl")
+        .args([
+            "-fsSL",
+            "-A",
+            USER_AGENT,
+            "-H",
+            "Accept: application/vnd.github+json",
+            "-H",
+            "X-GitHub-Api-Version: 2022-11-28",
+            url,
+        ])
+        .output()
+        .map_err(|e| format!("curl: {e}"))?;
+    if out.status.success() {
+        Ok(out.stdout)
+    } else {
+        Err(format!("curl failed: {}", String::from_utf8_lossy(&out.stderr).trim()))
+    }
 }
 
 fn swap_from_mount(mount: &Path, bundle: &Path) -> Result<(), String> {
@@ -106,43 +116,6 @@ fn first_with_ext(dir: &Path, ext: &str) -> Option<PathBuf> {
         .flatten()
         .map(|e| e.path())
         .find(|p| p.extension().is_some_and(|e| e == ext))
-}
-
-fn config(token: &str, url: &str, accept: &str, output: Option<&Path>) -> String {
-    let mut c = String::new();
-    c.push_str(&format!("url = \"{url}\"\n"));
-    c.push_str(&format!("header = \"Authorization: Bearer {token}\"\n"));
-    c.push_str(&format!("header = \"Accept: {accept}\"\n"));
-    c.push_str("header = \"X-GitHub-Api-Version: 2022-11-28\"\n");
-    c.push_str("header = \"User-Agent: ai-usage-monitor\"\n");
-    c.push_str("fail\nlocation\nsilent\nshow-error\n");
-    if let Some(path) = output {
-        c.push_str(&format!("output = \"{}\"\n", path.to_string_lossy()));
-    }
-    c
-}
-
-fn run_curl(config: &str) -> Result<Vec<u8>, String> {
-    let mut child = Command::new("curl")
-        .arg("--config")
-        .arg("-")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| format!("curl: {e}"))?;
-    child
-        .stdin
-        .take()
-        .ok_or("curl: no stdin")?
-        .write_all(config.as_bytes())
-        .map_err(|e| e.to_string())?;
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    if out.status.success() {
-        Ok(out.stdout)
-    } else {
-        Err(format!("curl failed: {}", String::from_utf8_lossy(&out.stderr).trim()))
-    }
 }
 
 fn run(cmd: &str, args: &[&str]) -> Result<(), String> {
@@ -185,21 +158,12 @@ mod tests {
     }
 
     #[test]
-    fn parses_latest_release_json() {
+    fn picks_dmg_asset_url_from_release_json() {
         let json = br#"{"tag_name":"v0.5.0","assets":[
-            {"name":"AI-Usage-Monitor-0.5.0.dmg","id":42},
-            {"name":"notes.txt","id":7}]}"#;
+            {"name":"notes.txt","browser_download_url":"https://example.com/notes.txt"},
+            {"name":"AI-Usage-Monitor-0.5.0.dmg","browser_download_url":"https://example.com/app.dmg"}]}"#;
         let release: Release = serde_json::from_slice(json).unwrap();
-        assert_eq!(release.tag_name, "v0.5.0");
         let dmg = release.assets.into_iter().find(|a| a.name.ends_with(".dmg")).unwrap();
-        assert_eq!(dmg.id, 42);
-    }
-
-    #[test]
-    fn config_carries_auth_and_url() {
-        let c = config("secret-token", &asset_url(99), "application/octet-stream", None);
-        assert!(c.contains("Authorization: Bearer secret-token"));
-        assert!(c.contains("releases/assets/99"));
-        assert!(c.contains("application/octet-stream"));
+        assert_eq!(dmg.browser_download_url, "https://example.com/app.dmg");
     }
 }

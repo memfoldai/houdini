@@ -8,6 +8,3 @@ target/
 
 # Extension signing private key — never commit
 packaging/extension-key/key.pem
-
-# OTA update token (fine-grained read-only PAT baked in at build) — never commit
-packaging/.update-token

@@ -97,56 +97,47 @@ run [VERIFICATION.md](VERIFICATION.md).
 ## 5. Optional: web-chat capture (browser extension)
 
 The app catches AI apps and CLIs on its own. To also capture **web** ChatGPT/Claude,
-load the Chromium extension (see [extension/README.md](extension/README.md)):
+load the Chromium extension. The DMG ships the extension in a **Browser Extension**
+folder with a step-by-step **INSTALL-ME-FIRST.md** — the teammate-facing guide is
+[EXTENSION-SETUP.md](EXTENSION-SETUP.md). In short:
 
 `chrome://extensions` → **Developer mode** → **Load unpacked** → select the
-`extension/` folder. Send one web AI message to confirm it's captured.
+extension folder. Send one web AI message to confirm it's captured.
 
 **No terminal step is needed.** The app registers the local native-messaging host
-for every installed Chromium browser automatically, every time it launches — so
-installing the DMG and loading the extension is enough. (The `--install-browser-host`
-and `--uninstall-browser-host` CLI flags still exist for manual control.)
+for every installed Chromium browser automatically, every time it launches, so
+installing the DMG and loading the extension is enough. The host is a thin
+forwarder: it hands each captured chat to the **running app over a local socket**,
+and only the app writes the encrypted store (single-writer). Web chats are
+therefore only captured while the app is running.
 
 The extension and app are a matched pair and **share a version**: the extension's
 fixed id (`jphmlmjmieilhimgemjanlkgfommlife`) is allowlisted by the host manifest,
-and they talk only over local native messaging. Upgrade them together.
+and they talk only over local native messaging. Upgrade them together — this build
+is not on the Chrome Web Store, so teammates re-load the folder on a new version.
 
 ## 6. Over-the-air updates
 
-The installed app updates itself from GitHub Releases — silently, with no `gh`
-and no re-download by hand.
+The installed app updates itself from **GitHub Releases** — silently, no `gh`, no
+access token, no re-download by hand.
 
 **For teammates:** it checks on launch and every ~6 hours. When a newer release
 exists it downloads the signed `.dmg`, verifies it, replaces itself in
 `/Applications`, and relaunches — automatically, no click. The menu's **Check for
-updates…** entry runs the same check on demand. Nothing to configure; the
-read-only access token is already baked into the build they were given.
+updates…** entry runs the same check on demand. Nothing to configure.
 
-### Maintainer: the OTA access token (one-time)
+### Requirement: the repo must be public
 
-Because the repo is **private**, the app authenticates to the GitHub API with a
-**fine-grained, read-only** token baked in at build time. Create it once:
-
-1. GitHub → Settings → Developer settings → **Fine-grained tokens** → *Generate*.
-2. **Resource owner** `memfoldai`; **Repository access** → *Only select repositories*
-   → `ai-usage-monitor`.
-3. **Permissions** → Repository permissions → **Contents: Read-only** (nothing
-   else). Set a long expiry and note the renewal date.
-4. Save the token string to `packaging/.update-token` (gitignored) — one line, no
-   quotes:
-   ```bash
-   printf '%s' 'github_pat_XXXX…' > packaging/.update-token
-   ```
-
-That's it. `packaging/bundle.sh` picks it up and bakes it in; it's passed to curl
-on stdin, so it never appears in the process list. Rotate by replacing the file
-and cutting a new release. A build **without** the token still works — OTA is just
-inactive (the script prints `OTA update token: ABSENT`).
+The updater reads the releases API **unauthenticated**, so the
+`memfoldai/ai-usage-monitor` repo must be **public** (GitHub only serves release
+assets without auth on public repos). Only the source becomes visible — there are
+no secrets in the repo or its history. While the repo is private, OTA is simply
+inert (the check returns nothing); it activates the moment the repo is public.
 
 **Each release MUST attach the `.dmg`** (the updater downloads it):
 
 ```bash
-packaging/bundle.sh                                   # bakes the token, builds dist/*.dmg (signed)
+packaging/bundle.sh                                   # builds dist/*.dmg (signed)
 gh release upload vX.Y.Z dist/AI-Usage-Monitor-X.Y.Z.dmg
 ```
 

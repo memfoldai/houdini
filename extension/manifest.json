@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "AI Usage Monitor (internal study)",
-  "version": "0.4.9",
+  "version": "0.4.10",
   "minimum_chrome_version": "111",
   "description": "Internal study only. Records your AI web-chat prompts/replies LOCALLY to the AI Usage Monitor app. No data leaves your machine.",
   "homepage_url": "https://github.com/memfoldai/ai-usage-monitor",

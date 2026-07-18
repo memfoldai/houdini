@@ -33,7 +33,7 @@ dependencies = [
 
 [[package]]
 name = "ai-usage-monitor"
-version = "0.4.9"
+version = "0.4.10"
 dependencies = [
  "block2",
  "directories",
@@ -49,6 +49,7 @@ dependencies = [
  "regex",
  "rusqlite",
  "security-framework",
+ "security-framework-sys",
  "serde",
  "serde_json",
  "sha2",

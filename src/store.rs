@@ -72,27 +72,10 @@ fn open_keyed(path: &Path, key: &[u8]) -> rusqlite::Result<Connection> {
     Ok(conn)
 }
 
-fn is_readable(conn: &Connection) -> bool {
-    conn.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0)).is_ok()
-}
-
 fn configure(conn: &Connection) -> rusqlite::Result<()> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     migrate(conn)
-}
-
-fn move_aside_incompatible_db(path: &Path) {
-    for suffix in ["-wal", "-shm"] {
-        let sidecar = path.with_file_name(format!(
-            "{}{suffix}",
-            path.file_name().and_then(|n| n.to_str()).unwrap_or("sessions.sqlite")
-        ));
-        let _ = std::fs::remove_file(&sidecar);
-    }
-    let backup = path.with_extension("sqlite.pre-encryption.bak");
-    let _ = std::fs::rename(path, &backup);
-    log::warn!("store: existing DB is not encrypted or the key changed; moved it to {}", backup.display());
 }
 
 fn to_hex(bytes: &[u8]) -> String {
@@ -110,13 +93,6 @@ pub struct Store {
 
 impl Store {
     pub fn open(path: &Path, key: &[u8]) -> rusqlite::Result<Self> {
-        let conn = open_keyed(path, key)?;
-        if is_readable(&conn) {
-            configure(&conn)?;
-            return Ok(Self { conn });
-        }
-        drop(conn);
-        move_aside_incompatible_db(path);
         let conn = open_keyed(path, key)?;
         configure(&conn)?;
         Ok(Self { conn })
@@ -360,37 +336,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_pre_0_4_schema_is_migrated_not_left_broken() {
-        let dir = std::env::temp_dir().join(format!("aum-mig-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("legacy.sqlite");
-        let _ = std::fs::remove_file(&path);
-        {
-            let c = Connection::open(&path).unwrap();
-            c.execute_batch(
-                "CREATE TABLE sessions (id INTEGER PRIMARY KEY, started_at INTEGER, source_kind TEXT, app_hash TEXT);
-                 CREATE TABLE turns (id INTEGER PRIMARY KEY, session_id INTEGER, redacted_text TEXT);
-                 INSERT INTO sessions (started_at, source_kind, app_hash) VALUES (1, 'ocr', 'deadbeef');",
-            )
-            .unwrap();
-        }
-
-        let store = Store::open(&path, &[7u8; 32]).unwrap();
-        assert_eq!(
-            store.session_count().unwrap(),
-            0,
-            "incompatible (unencrypted, legacy) DB is moved aside and rebuilt"
-        );
-        let (id, _) = store
-            .upsert_session(&upsert("claude-code", "s", 2, 1))
-            .unwrap();
-        store.add_turn(id, 0, Role::User, "hi", 1).unwrap();
-        assert_eq!(store.all_sessions().unwrap().len(), 1, "new schema is usable");
-        std::fs::remove_dir_all(&dir).ok();
-    }
-
-    #[test]
-    fn encrypted_db_roundtrips_and_wrong_key_is_rebuilt() {
+    fn encrypted_db_roundtrips_and_wrong_key_is_refused_without_data_loss() {
         let dir = std::env::temp_dir().join(format!("aum-enc-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("enc.sqlite");
@@ -406,9 +352,17 @@ mod tests {
             let s = Store::open(&path, &key).unwrap();
             assert_eq!(s.session_count().unwrap(), 1, "same key reopens the data");
         }
+        assert!(
+            Store::open(&path, &[9u8; 32]).is_err(),
+            "wrong key is refused, never silently rebuilt"
+        );
         {
-            let s = Store::open(&path, &[9u8; 32]).unwrap();
-            assert_eq!(s.session_count().unwrap(), 0, "wrong key can't read: rebuilt empty");
+            let s = Store::open(&path, &key).unwrap();
+            assert_eq!(
+                s.session_count().unwrap(),
+                1,
+                "data survives a failed wrong-key open"
+            );
         }
         assert!(!std::fs::read(&path).unwrap().starts_with(b"SQLite format 3\0"), "file is encrypted, not plaintext SQLite");
         std::fs::remove_dir_all(&dir).ok();
