@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::ptr::NonNull;
 use std::rc::Rc;
@@ -27,7 +27,7 @@ use ai_usage_monitor::ingest::Ingestor;
 use ai_usage_monitor::store::{ActivityStats, Store, PAUSE_UNTIL_KEY};
 
 use crate::tray_glyph::{self, Glyph};
-use crate::updater::{self, Update};
+use crate::updater;
 
 const BASE_TICK_S: f64 = 0.5;
 
@@ -66,8 +66,7 @@ struct Runtime {
     start: Instant,
 
     last_update_check: Cell<i64>,
-    update_rx: RefCell<Option<Receiver<Option<Update>>>>,
-    available_update: RefCell<Option<Update>>,
+    update_rx: RefCell<Option<Receiver<(bool, UpdateOutcome)>>>,
     update_notice_until: Cell<i64>,
 
     tray: RefCell<Option<TrayIcon>>,
@@ -122,6 +121,7 @@ define_class!(
         #[unsafe(method(applicationDidFinishLaunching:))]
         fn did_finish_launching(&self, _notif: &NSNotification) {
             let rt = self.ivars().rt.clone();
+            crate::browserhost::ensure_installed();
             install_tray(&rt);
             install_timer(&rt);
             log::info!("ai-usage-monitor started (transcript ingest)");
@@ -195,7 +195,6 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         start: Instant::now(),
         last_update_check: Cell::new(i64::MIN),
         update_rx: RefCell::new(None),
-        available_update: RefCell::new(None),
         update_notice_until: Cell::new(0),
         tray: RefCell::new(None),
         timer: RefCell::new(None),
@@ -327,7 +326,7 @@ fn tick(rt: &Rc<Runtime>) {
     }
 
     if due(&rt.last_update_check, clock.mono_ms, UPDATE_CHECK_MS) {
-        spawn_update_check(rt);
+        spawn_update_check(rt, false);
     }
     poll_update_check(rt, clock.mono_ms);
 
@@ -341,10 +340,23 @@ fn tick(rt: &Rc<Runtime>) {
     drain_menu_events(rt);
 }
 
-fn spawn_update_check(rt: &Rc<Runtime>) {
+enum UpdateOutcome {
+    UpToDate,
+    Staged(PathBuf),
+    Failed(String),
+}
+
+fn spawn_update_check(rt: &Rc<Runtime>, manual: bool) {
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let _ = tx.send(updater::check());
+        let outcome = match updater::check() {
+            None => UpdateOutcome::UpToDate,
+            Some(update) => match updater::download_and_stage(&update) {
+                Ok(bundle) => UpdateOutcome::Staged(bundle),
+                Err(e) => UpdateOutcome::Failed(e),
+            },
+        };
+        let _ = tx.send((manual, outcome));
     });
     *rt.update_rx.borrow_mut() = Some(rx);
 }
@@ -357,15 +369,20 @@ fn poll_update_check(rt: &Rc<Runtime>, now_mono_ms: i64) {
         let rx = rt.update_rx.borrow();
         rx.as_ref().and_then(|rx| rx.try_recv().ok())
     };
-    if let Some(result) = received {
+    if let Some((manual, outcome)) = received {
         *rt.update_rx.borrow_mut() = None;
-        match result {
-            Some(update) => {
-                rt.update_item.set_text(format!("Install update {}", update.version));
-                *rt.available_update.borrow_mut() = Some(update);
-                rt.update_notice_until.set(0);
+        match outcome {
+            UpdateOutcome::Staged(bundle) => relaunch_and_quit(&bundle),
+            UpdateOutcome::UpToDate if manual => {
+                set_update_notice(rt, "You're on the latest version", now_mono_ms)
             }
-            None => set_update_notice(rt, "You're on the latest version", now_mono_ms),
+            UpdateOutcome::Failed(e) => {
+                log::warn!("update check/install failed: {e}");
+                if manual {
+                    set_update_notice(rt, "Update check failed — see the log", now_mono_ms);
+                }
+            }
+            UpdateOutcome::UpToDate => {}
         }
     }
 
@@ -376,35 +393,22 @@ fn poll_update_check(rt: &Rc<Runtime>, now_mono_ms: i64) {
     }
 }
 
+fn relaunch_and_quit(bundle: &Path) {
+    let _ = Command::new("open").arg("-n").arg(bundle).spawn();
+    if let Some(mtm) = MainThreadMarker::new() {
+        NSApplication::sharedApplication(mtm).terminate(None);
+    }
+}
+
 fn set_update_notice(rt: &Rc<Runtime>, text: &str, now_mono_ms: i64) {
     rt.update_item.set_text(text);
-    *rt.available_update.borrow_mut() = None;
     rt.update_notice_until.set(now_mono_ms + UPDATE_NOTICE_MS);
 }
 
 fn do_update(rt: &Rc<Runtime>) {
-    let update = rt.available_update.borrow().clone();
-    match update {
-        Some(update) => {
-            rt.update_item.set_text("Installing update…");
-            match updater::install(&update) {
-                Ok(()) => {
-                    if let Some(mtm) = MainThreadMarker::new() {
-                        NSApplication::sharedApplication(mtm).terminate(None);
-                    }
-                }
-                Err(e) => {
-                    log::error!("update install failed: {e}");
-                    set_update_notice(rt, "Update failed — see the log", rt.clock().mono_ms);
-                }
-            }
-        }
-        None => {
-            rt.update_notice_until.set(0);
-            rt.update_item.set_text("Checking for updates…");
-            spawn_update_check(rt);
-        }
-    }
+    rt.update_notice_until.set(0);
+    rt.update_item.set_text("Checking for updates…");
+    spawn_update_check(rt, true);
 }
 
 fn due(last: &Cell<i64>, now_mono_ms: i64, interval_ms: i64) -> bool {

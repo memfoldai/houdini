@@ -5,6 +5,33 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.4.9] — 2026-07-18
+
+### Changed
+- **Over-the-air updates now work on machines without `gh`.** The updater no
+  longer shells out to the GitHub CLI (which needs an install, auth, and repo
+  access none of a non-developer machine has). It calls the GitHub REST API
+  directly with a fine-grained, **read-only** token baked in at build time
+  (`AUM_UPDATE_TOKEN`, supplied via a gitignored `packaging/.update-token`). The
+  token is fed to curl on stdin, never in argv, so it never appears in `ps`.
+  Verified live against the private repo's release API.
+- **Updates install silently to stay current.** The periodic check (on launch +
+  every 6h) now downloads, verifies the signature, swaps the `/Applications`
+  bundle, and relaunches automatically — no click. The menu's *Check for
+  updates…* still gives a manual, visible check. Industry-standard model
+  (mirrors Sparkle's automatic-install behavior).
+
+### Added
+- **The browser bridge sets itself up.** The app registers its native-messaging
+  host for every installed Chromium browser on launch, idempotently. A
+  non-developer now only has to install the DMG and load the extension — no
+  terminal command. (Re-registering each launch also keeps the path correct
+  across self-updates.)
+
+### Fixed
+- Removed the two-step "Install update" menu state and its `available_update`
+  cell — one code path, less state to keep in sync.
+
 ## [0.4.8] — 2026-07-18
 
 ### Fixed
@@ -395,6 +422,7 @@ debug log), not by guessing:
   export, concurrent multi-window/Space/background capture, optional GLiNER-PII
   layer, and a signed `.app` + `.dmg` build (`packaging/bundle.sh`).
 
+[0.4.9]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.9
 [0.4.8]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.8
 [0.4.7]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.7
 [0.4.6]: https://github.com/memfoldai/ai-usage-monitor/releases/tag/v0.4.6

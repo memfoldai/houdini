@@ -22,39 +22,44 @@ fn app_support() -> Option<PathBuf> {
     )
 }
 
-pub fn install() {
+fn write_manifests() -> usize {
     let Some(base) = app_support() else {
-        eprintln!("install-browser-host: no HOME");
-        return;
+        return 0;
     };
-    let exe = std::env::current_exe().expect("current exe path");
+    let Ok(exe) = std::env::current_exe() else {
+        return 0;
+    };
     let manifest = manifest_json(&exe.to_string_lossy());
 
-    println!(
-        "Installing native-messaging host '{HOST_NAME}' → {}",
-        exe.display()
-    );
     let mut installed = 0;
-    for (label, subdir) in BROWSERS {
+    for (_label, subdir) in BROWSERS {
         let browser_dir = base.join(subdir);
-
         if !browser_dir.exists() {
             continue;
         }
         let hosts_dir = browser_dir.join("NativeMessagingHosts");
-        if let Err(e) = fs::create_dir_all(&hosts_dir) {
-            eprintln!("  {label}: cannot create {}: {e}", hosts_dir.display());
+        if fs::create_dir_all(&hosts_dir).is_err() {
             continue;
         }
         let path = hosts_dir.join(format!("{HOST_NAME}.json"));
-        match fs::write(&path, &manifest) {
-            Ok(()) => {
-                println!("  {label}: {}", path.display());
-                installed += 1;
-            }
-            Err(e) => eprintln!("  {label}: write failed: {e}"),
+        if fs::write(&path, &manifest).is_ok() {
+            installed += 1;
         }
     }
+    installed
+}
+
+pub fn ensure_installed() {
+    let n = write_manifests();
+    log::info!("native-messaging host registered for {n} browser(s)");
+}
+
+pub fn install() {
+    let installed = write_manifests();
+    let exe = std::env::current_exe()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    println!("Installing native-messaging host '{HOST_NAME}' → {exe}");
     if installed == 0 {
         println!("No Chromium browsers found. Install one, then re-run.");
     } else {
