@@ -18,7 +18,9 @@ use objc2::rc::Retained;
 use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, DefinedClass, MainThreadOnly};
 use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate};
-use objc2_foundation::{MainThreadMarker, NSNotification, NSTimer};
+use objc2_foundation::{
+    MainThreadMarker, NSActivityOptions, NSNotification, NSProcessInfo, NSString, NSTimer,
+};
 
 use tray_icon::menu::{Menu, MenuEvent, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 use tray_icon::{TrayIcon, TrayIconBuilder};
@@ -76,6 +78,7 @@ struct Runtime {
 
     tray: RefCell<Option<TrayIcon>>,
     timer: RefCell<Option<Retained<NSTimer>>>,
+    _app_nap: Retained<ProtocolObject<dyn NSObjectProtocol>>,
     painted: Cell<Option<Glyph>>,
     status_item: MenuItem,
     detail_item: MenuItem,
@@ -169,6 +172,14 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         std::process::exit(1);
     }));
 
+    let app_nap = {
+        let reason = NSString::from_str("Recording AI usage");
+        NSProcessInfo::processInfo().beginActivityWithOptions_reason(
+            NSActivityOptions::UserInitiatedAllowingIdleSystemSleep,
+            &reason,
+        )
+    };
+
     let (web_tx, web_rx) = mpsc::channel();
     start_web_listener(paths.sock_file.clone(), web_tx);
 
@@ -215,6 +226,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         update_notice_until: Cell::new(0),
         tray: RefCell::new(None),
         timer: RefCell::new(None),
+        _app_nap: app_nap,
         painted: Cell::new(None),
         status_item,
         detail_item,
