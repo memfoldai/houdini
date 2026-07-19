@@ -2,7 +2,7 @@
 #
 # Build a distributable macOS app: Houdini.app (+ a .dmg).
 #
-# Uses only Apple's own tools (sips, iconutil, codesign, hdiutil) plus cargo —
+# Uses only Apple's own tools (sips, iconutil, codesign, hdiutil) plus cargo -
 # no bundler dependency, full control over Info.plist. Output lands in dist/.
 #
 # Usage:
@@ -12,8 +12,8 @@
 #
 # Signing identity: same self-signed cert as scripts/sign.sh (override with
 # HOUDINI_SIGN_IDENTITY). A self-signed build runs on other Macs after a one-time
-# right-click → Open (Gatekeeper). For zero-friction install, sign with a
-# "Developer ID Application" cert and notarize — see INSTALL.md.
+# right-click -> Open (Gatekeeper). For zero-friction install, sign with a
+# "Developer ID Application" cert and notarize - see INSTALL.md.
 
 set -euo pipefail
 
@@ -48,7 +48,7 @@ rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 cp "target/release/$EXE" "$CONTENTS/MacOS/$EXE"
 
-# --- App icon: master PNG → .iconset → AppIcon.icns ---
+# --- App icon: master PNG -> .iconset -> AppIcon.icns ---
 if [[ ! -f "$MASTER_ICON" ]]; then
   echo "error: $MASTER_ICON missing (run: python3 packaging/make_appicon.py)" >&2
   exit 1
@@ -62,7 +62,7 @@ done
 iconutil -c icns "$ICONSET" -o "$CONTENTS/Resources/AppIcon.icns"
 
 # --- Info.plist ---
-# LSUIElement=true → menu-bar-only agent (no Dock icon, no app menu).
+# LSUIElement=true -> menu-bar-only agent (no Dock icon, no app menu).
 # The app reads local transcripts and observes its own sockets, so it needs NO
 # TCC usage-description keys (no Screen Recording, no Accessibility).
 cat >"$CONTENTS/Info.plist" <<PLIST
@@ -80,7 +80,7 @@ cat >"$CONTENTS/Info.plist" <<PLIST
   <key>CFBundleVersion</key><string>$VERSION</string>
   <key>LSMinimumSystemVersion</key><string>$MIN_MACOS</string>
   <key>LSUIElement</key><true/>
-  <key>NSHumanReadableCopyright</key><string>Houdini — internal research tool by Rahul Biliyar, Memfold AI</string>
+  <key>NSHumanReadableCopyright</key><string>Houdini. Built by Rahul Biliyar, Memfold AI.</string>
 </dict>
 </plist>
 PLIST
@@ -107,9 +107,9 @@ if [[ "$MAKE_DMG" -eq 1 ]]; then
   cp -R "$APP" "$STAGE/"
   ln -s /Applications "$STAGE/Applications" # drag-to-install target
   # Ship the browser extension + its guide alongside the app so a teammate has
-  # everything in one download (web-chat capture is opt-in; see EXTENSION-SETUP.md).
+  # everything in one download (web-chat capture is opt-in; see docs/extension.md).
   cp -R "$ROOT/extension" "$STAGE/Browser Extension"
-  cp "$ROOT/EXTENSION-SETUP.md" "$STAGE/Browser Extension/INSTALL-ME-FIRST.md"
+  cp "$ROOT/docs/extension.md" "$STAGE/Browser Extension/INSTALL-ME-FIRST.md"
   rm -f "$DMG"
   hdiutil create -volname "$APP_NAME" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
   echo "    wrote: $DMG"
@@ -117,4 +117,4 @@ fi
 
 echo
 echo "Done. Gatekeeper note: a self-signed build is not notarized, so first"
-echo "launch on another Mac needs right-click → Open once. See INSTALL.md."
+echo "launch on another Mac needs right-click -> Open once. See docs/install.md."

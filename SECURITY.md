@@ -17,8 +17,8 @@ The optional Chromium extension reads the conversation in the user's own tab and
 sends it to the **local** native host over native messaging. It has no network
 permission and no egress, and matches only the configured AI hosts (`chatgpt.com`,
 `claude.ai`, `gemini.google.com`). This is the same content-reading mechanism some
-malicious extensions abuse to *exfiltrate* chats — legitimate here only because it
-is local, redacted, and installed per consent.
+malicious extensions abuse to *exfiltrate* chats. It is legitimate here only
+because it is local, redacted, and installed per consent.
 
 ## Dependency auditing
 
@@ -26,8 +26,8 @@ Dependencies are checked against the [RustSec advisory database](https://rustsec
 with [`cargo-audit`](https://github.com/rustsec/rustsec); CI runs it on every push
 (`.github/workflows/ci.yml`). `cargo audit` may report unmaintained/unsound
 advisories (warnings, not vulnerabilities) for GTK-stack crates that are
-**Linux-only** transitive deps of `tray-icon`, absent from the macOS build graph —
-verify with:
+**Linux-only** transitive deps of `tray-icon`, absent from the macOS build graph.
+Verify with:
 
 ```bash
 cargo tree -e no-dev --target aarch64-apple-darwin | grep -iE 'glib|gtk'  # empty
@@ -43,7 +43,7 @@ rebuild never silently loses capability. The bundle is menu-bar-only
 ## Memory & CPU
 
 Rust's ownership model rules out use-after-free and data races; the only `unsafe`
-is the AppKit/tray FFI in the app shell. In-memory state is bounded — the ingest
+is the AppKit/tray FFI in the app shell. In-memory state is bounded: the ingest
 fingerprint map holds one small `(mtime, size)` per transcript file, and the
 diagnostics log is capped (rotated past ~1 MB). CPU is low by design: the
 transcript scan is a cheap file scan on a multi-second cadence

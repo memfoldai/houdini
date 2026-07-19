@@ -1,8 +1,8 @@
-# Houdini — browser extension (web chats)
+# Houdini: browser extension (web chats)
 
 Captures **web AI chats** (ChatGPT, Claude, Gemini) that leave no local
 transcript, and delivers them to the local Houdini app. It reads each exchange
-from the **rendered page** — the prompt and reply the user actually saw — and works
+from the **rendered page** (the prompt and reply the user actually saw) and works
 in **background tabs** because the DOM updates regardless of tab focus.
 
 Reading from the rendered DOM rather than each site's internal, un-versioned
@@ -32,8 +32,8 @@ capture.js  ──runtime──▶ background.js ──stdio──▶ houdini --
 
 **Local-only.** The extension has no network permission and talks only to the
 local native host. This is the same content-reading mechanism some malicious
-extensions abuse to *exfiltrate* chats — legitimate here only because it is local,
-redacted, and installed per consent.
+extensions abuse to *exfiltrate* chats. It is legitimate here only because it is
+local, redacted, and installed per consent.
 
 ## Registry: one adapter per site
 
@@ -47,7 +47,7 @@ site is adding one entry.
 | `gemini.google.com` | `user-query .query-text` | `message-content .markdown-main-panel` | URL `/app/<id>` |
 
 These selectors are **reverse-engineered, not official contracts**, so a redesign
-can need a small fix — an adapter captures nothing (rather than garbage) when it
+can need a small fix. An adapter captures nothing (rather than garbage) when it
 doesn't match. **They need one live confirmation in a logged-in browser** whenever
 a site changes.
 
@@ -58,11 +58,11 @@ launch, so you only load the extension: `chrome://extensions` → **Developer mo
 → **Load unpacked** → select `extension/`. The id is fixed
 (`jphmlmjmieilhimgemjanlkgfommlife`, from the `key` in `manifest.json`) so it
 matches the host manifest's `allowed_origins`. The teammate-facing guide is
-[../EXTENSION-SETUP.md](../EXTENSION-SETUP.md).
+[../docs/extension.md](../docs/extension.md).
 
 ## Development & versioning
 
-The extension `version` tracks the app version — a matched pair on the same
+The extension `version` tracks the app version: a matched pair on the same
 native-messaging protocol, upgraded together. Validate the capture logic without a
 browser (CI runs this too):
 

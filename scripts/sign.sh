@@ -6,8 +6,8 @@
 #
 # Why this exists: the app needs no TCC grant anymore (it reads local transcripts
 # and its own sockets), so signing is no longer required for detection to work. A
-# stable self-signed identity is still useful — it keeps Gatekeeper quiet and
-# gives the binary a constant identity for distribution/notarization — so this
+# stable self-signed identity is still useful - it keeps Gatekeeper quiet and
+# gives the binary a constant identity for distribution/notarization - so this
 # convenience remains for the development workflow.
 #
 # Usage:
@@ -15,14 +15,14 @@
 #   scripts/sign.sh path/to/binary  # sign an already-built binary
 #
 # One-time: create the self-signed cert in Keychain Access:
-#   Keychain Access → Certificate Assistant → Create a Certificate…
+#   Keychain Access -> Certificate Assistant -> Create a Certificate…
 #     Name:             Houdini Self-Signed
 #     Identity Type:    Self Signed Root
 #     Certificate Type: Code Signing
 # Leave it in the login keychain. It does NOT need to be "trusted": a self-signed
 # root shows as untrusted (CSSMERR_TP_NOT_TRUSTED) and is excluded from
 # `security find-identity -v`, but `codesign` signs with it fine and TCC keys on
-# it fine — trust only matters for OTHER machines verifying the signature.
+# it fine - trust only matters for OTHER machines verifying the signature.
 
 set -euo pipefail
 
@@ -67,4 +67,4 @@ codesign --verify --verbose=2 "$BIN"
 
 echo
 echo "Signed with a stable identity. The app needs no TCC grant, so this is only"
-echo "for a clean Gatekeeper/distribution identity — detection works unsigned too."
+echo "for a clean Gatekeeper/distribution identity - detection works unsigned too."

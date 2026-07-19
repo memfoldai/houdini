@@ -17,7 +17,7 @@ cargo audit                      # RustSec check (CI runs this; must stay clean)
 ```
 
 Debugging ("is it working?"): the app writes a metadata-only log to
-`<data-dir>/houdini.log`. `--diagnose` prints per-tool transcript counts. Never log ingested text — it
+`<data-dir>/houdini.log`. `--diagnose` prints per-tool transcript counts. Never log ingested text: it
 is pre-redaction (see `logging` module docs).
 
 Keep builds at **zero warnings**.
@@ -28,10 +28,10 @@ Keep builds at **zero warnings**.
    crate, or system API, read its real docs/source (Apple SDK headers, the
    vendored crate source under `~/.cargo/registry/src/*/<crate>/`, docs.rs). Cite
    what you read. The transcript formats and the native-messaging framing were
-   verified against real data/specs before coding — keep that bar.
+   verified against real data/specs before coding. Keep that bar.
 2. **Attribute by source metadata, never by content meaning.** Provider comes
    from the tool the transcript/site names, or its model prefix
-   (`src/attribution.rs`) — never from classifying what the text *says*. No
+   (`src/attribution.rs`), never from classifying what the text *says*. No
    keyword/embedding classification in the daemon. A per-tool adapter is metadata
    (which tool belongs to which vendor); guessing intent from content is not.
 3. **Redaction is a hard gate, not a feature.** Raw transcript text must never
@@ -48,7 +48,7 @@ Keep builds at **zero warnings**.
    `serde(default)`; `load_or_init` rewrites the file to add new fields and backs
    up an unparseable one rather than crashing.
 7. **Fail closed.** If a layer cannot do its job (e.g. the NER model fails its
-   self-test), disable it loudly — never silently claim coverage it lacks.
+   self-test), disable it loudly; never silently claim coverage it lacks.
 
 ## Architecture
 
@@ -58,26 +58,26 @@ native shell (the binary, `cfg(target_os = "macos")`). This split is why
 
 Two content sources, one store:
 
-- **Transcripts — `ingest/`** (portable). One `Adapter` per tool discovers and
+- **Transcripts: `ingest/`** (portable). One `Adapter` per tool discovers and
   parses its transcripts into a canonical `IngestedSession` (provider, tool,
   surface, model, turns). `Ingestor` polls adapters, skips unchanged files by
   mtime+size and files older than launch, and upserts by `(tool, external_id)` so
   a growing transcript appends only new turns. Redaction runs in `persist`.
-- **Web chats — `nativehost.rs` + `browserhost.rs` + `extension/`** (macOS +
+- **Web chats: `nativehost.rs` + `browserhost.rs` + `extension/`** (macOS +
   Chromium). The extension reads each exchange in the page (prompt from the site's
-  own API request, reply from the rendered DOM — NOT the undocumented SSE) and
+  own API request, reply from the rendered DOM, NOT the undocumented SSE) and
   relays it over native messaging to `--native-host`, which validates the tool,
   redacts, and appends a `web` session. `--install-browser-host` writes the host
   manifest into every Chromium browser. Framing is 32-bit native-endian length +
-  JSON (Chrome spec). Per-site extraction is reverse-engineered — keep it
+  JSON (Chrome spec). Per-site extraction is reverse-engineered. Keep it
   defensive (fail to nothing, never store garbage) and validate live.
-- **`store.rs`** — `sessions` + `turns`, SQLite, source of truth, with an
-  `exported_seq` per-session high-water mark. **`export.rs`** — one flat row per
+- **`store.rs`**: `sessions` + `turns`, SQLite, source of truth, with an
+  `exported_seq` per-session high-water mark. **`export.rs`**: one flat row per
   turn to `data/interactions/YYYY-MM-DD.jsonl`, schema `aum/3`. No content-free
   "presence" signal is collected (it had no research value).
-- **Updates — `updater.rs`** (macOS). Checks GitHub Releases via `gh` (team auth, no embedded token), compares to `CARGO_PKG_VERSION`, and on the menu action downloads the release `.dmg`, verifies signing, atomically swaps the `/Applications` bundle, and relaunches. Gated to an installed `.app`.
+- **Updates: `updater.rs`** (macOS). Checks GitHub Releases via `gh` (team auth, no embedded token), compares to `CARGO_PKG_VERSION`, and on the menu action downloads the release `.dmg`, verifies signing, atomically swaps the `/Applications` bundle, and relaunches. Gated to an installed `.app`.
 - **`main.rs` → `app.rs`** (NSApplication Accessory, tray, timer). The tray is
-  created in `applicationDidFinishLaunching:` — tray-icon requires a *running*
+  created in `applicationDidFinishLaunching:` because tray-icon requires a *running*
   run loop. The menu shows the app version (`CARGO_PKG_VERSION`).
 
 Two clocks: **monotonic** drives cadence, **wall-clock** is stored.
@@ -86,12 +86,12 @@ Two clocks: **monotonic** drives cadence, **wall-clock** is stored.
 
 - **Code carries no comments.** The code is self-documenting (clear names, small
   functions, obvious control flow); the "why" lives in these docs (README,
-  AGENTS, CHANGELOG). Do not add inline or doc comments — if a piece of code needs
+  AGENTS, CHANGELOG). Do not add inline or doc comments. If a piece of code needs
   explaining, restructure or rename it, or record the rationale in the docs.
 - Prefer typed shapes over positional tuples crossing a boundary.
 - Registry-driven, source-agnostic: a new transcript tool is one `Adapter` (Claude Code, Codex, OpenClaw); a new
   web site is one `SITES` entry + one `resolve_tool` arm. No content classification
-  or hardcoded per-app behavior — provider comes from tool/model metadata only.
+  or hardcoded per-app behavior: provider comes from tool/model metadata only.
 - Config over constants for anything an operator may tune; see `config.rs`.
 - Bound every loop that touches the system; log what you skipped.
 
@@ -114,10 +114,10 @@ build alone.
 
 ## Further reading
 
-- [CONTRIBUTING.md](CONTRIBUTING.md) — build, run, and the human-gated verification checklist.
-- [docs/architecture.md](docs/architecture.md) — how it works: codemap, data flow, invariants.
-- [docs/privacy.md](docs/privacy.md) — the data/consent model.
-- [docs/install.md](docs/install.md) — build/sign/notarize the .app, distribute, install.
-- [docs/grouping.md](docs/grouping.md) — entity grouping + analysis-time clustering.
-- [docs/NER.md](docs/NER.md) — optional GLiNER-PII layer.
-- [README.md](README.md) — what this is and why, for humans.
+- [CONTRIBUTING.md](CONTRIBUTING.md): build, run, and the human-gated verification checklist.
+- [docs/architecture.md](docs/architecture.md): how it works (codemap, data flow, invariants).
+- [docs/privacy.md](docs/privacy.md): the data/consent model.
+- [docs/install.md](docs/install.md): build/sign/notarize the .app, distribute, install.
+- [docs/grouping.md](docs/grouping.md): entity grouping + analysis-time clustering.
+- [docs/NER.md](docs/NER.md): optional GLiNER-PII layer.
+- [README.md](README.md): what this is and why, for humans.

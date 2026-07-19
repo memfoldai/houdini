@@ -3,13 +3,13 @@
 The always-on deterministic redactor (`src/redact.rs`) removes high-confidence
 **shapes**: provider-prefixed API keys, private-key blocks, emails, Luhn-valid
 cards, dashed SSNs, phone numbers. It cannot catch free-form personal
-identifiers that have no fixed shape — a person's name, a street address, a date
+identifiers that have no fixed shape: a person's name, a street address, a date
 of birth in prose.
 
 The optional NER layer (`src/ner.rs`, Cargo feature `ner`) fills that gap with a
 **GLiNER-PII** model run fully offline via [`gline-rs`](https://crates.io/crates/gline-rs)
 (crate lib name `gliner`) over ONNX Runtime. It runs at **export time**, on top
-of the already-deterministically-redacted text — never on the hot capture path.
+of the already-deterministically-redacted text, never on the hot capture path.
 
 The model is **never bundled**. You provision it; the app points at it.
 
@@ -19,7 +19,7 @@ The model is **never bundled**. You provision it; the app points at it.
 - It's a probabilistic layer; the deterministic layer is the guaranteed one.
 - The study's default posture is to keep research **content** (the topics,
   companies, and places someone researched) and remove only **personal**
-  identifiers. The default label set reflects that — see below.
+  identifiers. The default label set reflects that (see below).
 
 ## 1. Provision the model
 
@@ -39,7 +39,7 @@ Place the two files in one directory:
 
 > The loader expects exactly those two filenames. If your download nests the
 > ONNX under `onnx/model.onnx`, copy or symlink it to `<model-dir>/model.onnx`.
-> The model must be a **token-mode** export — the app loads `GLiNER<TokenMode>`.
+> The model must be a **token-mode** export: the app loads `GLiNER<TokenMode>`.
 > A mismatch is caught by the self-test (below), not silently ignored.
 
 ## 2. ONNX Runtime
@@ -47,7 +47,7 @@ Place the two files in one directory:
 `gline-rs` pulls `ort` (ONNX Runtime). Building `--features ner` links the
 native runtime; on most setups `ort` provisions a prebuilt library at build
 time. If your environment blocks that, install ONNX Runtime yourself and point
-`ort` at it per its docs (<https://ort.pyke.io/>). This is an operator step —
+`ort` at it per its docs (<https://ort.pyke.io/>). This is an operator step;
 the default build does not include any of it.
 
 ## 3. Enable it
@@ -76,8 +76,8 @@ That line means the model **passed its seeded self-test**.
 ## The seeded self-test (fail-closed)
 
 When the model loads, the app runs a fixed probe sentence with a planted name
-through it and requires at least one detection. If the model detects nothing —
-a wrong export, a span/token mismatch, a corrupt file — `load` returns an error,
+through it and requires at least one detection. If the model detects nothing
+(a wrong export, a span/token mismatch, a corrupt file), `load` returns an error,
 the app logs it, and it continues with **deterministic-only** redaction. A model
 that would silently redact nothing is therefore never trusted to stand in for
 the redaction layer. Verify this yourself with the fail-closed check in
@@ -93,8 +93,8 @@ credit card number, social security number, passport number,
 driver license number, bank account number, ip address
 ```
 
-Generic `organization` and `location` are intentionally **excluded** — redacting
-the company or city someone researched would destroy the study's signal. If your
+Generic `organization` and `location` are intentionally **excluded**: redacting
+the company or city someone researched would destroy the research signal. If your
 threat model needs them, pass a custom label set via
 `NerRedactor::load_with_labels`.
 
@@ -102,7 +102,7 @@ threat model needs them, pass a custom label set via
 
 `NerRedactor::redact(text)`:
 
-1. runs `redact_deterministic` (the shapes) — so NER never re-sees a value the
+1. runs `redact_deterministic` (the shapes), so NER never re-sees a value the
    deterministic layer already removed;
 2. runs the model over what remains, with the label set;
 3. replaces each accepted span (probability ≥ 0.5, ≥ 3 chars) with
@@ -113,7 +113,7 @@ threat model needs them, pass a custom label set via
 Spans are replaced longest-first so a longer name isn't half-consumed by a
 shorter overlapping one. Replacement is by matched substring (not byte offsets),
 which sidesteps the model's internal sentence-splitting and errs toward removing
-more — the safe direction for redaction.
+more, the safe direction for redaction.
 
 ## Testing against a real model
 

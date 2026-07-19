@@ -12,7 +12,7 @@ and [§5](#5-optional-web-chat-capture-browser-extension).
 
 ## 1. One-time: a signing certificate (maintainer)
 
-Houdini needs no TCC permission — it reads local transcript files and its own
+Houdini needs no TCC permission: it reads local transcript files and its own
 sockets. A stable code-signing identity is still worth having, so a rebuild never
 re-triggers a Gatekeeper prompt. Create a self-signed one (free, internal use):
 
@@ -20,8 +20,9 @@ re-triggers a Gatekeeper prompt. Create a self-signed one (free, internal use):
 2. Name `Houdini Self-Signed`, Identity Type **Self Signed Root**, Certificate
    Type **Code Signing**. Create it; leave it in the login keychain.
 
-It shows as untrusted (`CSSMERR_TP_NOT_TRUSTED`) — expected; `codesign` uses it
-regardless. Trust only matters for *other* machines, which notarization handles.
+It shows as untrusted (`CSSMERR_TP_NOT_TRUSTED`). That is expected; `codesign`
+uses it regardless. Trust only matters for *other* machines, which notarization
+handles.
 
 ## 2. Build the app + installer (maintainer)
 
@@ -43,7 +44,7 @@ browser extension + its guide). Override the identity with `HOUDINI_SIGN_IDENTIT
 | Teammate's first launch | Right-click → **Open** once | Double-click, no prompt |
 | Best for | A few internal machines | Smoother rollout / many machines |
 
-Self-signed is enough for a small consenting team; notarize when the right-click
+Self-signed is enough for a small internal team; notarize when the right-click
 step becomes a support burden.
 
 ### Notarizing (only if you have a Developer ID)
@@ -70,7 +71,7 @@ xcrun stapler staple "dist/Houdini-<v>.dmg"
 1. Open the `.dmg` and drag **Houdini** to **Applications**.
 2. Launch it: self-signed build → **right-click → Open**, then **Open** (first
    launch only; notarized builds just double-click).
-3. A ring appears in the menu bar. **No permission prompt** — see
+3. A ring appears in the menu bar. **No permission prompt**; see
    [privacy.md](privacy.md) for why.
 
 There is no window; click the icon for status and the menu. Data handling and
@@ -81,11 +82,11 @@ export are described in [privacy.md](privacy.md).
 To also capture web ChatGPT/Claude/Gemini, load the Chromium extension. The DMG
 ships it in a **Browser Extension** folder with a step-by-step
 **INSTALL-ME-FIRST.md** (the teammate guide is
-[../EXTENSION-SETUP.md](../EXTENSION-SETUP.md)). In short: `chrome://extensions` →
+[extension.md](extension.md)). In short: `chrome://extensions` →
 **Developer mode** → **Load unpacked** → select the folder, then send one web AI
 message to confirm.
 
-**No terminal step is needed** — the app registers the local native-messaging host
+**No terminal step is needed**: the app registers the local native-messaging host
 on every launch. The extension and app **share a version** (the extension's fixed
 id `jphmlmjmieilhimgemjanlkgfommlife` is allowlisted by the host manifest); this
 build isn't on the Chrome Web Store, so re-load the folder on a new version.

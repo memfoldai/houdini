@@ -5,17 +5,17 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
-## [0.5.0] — 2026-07-18
+## [0.5.0] - 2026-07-18
 
 First release as **Houdini** (was "AI Usage Monitor"). By Rahul Biliyar.
 
 ### Changed
-- **Renamed to Houdini** — app, crate, bundle id (`ai.memfold.houdini`), data dir,
+- **Renamed to Houdini** - app, crate, bundle id (`ai.memfold.houdini`), data dir,
   Keychain, native-host name, and the repo (`memfoldai/houdini`, now public so OTA
   needs no token). Fresh start: the old-name store is not migrated (CLI chats
   re-import from transcripts).
 - **Web capture is now a uniform DOM registry.** One ISOLATED content script polls
-  each site's rendered reply until it stabilizes and emits the exchange — dropping
+  each site's rendered reply until it stabilizes and emits the exchange - dropping
   the MAIN-world fetch hook. One adapter per site; the core is site-agnostic.
 
 ### Added
@@ -31,7 +31,7 @@ First release as **Houdini** (was "AI Usage Monitor"). By Rahul Biliyar.
   (+badges), new `docs/{architecture,privacy,install}.md`, `CONTRIBUTING.md`,
   trimmed `SECURITY.md`; removed duplication.
 
-## [0.4.10] — 2026-07-18
+## [0.4.10] - 2026-07-18
 
 ### Fixed
 - **Web chats are captured again, and the password prompt storm is gone.** The
@@ -40,16 +40,16 @@ First release as **Houdini** (was "AI Usage Monitor"). By Rahul Biliyar.
   prompt per ChatGPT message, and twice on app launch). It is now a thin
   **forwarder**: it hands each captured chat to the running app over a local Unix
   socket, and **only the long-lived app** reads the Keychain (once at launch) and
-  writes the store — the documented single-writer pattern. Silent no-prompt
+  writes the store - the documented single-writer pattern. Silent no-prompt
   Keychain access (the data-protection keychain) requires an Apple Developer team
   ID, which a self-signed app can't have, so this architecture is the correct fix;
   at most one "Always Allow" is needed, once.
 - **Data-loss bug removed.** `db_key()` used to fabricate a *random* key on **any**
-  Keychain read error — including a denied or no-UI read — and a wrong key then
+  Keychain read error - including a denied or no-UI read - and a wrong key then
   triggered a "rebuild empty" path that discarded the database. It now creates a
   new key **only** on `errSecItemNotFound` (genuinely absent); any other error
   aborts without fabricating. The destructive wrong-key rebuild in the store is
-  removed entirely — a bad key is refused, never silently wiped.
+  removed entirely - a bad key is refused, never silently wiped.
 
 ### Changed
 - **OTA needs no access token.** With the repo public, the updater reads the
@@ -60,9 +60,9 @@ First release as **Houdini** (was "AI Usage Monitor"). By Rahul Biliyar.
 ### Added
 - The DMG now ships the **browser extension** and a plain-language
   **EXTENSION-SETUP.md** guide, so web-chat capture is set up by loading a folder
-  — no terminal, no Chrome Web Store.
+  - no terminal, no Chrome Web Store.
 
-## [0.4.9] — 2026-07-18
+## [0.4.9] - 2026-07-18
 
 ### Changed
 - **Over-the-air updates now work on machines without `gh`.** The updater no
@@ -74,47 +74,47 @@ First release as **Houdini** (was "AI Usage Monitor"). By Rahul Biliyar.
   Verified live against the private repo's release API.
 - **Updates install silently to stay current.** The periodic check (on launch +
   every 6h) now downloads, verifies the signature, swaps the `/Applications`
-  bundle, and relaunches automatically — no click. The menu's *Check for
+  bundle, and relaunches automatically - no click. The menu's *Check for
   updates…* still gives a manual, visible check. Industry-standard model
   (mirrors Sparkle's automatic-install behavior).
 
 ### Added
 - **The browser bridge sets itself up.** The app registers its native-messaging
   host for every installed Chromium browser on launch, idempotently. A
-  non-developer now only has to install the DMG and load the extension — no
+  non-developer now only has to install the DMG and load the extension - no
   terminal command. (Re-registering each launch also keeps the path correct
   across self-updates.)
 
 ### Fixed
 - Removed the two-step "Install update" menu state and its `available_update`
-  cell — one code path, less state to keep in sync.
+  cell - one code path, less state to keep in sync.
 
-## [0.4.8] — 2026-07-18
+## [0.4.8] - 2026-07-18
 
 ### Fixed
 - **The app crashed on launch** (`RefCell already borrowed`). The update-check
   poller held a `borrow()` of the result channel across a `borrow_mut()` of the
-  same cell, which panics the instant a check result arrives — so the menu-bar app
+  same cell, which panics the instant a check result arrives - so the menu-bar app
   aborted shortly after starting. Fixed by scoping the read borrow before the
   write. (This is a runtime-only failure a unit test can't see; the fix was
   verified by running the signed app.)
 
-## [0.4.7] — 2026-07-18
+## [0.4.7] - 2026-07-18
 
 ### Changed
 - **Data is now encrypted at rest.** The store is an encrypted SQLite database
   (SQLCipher / AES-256, `bundled-sqlcipher`), with the key generated once and kept
-  in the **macOS Keychain** (`src/keychain.rs`) — the production-standard way to
+  in the **macOS Keychain** (`src/keychain.rs`) - the production-standard way to
   hold sensitive local data. Nothing readable is written to a folder anymore. On
   first launch an existing plaintext DB is moved aside (`*.pre-encryption.bak`) and
   rebuilt encrypted; validated end-to-end on a real DB. DB schema is v5.
 - **Export is now on demand.** The automatic plaintext `data/interactions/…jsonl`
   day-files are gone. The menu's **Export my data…** writes a single flat,
-  OLAP-ready `data/interactions.jsonl` snapshot (one row per turn) and reveals it —
+  OLAP-ready `data/interactions.jsonl` snapshot (one row per turn) and reveals it -
   so the default at-rest state is encrypted and plaintext exists only when you ask
   for it. The `flush_ms` config knob is removed.
 
-## [0.4.6] — 2026-07-18
+## [0.4.6] - 2026-07-18
 
 ### Added
 - **OpenClaw / almaclaw is now tracked** as its own `openclaw` app entity (like
@@ -126,14 +126,14 @@ First release as **Houdini** (was "AI Usage Monitor"). By Rahul Biliyar.
 ### Fixed
 - **Menu-bar icon is now real-time.** Transcript changes are detected instantly
   via file-system events (FSEvents, `notify`) instead of a 2 s poll, and the
-  "active" window dropped from 45 s to 6 s — so the icon lights up as soon as a
+  "active" window dropped from 45 s to 6 s - so the icon lights up as soon as a
   message is recorded and clears a few seconds after you stop, instead of being
   stuck Active during a whole session and lingering.
 - **The update menu no longer gets stuck** on "You're on the latest version"; the
   transient states (up-to-date, install failed) auto-revert to "Check for updates…"
   after a few seconds.
 
-## [0.4.5] — 2026-07-18
+## [0.4.5] - 2026-07-18
 
 ### Added
 - **Over-the-air updates from GitHub Releases.** The installed app checks on
@@ -144,7 +144,7 @@ First release as **Houdini** (was "AI Usage Monitor"). By Rahul Biliyar.
   tokens, no notarization); self-signed. Gated to an installed `.app` only (dev
   builds are skipped). Each release must attach the `.dmg` (see docs/install.md §6).
 
-## [0.4.4] — 2026-07-18
+## [0.4.4] - 2026-07-18
 
 ### Fixed
 - **Menu-bar icon now updates immediately.** It previously reacted only to the
@@ -165,7 +165,7 @@ First release as **Houdini** (was "AI Usage Monitor"). By Rahul Biliyar.
   all inline and doc comments were removed across Rust and the extension JS. New
   `settings` table (additive, no data migration) backs the shared pause state.
 
-## [0.4.3] — 2026-07-18
+## [0.4.3] - 2026-07-18
 
 ### Removed
 - **Network-presence collection is gone entirely** (Layer B: `libproc` process →
@@ -174,27 +174,27 @@ First release as **Houdini** (was "AI Usage Monitor"). By Rahul Biliyar.
   `presence` table, its day-file table, the `libproc` dependency, and the network
   attribution code are all removed. The monitor now records only the actual
   messages: transcripts (CLI/agents) and web chats (extension). Native desktop
-  apps are consequently not captured — a deliberate trade for signal quality.
+  apps are consequently not captured - a deliberate trade for signal quality.
 
 ### Changed
 - **One standardized record shape.** Day files are a single flat table
   `data/interactions/YYYY-MM-DD.jsonl` (the `presence` table is gone); every
   source emits the identical row. Schema stays `aum/3`; DB schema is v4.
-- **Menu bar UX.** No emojis — plain status text ("Watching for AI use",
+- **Menu bar UX.** No emojis - plain status text ("Watching for AI use",
   "Recording AI activity", "Paused"). Added a version header (`Houdini
-  <version>`) — the standard place a menu-bar app shows its version. Icon: hollow
+  <version>`) - the standard place a menu-bar app shows its version. Icon: hollow
   ring when quiet, filled disc while recording, bars when paused.
 
 ### Fixed
 - **Web chats now capture the assistant reply and don't double-record.** The
   reply is read from the rendered DOM after the response settles (polling until it
   stabilizes) instead of the provider's undocumented streaming format, and the
-  conversation id is read from the page URL *after* settling — so a new chat's
+  conversation id is read from the page URL *after* settling - so a new chat's
   first message no longer lands under a throwaway id separate from the rest.
 - **Claude Code slash-command noise** (`<local-command-*>` / `<command-*>`) is
   filtered from prompts.
 
-## [0.4.2] — 2026-07-17
+## [0.4.2] - 2026-07-17
 
 ### Changed
 - **Day files are now OLAP-ready.** Export moved from one nested-`turns` record
@@ -206,7 +206,7 @@ First release as **Houdini** (was "AI Usage Monitor"). By Rahul Biliyar.
   or join. Schema tag is now `aum/3`.
 - **Turns export incrementally.** A per-session `exported_seq` high-water mark
   replaces the old per-session `exported_at` flag, so a growing session appends
-  only its new turns instead of re-emitting the whole session — fixing the
+  only its new turns instead of re-emitting the whole session - fixing the
   duplicate/partial rows a multi-message web chat produced.
 - **Menu-bar icon is now informative.** A hollow ring when quiet, a filled disc
   while AI activity is being recorded (decaying ~45s after the last interaction).
@@ -216,14 +216,14 @@ First release as **Houdini** (was "AI Usage Monitor"). By Rahul Biliyar.
 - **ChatGPT web captured the prompt but not the reply.** The reply parser matched
   an older internal SSE shape. It now reads the completed assistant message from
   the rendered DOM (stable) after the stream ends, and takes the conversation id
-  from the `/c/<id>` page URL — no dependence on the provider's undocumented,
+  from the `/c/<id>` page URL - no dependence on the provider's undocumented,
   changing stream format. (Reverse-engineered surfaces; validated against sample
   inputs, confirm live.)
 - **Claude Code slash-command noise** (`<local-command-*>`, `<command-*>` wrappers
   from `/model` etc.) was stored as user prompts. Those synthetic entries are now
   filtered; only real prompts are recorded.
 
-## [0.4.1] — 2026-07-17
+## [0.4.1] - 2026-07-17
 
 ### Fixed
 - **Nothing was recorded after upgrading from 0.3.x.** An existing `sessions.sqlite`
@@ -235,15 +235,15 @@ First release as **Houdini** (was "AI Usage Monitor"). By Rahul Biliyar.
   retired screen-scrape approach; nothing to preserve).
 - **Detection silently never ran, and the icon stuck on "Recording an AI chat".**
   The poll timers initialized to `i64::MIN`, and `now - i64::MIN` overflows and
-  wraps in release builds — so the transcript and network polls always read as
+  wraps in release builds - so the transcript and network polls always read as
   "not due" (never ran) and the icon read "Recording" forever. All monotonic
   time-deltas now use `saturating_sub`.
 
-## [0.4.0] — 2026-07-17
+## [0.4.0] - 2026-07-17
 
 Fundamental change of approach. Screen-scraping AI detection is removed: reading
 the screen with OCR and a streaming heuristic was unreliable at the mechanism
-level — it produced false positives (Slack, editors), garbled content, no app
+level - it produced false positives (Slack, editors), garbled content, no app
 identity, and it missed the CLI/agent tools entirely. Detection is now based on
 two reliable signals, and the change was validated against real data on a real
 machine (184 Claude Code + 40 Codex sessions parsed; the live ChatGPT/Claude
@@ -252,18 +252,18 @@ apps, Codex, and Claude Code all detected on the network).
 ### Changed
 - **Detection is now transcript ingestion + network presence, not screen
   capture.**
-  - **Layer A — transcripts.** AI coding tools persist structured local
+  - **Layer A - transcripts.** AI coding tools persist structured local
     transcripts; the monitor reads them directly (Claude Code
     `~/.claude/projects/*/*.jsonl`, Codex `~/.codex/**/rollout-*.jsonl`),
     yielding exact prompt/reply, timestamps, model, and session id with zero
     OCR and zero false positives, across all desktops/Spaces.
-  - **Layer B — network presence.** For AI with no local transcript (web chats,
+  - **Layer B - network presence.** For AI with no local transcript (web chats,
     native apps), the monitor observes process → AI-endpoint connections via
     `libproc` (no root, no entitlement). AI tools/apps are attributed by process
     identity; browsers by provider-owned IP range.
 - **Records now carry real identity.** Each day-file line names the `provider`
   (`anthropic`, `openai`, …), `tool`, `surface`, and `model`, with the exchange
-  as structured `turns`. The old salted app-hash is gone — for a consenting
+  as structured `turns`. The old salted app-hash is gone - for a consenting
   internal study the provider entity is the signal, not something to hide. Schema
   is now `aum/2`; `presence` records are a second kind alongside `interaction`.
 - **No screen-recording or accessibility permission.** The app reads files the
@@ -277,9 +277,9 @@ apps, Codex, and Claude Code all detected on the network).
   dependency reduction.
 
 ### Added
-- **Layer C — browser web-chat capture.** A Chromium extension (`extension/`)
-  intercepts the AI site's own API calls (fetch/SSE) — reliable and working in
-  background tabs — and delivers each web chat to a local native-messaging host
+- **Layer C - browser web-chat capture.** A Chromium extension (`extension/`)
+  intercepts the AI site's own API calls (fetch/SSE) - reliable and working in
+  background tabs - and delivers each web chat to a local native-messaging host
   (`--native-host`), which redacts and stores it as a `web` session grouped under
   the right provider. Strictly local: the extension talks only to the local host,
   which has no egress. Install the host into every Chromium browser with
@@ -291,12 +291,12 @@ apps, Codex, and Claude Code all detected on the network).
 ### UX
 - **Menu-bar states redesigned.** Three honest states: **Monitoring** (steady),
   **Recording** (a brief flash only when an interaction is actually recorded), and
-  **Paused**. The old presence-driven "in use nearby" state is gone — a
+  **Paused**. The old presence-driven "in use nearby" state is gone - a
   backgrounded AI app holds a network connection indefinitely, so that state never
   cleared and read as stale. Presence still feeds the data, just not a persistent
   icon state.
 
-## [0.3.0] — 2026-07-17
+## [0.3.0] - 2026-07-17
 
 ### Fixed
 - **The icon/state got stuck showing "recording" forever.** The detector
@@ -307,14 +307,14 @@ apps, Codex, and Claude Code all detected on the network).
   when a reply finishes. The surface's detector is also reset on close.
 
 ### Changed
-- **Friendlier, calmer UX.** No more "Recording" — the menu reads in plain,
+- **Friendlier, calmer UX.** No more "Recording" - the menu reads in plain,
   light language ("Catching an AI chat ✨", "Keeping an eye out 👀", "All quiet
   for now 🌙", "Taking a break ☕"). The menu-bar icon is now icon-only (its
   shape is the state), removing the persistent text label that could stick.
 - **Simpler menu.** Trimmed to a status line, a captured-today count, **Take a
   break** (15 min / an hour / until you're back), **Show my data**, and Quit.
 - **No more manual "Export for review."** Finished sessions are stored
-  automatically, redacted, into **day files** `data/YYYY-MM-DD.jsonl` — the
+  automatically, redacted, into **day files** `data/YYYY-MM-DD.jsonl` - the
   standard shape for analytics at scale and trivial to merge across machines
   (each line carries the device id). "Show my data" reveals the folder.
 - **Much cleaner captured data.** Instead of dumping the whole window (history +
@@ -323,18 +323,18 @@ apps, Codex, and Claude Code all detected on the network).
   baseline) as separate fields, with a lean schema: `device, day, app, surface,
   started_ms, ended_ms, prompt, reply`.
 
-## [0.2.5] — 2026-07-16
+## [0.2.5] - 2026-07-16
 
 ### Fixed
 - **Native apps: "detects the app but not the message."** The Accessibility path
   monitored only the single LARGEST text region of a window. In a chat app each
   message is its own element, so a newly-streaming reply is small and never the
-  largest — the monitored region stayed static while a *different* region grew,
+  largest - the monitored region stayed static while a *different* region grew,
   and the reply went undetected. It now concatenates ALL non-input text regions
   (what OCR already does for the whole window), so any growing region raises the
   total. Measured against the live Claude desktop app: the window read jumped
   from 5041 chars (a chrome-heavy block, prose score 0.40) to **63535 chars of
-  the actual conversation (prose score 0.95)** — and a new message now moves that
+  the actual conversation (prose score 0.95)** - and a new message now moves that
   number. Verified end-to-end via Accessibility on the real app (reads the full
   conversation; correctly idle when nothing is streaming).
 
@@ -344,12 +344,12 @@ apps, Codex, and Claude Code all detected on the network).
   detection without turning on debug: `reads = 0` → permissions/capture;
   `reads > 0` but no sessions while an AI streams → detection.
 
-## [0.2.4] — 2026-07-16
+## [0.2.4] - 2026-07-16
 
 ### Fixed
 - **Real app windows were rejected by the prose-score gate.** Diagnosing against
-  the *actual* open apps (not a synthetic page) showed a real chat window — e.g.
-  Claude's desktop app, 5000+ chars via Accessibility — scores ~0.40 on the
+  the *actual* open apps (not a synthetic page) showed a real chat window - e.g.
+  Claude's desktop app, 5000+ chars via Accessibility - scores ~0.40 on the
   whole-window prose gate because UI chrome (sidebar, buttons, timestamps)
   dominates. The old detector required 0.55, so it rejected genuine AI windows
   even while a reply streamed. This was the core "detects apps but not messages"
@@ -364,23 +364,23 @@ apps, Codex, and Claude Code all detected on the network).
   a shrink, with a stall tolerance so a busy chat's discrete incoming messages
   don't accumulate into one false "generation". The whole-window prose-score gate
   is gone. This is validated by unit tests over realistic prose-length
-  trajectories (jitter, message arrivals, scene changes) — the behaviors that
+  trajectories (jitter, message arrivals, scene changes) - the behaviors that
   can't be reproduced reliably by scripting a GUI.
 
 ### Notes on scope (honest limitations)
 - **Native AI apps work across Spaces/desktops** (Accessibility reads them even
   when off-screen). A **browser** AI window on *another* desktop cannot be
-  screen-captured (macOS renders nothing to capture off-Space) — keep it on the
+  screen-captured (macOS renders nothing to capture off-Space) - keep it on the
   current desktop, or use the native app.
 - After installing, macOS may hold a **stale Screen Recording grant** from an
   earlier build: if capture seems dead, remove the app under System Settings →
   Screen Recording and re-add it.
 
-## [0.2.3] — 2026-07-16
+## [0.2.3] - 2026-07-16
 
 ### Fixed
 - **Chat replies weren't detected because the composer stays focused.** The
-  "user is typing" signal treated *any focused text input* as typing — but chat
+  "user is typing" signal treated *any focused text input* as typing - but chat
   apps (ChatGPT, Claude, …) keep the message box focused while the model streams
   its reply, so every frame of the reply was excluded and no session was ever
   created. Typing now means the focused input's **text is changing** (an actual
@@ -391,16 +391,16 @@ apps, Codex, and Claude Code all detected on the network).
 - The streaming-signature approach is confirmed correct end-to-end by driving a
   real browser through the live capture path: OCR/AX text grows, the detector
   fires `Streaming`, and a session is created and persisted. It works for any
-  surface that streams prose — no per-provider logic.
+  surface that streams prose - no per-provider logic.
 
 ### Added
 - [docs/grouping.md](docs/grouping.md): how sessions are grouped by provider and
-  surface (web/app/CLI) at analysis time — without hardcoding providers and
+  surface (web/app/CLI) at analysis time - without hardcoding providers and
   without adding any network/LLM call to the local-only daemon.
 - Content-free per-surface detection tracing (`RUST_LOG=houdini=debug`):
-  text length + verdict, no captured text — for tuning and support.
+  text length + verdict, no captured text - for tuning and support.
 
-## [0.2.2] — 2026-07-16
+## [0.2.2] - 2026-07-16
 
 ### Fixed
 Nothing was ever captured from browser/Electron AI apps (ChatGPT web, ChatGPT
@@ -428,7 +428,7 @@ debug log), not by guessing:
 - Debug-level capture tracing (per-app AX/OCR outcomes, char counts) behind
   `RUST_LOG=houdini=debug`.
 
-## [0.2.1] — 2026-07-16
+## [0.2.1] - 2026-07-16
 
 ### Fixed
 - **App would not launch after upgrading.** 0.2.0 added a config field without a
@@ -438,7 +438,7 @@ debug log), not by guessing:
   is backed up and reset instead of crashing. Added an upgrade regression test.
   0.2.1 supersedes 0.2.0, which could not start.
 
-## [0.2.0] — 2026-07-16
+## [0.2.0] - 2026-07-16
 
 ### Added
 - **Pause / resume.** Global pause with timed options (15 minutes, 1 hour, until
@@ -448,10 +448,10 @@ debug log), not by guessing:
   AI use", "Recording an AI chat", "Paused") with a captured-recently summary,
   plus **Export for review…**, **Open activity log**, and **Quit**.
 - **Transient "Recording" label** next to the menu-bar icon only while a chat is
-  actively being captured — clear feedback, no persistent clutter.
+  actively being captured - clear feedback, no persistent clutter.
 - **Paused icon** (two bars) alongside the existing idle/watching/recording
   glyphs.
-- **Diagnostics log** (metadata only — never captured text) under the data dir,
+- **Diagnostics log** (metadata only - never captured text) under the data dir,
   capped and rotated, openable from the menu, so "is it working?" is answerable.
 - `.github/workflows/ci.yml`: build, test, and `cargo audit` on every push.
 - `SECURITY.md` documenting the data-handling guarantees and audit posture.
@@ -471,7 +471,7 @@ debug log), not by guessing:
   and fast ticks skip window enumeration when the frontmost app is AX-readable.
 - Detector per-step growth ceiling widened to suit the throttled OCR cadence.
 
-## [0.1.0] — 2026-07-16
+## [0.1.0] - 2026-07-16
 
 ### Added
 - Initial release: streaming-signature AI-usage detection (no app allowlists),

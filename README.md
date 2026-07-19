@@ -2,10 +2,9 @@
 
 *Behind every work-from-home employee is a cat that knows all its company secrets.*
 
-Houdini — named after one such cat — quietly keeps track of **what you use AI for**.
-It gathers your prompts and replies from the AI tools you already use into one
-tidy, private place on your Mac, so an internal study can learn how people really
-work with AI.
+Houdini, named after one such cat, quietly keeps track of what you use AI for. It
+gathers your prompts and replies from the AI tools you already use into one tidy,
+private place on your Mac.
 
 [![Release](https://img.shields.io/github/v/release/memfoldai/houdini?sort=semver)](https://github.com/memfoldai/houdini/releases)
 [![Build](https://img.shields.io/github/actions/workflow/status/memfoldai/houdini/ci.yml?branch=main)](https://github.com/memfoldai/houdini/actions/workflows/ci.yml)
@@ -18,44 +17,44 @@ work with AI.
 
 ## What it does
 
-- **Follows your AI work across the tools you use** — Claude Code, Codex, and
-  OpenClaw on the command line, and ChatGPT, Claude, and Gemini on the web (with a
-  small browser extension).
-- **Turns every exchange into one tidy record** — the provider, tool, model, and
-  the prompt and reply — ready for analysis.
-- **Lives in your menu bar** as a quiet ring that fills in when it catches
-  something. Take a break whenever you like.
+- Follows your AI work across the tools you use: Claude Code, Codex, and OpenClaw
+  on the command line, and ChatGPT, Claude, and Gemini on the web (with a small
+  browser extension).
+- Turns every exchange into one tidy record with the provider, tool, model, and
+  the prompt and reply, ready for analysis.
+- Lives in your menu bar as a quiet ring that fills in when it catches something.
+  Take a break whenever you like.
 
 ## Private by design
 
-Everything Houdini gathers stays **on your Mac**, encrypted, with sensitive
-details (keys, emails, card numbers) stripped out before anything is saved. It's
-built for a consenting study, so what it keeps is deliberate and yours — the full
-picture is in [docs/privacy.md](docs/privacy.md).
+Everything Houdini gathers stays on your Mac, encrypted, with sensitive details
+like keys, emails, and card numbers stripped out before anything is saved. What it
+keeps is deliberate and yours. The full picture is in [docs/privacy.md](docs/privacy.md).
 
 ## Install
 
 Download the latest [`.dmg`](https://github.com/memfoldai/houdini/releases), drag
-**Houdini** to Applications, and open it. To also catch web chats, load the
-bundled browser extension. Full steps and uninstall: [docs/install.md](docs/install.md).
+**Houdini** to Applications, and open it. To also catch web chats, load the bundled
+browser extension. Full steps and uninstall are in [docs/install.md](docs/install.md).
 
 ## Using it
 
 Click the menu-bar ring for today's count and to:
 
-- **Export my data…** — a flat, one-row-per-message file, ready for a warehouse.
-- **Take a break** — pause for 15 minutes, an hour, or until you're back.
+- **Export my data…** writes a flat, one-row-per-message file, ready for a warehouse.
+- **Take a break** pauses for 15 minutes, an hour, or until you're back.
 - **Quit**.
 
 ## How it works
 
-Every source — a command-line transcript or a web chat — flows into the same
+Every source, whether a command-line transcript or a web chat, flows into the same
 encrypted store through one small, uniform pipeline. The details are in
 [docs/architecture.md](docs/architecture.md).
 
 ## Contributing
 
-Build it, run it, and verify it: [CONTRIBUTING.md](CONTRIBUTING.md).
+Build it, run it, and verify it with [CONTRIBUTING.md](CONTRIBUTING.md), and please
+follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## License
 

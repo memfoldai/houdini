@@ -56,7 +56,7 @@ the database.
 Both paths converge on the same normalized record and the same store, so an
 export is uniform regardless of source (see [privacy.md](privacy.md#export) for
 the row shape). Provider grouping and semantic clustering are **analysis-time**
-jobs over an export, never in the daemon — see [grouping.md](grouping.md).
+jobs over an export, never in the daemon. See [grouping.md](grouping.md).
 
 ## The store
 
@@ -68,13 +68,13 @@ Schema changes are **forward-only and additive**: a fresh database gets the
 current schema; an existing one is stepped forward one version at a time, each
 step running its DDL and the `PRAGMA user_version` bump in a single transaction.
 SQLite rolls both back together on failure, so a crash or restart mid-migration
-leaves the old version intact and re-runs cleanly — no data is ever dropped.
+leaves the old version intact and re-runs cleanly. No data is ever dropped.
 
 ## Over-the-air updates
 
 The installed app checks GitHub Releases on launch and every few hours. When a
 newer release exists it downloads the signed `.dmg`, verifies its signature, swaps
-the `/Applications` bundle, and relaunches — no token needed, because the repo is
+the `/Applications` bundle, and relaunches. No token is needed, because the repo is
 public. Updates never touch the data directory or the Keychain, so upgrading
 cannot lose data.
 

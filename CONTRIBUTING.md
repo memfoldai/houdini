@@ -22,13 +22,13 @@ Developer mode → Load unpacked → `extension/`) with the app running.
 
 ## Conventions
 
-Read [AGENTS.md](AGENTS.md) — it is the source of truth for build/run commands and
+Read [AGENTS.md](AGENTS.md). It is the source of truth for build/run commands and
 code style, and it is kept lean for coding agents. The load-bearing ones:
 
 - **Code carries no comments.** The code is self-documenting; rationale lives in
   docs, the changelog, or commit messages.
 - **Respect the architecture invariants** in
-  [docs/architecture.md](docs/architecture.md#invariants) — single writer,
+  [docs/architecture.md](docs/architecture.md#invariants): single writer,
   redaction-before-store, additive-only migrations, local-only.
 - American spelling; prefer real types over `any`-equivalents; small, focused
   files.
@@ -54,7 +54,7 @@ which writes `data/interactions.jsonl`.
 4. **Redaction audit** (safety gate, before sharing any data). Send a prompt with a
    **fake** AWS-shaped key and email, e.g.
    `note key AKIAIOSFODNN7EXAMPLE, mail jane@example.com`; ingest; Export.
-   *Pass:* neither raw value appears — each is a `[REDACTED:…]` placeholder. If any
+   *Pass:* neither raw value appears; each is a `[REDACTED:…]` placeholder. If any
    raw value survives, **do not share the data**; file the gap first.
 5. **Optional NER layer** (`--features ner`): a planted person name becomes
    `[REDACTED:NER:PERSON]`, and a missing model fails closed (logs, continues with
@@ -64,4 +64,4 @@ which writes `data/interactions.jsonl`.
 
 Keep changes focused and the tests green (`cargo test` + the extension test).
 Describe the behavior change and how you verified it. The extension and app share
-a version — bump both when the native-messaging message shape changes.
+a version. Bump both when the native-messaging message shape changes.
