@@ -41,7 +41,7 @@ browser extension + its guide). Override the identity with `HOUDINI_SIGN_IDENTIT
 | | Self-signed (default) | Developer ID + notarized |
 |---|---|---|
 | Cost | Free | Apple Developer Program ($99/yr) |
-| Teammate's first launch | Right-click → **Open** once | Double-click, no prompt |
+| Teammate's first launch | Approve once in System Settings | Double-click, no prompt |
 | Best for | A few internal machines | Smoother rollout / many machines |
 
 Self-signed is enough for a small internal team; notarize when the right-click
@@ -69,8 +69,10 @@ xcrun stapler staple "dist/Houdini-<v>.dmg"
 ## 4. Install (teammate)
 
 1. Open the `.dmg` and drag **Houdini** to **Applications**.
-2. Launch it: self-signed build → **right-click → Open**, then **Open** (first
-   launch only; notarized builds just double-click).
+2. Launch it. A self-signed build is blocked on first open, so go to
+   **System Settings → Privacy & Security**, scroll to Security, and click
+   **Open Anyway** next to Houdini, then confirm (first launch only; notarized
+   builds just double-click).
 3. A ring appears in the menu bar. **No permission prompt**; see
    [privacy.md](privacy.md) for why.
 

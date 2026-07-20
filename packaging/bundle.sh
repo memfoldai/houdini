@@ -12,8 +12,8 @@
 #
 # Signing identity: same self-signed cert as scripts/sign.sh (override with
 # HOUDINI_SIGN_IDENTITY). A self-signed build runs on other Macs after a one-time
-# right-click -> Open (Gatekeeper). For zero-friction install, sign with a
-# "Developer ID Application" cert and notarize - see INSTALL.md.
+# System Settings > Privacy & Security > Open Anyway. For zero-friction install, sign with a
+# "Developer ID Application" cert and notarize - see docs/install.md.
 
 set -euo pipefail
 
@@ -117,4 +117,4 @@ fi
 
 echo
 echo "Done. Gatekeeper note: a self-signed build is not notarized, so first"
-echo "launch on another Mac needs right-click -> Open once. See docs/install.md."
+echo "launch on another Mac needs approval in System Settings > Privacy & Security. See docs/install.md."

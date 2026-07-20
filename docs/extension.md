@@ -10,9 +10,10 @@ it to the app locally. Nothing is uploaded.
 
 ## Step 1: install the app first
 
-If you haven't already, open the `.dmg`, drag **Houdini** to Applications, then
-right-click it and choose **Open** (macOS asks the first time for a self-signed
-build). A small ring appears in your menu bar. Leave it running.
+If you haven't already, open the `.dmg`, drag **Houdini** to Applications, and open
+it. The first time, macOS blocks a self-signed build, so go to **System Settings ->
+Privacy & Security** and click **Open Anyway** next to Houdini. A small ring appears
+in your menu bar. Leave it running.
 
 The app must be installed and running for the extension to work. It wires up the
 local connection automatically the moment it launches, so there is no terminal
