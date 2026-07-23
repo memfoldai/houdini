@@ -20,6 +20,26 @@ impl Surface {
     }
 }
 
+/// Who performed an observed app action. This is the core dimension of the
+/// attribution study: the automation agent, the human at the keyboard, or
+/// `Unknown` until an observed action is reconciled against the agent's log.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Actor {
+    Agent,
+    Human,
+    Unknown,
+}
+
+impl Actor {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Actor::Agent => "agent",
+            Actor::Human => "human",
+            Actor::Unknown => "unknown",
+        }
+    }
+}
+
 pub mod provider {
     pub const ANTHROPIC: &str = "anthropic";
     pub const OPENAI: &str = "openai";

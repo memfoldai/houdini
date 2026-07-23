@@ -20,6 +20,18 @@
       ],
       "js": ["capture.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": [
+        "https://mail.google.com/*",
+        "https://drive.google.com/*",
+        "https://docs.google.com/*",
+        "https://sheets.google.com/*",
+        "https://slides.google.com/*",
+        "https://calendar.google.com/*"
+      ],
+      "js": ["capture_actions.js"],
+      "run_at": "document_idle"
     }
   ]
 }

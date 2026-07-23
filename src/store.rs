@@ -52,7 +52,30 @@ CREATE TABLE IF NOT EXISTS settings (
 
 const SCHEMA_VERSION: i64 = 5;
 
-const MIGRATIONS: &[&str] = &[];
+const MIGRATIONS: &[&str] = &[
+    // v6: agent-vs-human attribution. One row per observed app action, tagged
+    // with who performed it (`actor`) and whether it changed state (`kind`).
+    // `(source, ext_id)` is unique so re-ingesting a growing agent transcript
+    // only appends genuinely new actions.
+    r#"
+CREATE TABLE IF NOT EXISTS actions (
+    id              INTEGER PRIMARY KEY,
+    ext_id          TEXT NOT NULL,
+    source          TEXT NOT NULL,
+    session_id      TEXT NOT NULL DEFAULT '',
+    actor           TEXT NOT NULL CHECK (actor IN ('agent','human','unknown')),
+    app             TEXT,
+    tool            TEXT NOT NULL,
+    action          TEXT NOT NULL,
+    kind            TEXT NOT NULL CHECK (kind IN ('mutating','read_only')),
+    target_redacted TEXT,
+    ts              INTEGER NOT NULL,
+    UNIQUE (source, ext_id)
+);
+CREATE INDEX IF NOT EXISTS idx_actions_app_actor ON actions(app, actor);
+CREATE INDEX IF NOT EXISTS idx_actions_ts ON actions(ts);
+"#,
+];
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let mut version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -247,6 +270,71 @@ impl Store {
         rows.collect()
     }
 
+    /// Insert one attributed action. Returns `true` if it was new, `false` if a
+    /// row with the same `(source, ext_id)` already existed (idempotent re-ingest).
+    pub fn insert_action(&self, a: &ActionRecord) -> rusqlite::Result<bool> {
+        let n = self.conn.execute(
+            "INSERT OR IGNORE INTO actions
+                 (ext_id, source, session_id, actor, app, tool, action, kind, target_redacted, ts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                a.ext_id,
+                a.source,
+                a.session_id,
+                a.actor.as_str(),
+                a.app,
+                a.tool,
+                a.action,
+                a.kind,
+                a.target_redacted,
+                a.ts_ms,
+            ],
+        )?;
+        Ok(n > 0)
+    }
+
+    /// Counts of actions since `since_ms`, grouped by app, actor, and kind —
+    /// the shape the menu bar and export use to show "Gmail: N agent, M you".
+    pub fn action_stats(&self, since_ms: i64) -> rusqlite::Result<Vec<ActionStat>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT app, actor, kind, COUNT(*) AS n FROM actions
+             WHERE ts >= ?1
+             GROUP BY app, actor, kind
+             ORDER BY n DESC",
+        )?;
+        let rows = stmt.query_map(params![since_ms], |r| {
+            Ok(ActionStat {
+                app: r.get(0)?,
+                actor: r.get(1)?,
+                kind: r.get(2)?,
+                count: r.get(3)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn all_actions(&self) -> rusqlite::Result<Vec<ActionRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ext_id, source, session_id, actor, app, tool, action, kind, target_redacted, ts
+             FROM actions ORDER BY ts",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(ActionRow {
+                ext_id: r.get(0)?,
+                source: r.get(1)?,
+                session_id: r.get(2)?,
+                actor: r.get(3)?,
+                app: r.get(4)?,
+                tool: r.get(5)?,
+                action: r.get(6)?,
+                kind: r.get(7)?,
+                target_redacted: r.get(8)?,
+                ts_ms: r.get(9)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     pub fn session_turns(&self, session_id: i64) -> rusqlite::Result<Vec<TurnRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT seq, role, redacted_text, ts FROM turns
@@ -303,6 +391,47 @@ pub struct TurnRow {
     pub ts_ms: i64,
 }
 
+/// An attributed action to insert. Free-text (`target_redacted`) must already be
+/// redacted by the caller, consistent with the "redact before storage" rule.
+#[derive(Debug, Clone)]
+pub struct ActionRecord<'a> {
+    /// Stable id from the source (e.g. the transcript's toolCall id); dedup key.
+    pub ext_id: &'a str,
+    /// Where the action came from, e.g. `"almaclaw"` or `"gmail-extension"`.
+    pub source: &'a str,
+    pub session_id: &'a str,
+    pub actor: crate::attribution::Actor,
+    pub app: Option<&'a str>,
+    pub tool: &'a str,
+    pub action: &'a str,
+    /// `"mutating"` or `"read_only"`.
+    pub kind: &'a str,
+    pub target_redacted: Option<&'a str>,
+    pub ts_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActionStat {
+    pub app: Option<String>,
+    pub actor: String,
+    pub kind: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActionRow {
+    pub ext_id: String,
+    pub source: String,
+    pub session_id: String,
+    pub actor: String,
+    pub app: Option<String>,
+    pub tool: String,
+    pub action: String,
+    pub kind: String,
+    pub target_redacted: Option<String>,
+    pub ts_ms: i64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -348,6 +477,59 @@ mod tests {
     }
 
     #[test]
+    fn actions_insert_is_idempotent_and_stats_group_by_app_actor() {
+        use crate::attribution::Actor;
+        let s = Store::open_in_memory().unwrap();
+
+        let rec = |ext: &'static str, actor: Actor, app: &'static str, kind: &'static str, ts| {
+            ActionRecord {
+                ext_id: ext,
+                source: "almaclaw",
+                session_id: "sess-1",
+                actor,
+                app: Some(app),
+                tool: "bdc__cua",
+                action: "click",
+                kind,
+                target_redacted: None,
+                ts_ms: ts,
+            }
+        };
+
+        assert!(s
+            .insert_action(&rec("a1", Actor::Agent, "Mail", "mutating", 100))
+            .unwrap());
+        assert!(s
+            .insert_action(&rec("a2", Actor::Agent, "Mail", "mutating", 200))
+            .unwrap());
+        assert!(s
+            .insert_action(&rec("h1", Actor::Human, "Mail", "mutating", 300))
+            .unwrap());
+        // Same (source, ext_id) is a no-op on re-ingest.
+        assert!(!s
+            .insert_action(&rec("a1", Actor::Agent, "Mail", "mutating", 100))
+            .unwrap());
+
+        assert_eq!(s.all_actions().unwrap().len(), 3);
+
+        let stats = s.action_stats(0).unwrap();
+        let agent = stats
+            .iter()
+            .find(|st| st.app.as_deref() == Some("Mail") && st.actor == "agent")
+            .unwrap();
+        assert_eq!(agent.count, 2);
+        let human = stats
+            .iter()
+            .find(|st| st.app.as_deref() == Some("Mail") && st.actor == "human")
+            .unwrap();
+        assert_eq!(human.count, 1);
+
+        // A later `since` filter excludes older actions.
+        let recent = s.action_stats(250).unwrap();
+        assert_eq!(recent.iter().map(|st| st.count).sum::<i64>(), 1);
+    }
+
+    #[test]
     fn encrypted_db_roundtrips_and_wrong_key_is_refused_without_data_loss() {
         let dir = std::env::temp_dir().join(format!("houdini-enc-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -376,7 +558,12 @@ mod tests {
                 "data survives a failed wrong-key open"
             );
         }
-        assert!(!std::fs::read(&path).unwrap().starts_with(b"SQLite format 3\0"), "file is encrypted, not plaintext SQLite");
+        assert!(
+            !std::fs::read(&path)
+                .unwrap()
+                .starts_with(b"SQLite format 3\0"),
+            "file is encrypted, not plaintext SQLite"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -390,12 +577,15 @@ mod tests {
 
         {
             let s = Store::open(&path, &key).unwrap();
-            let (id, _) = s.upsert_session(&upsert("chatgpt-web", "c1", 5, 1)).unwrap();
+            let (id, _) = s
+                .upsert_session(&upsert("chatgpt-web", "c1", 5, 1))
+                .unwrap();
             s.add_turn(id, 0, Role::User, "keep me", 1).unwrap();
         }
         {
             let c = open_keyed(&path, &key).unwrap();
-            c.pragma_update(None, "user_version", SCHEMA_VERSION - 1).unwrap();
+            c.pragma_update(None, "user_version", SCHEMA_VERSION - 1)
+                .unwrap();
         }
         {
             let s = Store::open(&path, &key).unwrap();
@@ -404,7 +594,11 @@ mod tests {
                 1,
                 "an older-version DB is migrated in place, never dropped"
             );
-            assert_eq!(s.session_turns(1).unwrap().len(), 1, "its turns survive too");
+            assert_eq!(
+                s.session_turns(1).unwrap().len(),
+                1,
+                "its turns survive too"
+            );
         }
         std::fs::remove_dir_all(&dir).ok();
     }

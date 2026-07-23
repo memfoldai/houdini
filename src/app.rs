@@ -28,6 +28,7 @@ use tray_icon::{TrayIcon, TrayIconBuilder};
 use houdini::config::{self, AppConfig, Paths};
 use houdini::export;
 use houdini::ingest::Ingestor;
+use houdini::ingest_actions::ActionIngestor;
 use houdini::store::{ActivityStats, Store, PAUSE_UNTIL_KEY};
 use houdini::webingest;
 
@@ -56,6 +57,7 @@ struct Clock {
 struct Runtime {
     store: Rc<Store>,
     ingestor: RefCell<Ingestor>,
+    action_ingestor: RefCell<ActionIngestor>,
     install_id: String,
     export_dir: PathBuf,
 
@@ -190,6 +192,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         .unwrap_or(0);
 
     let ingestor = Ingestor::new(home.clone(), now_ms);
+    let action_ingestor = ActionIngestor::new(home.clone(), now_ms);
     let transcripts_changed = Arc::new(AtomicBool::new(false));
     let watcher = start_watcher(&home, transcripts_changed.clone());
 
@@ -211,6 +214,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
     Rc::new(Runtime {
         store,
         ingestor: RefCell::new(ingestor),
+        action_ingestor: RefCell::new(action_ingestor),
         install_id: cfg.install_id.clone(),
         export_dir: paths.export_dir.clone(),
         transcript_poll_ms: cfg.transcript_poll_ms as i64,
@@ -308,11 +312,7 @@ fn install_tray(rt: &Rc<Runtime>) {
     let show_data = MenuItem::with_id(rt.ids.show_data.clone(), "Export my data…", true, None);
     let quit = MenuItem::with_id(rt.ids.quit.clone(), "Quit", true, None);
 
-    let title = MenuItem::new(
-        concat!("Houdini ", env!("CARGO_PKG_VERSION")),
-        false,
-        None,
-    );
+    let title = MenuItem::new(concat!("Houdini ", env!("CARGO_PKG_VERSION")), false, None);
 
     menu.append(&title).expect("title");
     menu.append(&PredefinedMenuItem::separator()).expect("sep0");
@@ -363,7 +363,8 @@ fn tick(rt: &Rc<Runtime>) {
 
     if !rt.is_paused() {
         let changed = rt.transcripts_changed.swap(false, Ordering::Relaxed);
-        let due_poll = clock.mono_ms.saturating_sub(rt.last_transcript_ms.get()) >= rt.transcript_poll_ms;
+        let due_poll =
+            clock.mono_ms.saturating_sub(rt.last_transcript_ms.get()) >= rt.transcript_poll_ms;
         if changed || due_poll {
             rt.last_transcript_ms.set(clock.mono_ms);
             let stats = rt.ingestor.borrow_mut().poll(&rt.store);
@@ -373,6 +374,10 @@ fn tick(rt: &Rc<Runtime>) {
                     stats.new_turns,
                     stats.sessions
                 );
+            }
+            let acted = rt.action_ingestor.borrow_mut().poll(&rt.store);
+            if acted > 0 {
+                log::info!("attributed {acted} new agent action(s)");
             }
         }
         if due(&rt.heartbeat_at, clock.mono_ms, HEARTBEAT_MS) {
@@ -531,6 +536,16 @@ fn refresh_menu(rt: &Rc<Runtime>, glyph: Glyph, now_ms: i64, stats: &ActivitySta
         ));
     }
 
+    // When agent-vs-human actions have been recorded, the attribution split is
+    // the headline the app exists for — surface it in place of the chat count.
+    if let Some(summary) = houdini::summary::format_action_summary(
+        &rt.store
+            .action_stats(now_ms - RECENT_WINDOW_MS)
+            .unwrap_or_default(),
+    ) {
+        rt.detail_item.set_text(summary);
+    }
+
     rt.resume_item.set_enabled(rt.is_paused());
 }
 
@@ -589,7 +604,9 @@ fn do_show_data(rt: &Rc<Runtime>) {
         }
         Err(e) => {
             log::error!("export failed: {e}");
-            let _ = Command::new("open").arg(export::data_dir_path(&rt.export_dir)).spawn();
+            let _ = Command::new("open")
+                .arg(export::data_dir_path(&rt.export_dir))
+                .spawn();
         }
     }
 }
