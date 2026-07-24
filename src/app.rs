@@ -17,10 +17,7 @@ use block2::RcBlock;
 use objc2::rc::Retained;
 use objc2::runtime::{NSObject, NSObjectProtocol, ProtocolObject};
 use objc2::{define_class, msg_send, DefinedClass, MainThreadOnly};
-use objc2_app_kit::{
-    NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate, NSPasteboard,
-    NSPasteboardTypeString,
-};
+use objc2_app_kit::{NSApplication, NSApplicationActivationPolicy, NSApplicationDelegate};
 use objc2_foundation::{
     MainThreadMarker, NSActivityOptions, NSNotification, NSProcessInfo, NSString, NSTimer,
 };
@@ -91,8 +88,6 @@ struct Runtime {
     analytics_batch: RefCell<Vec<LabelRequest>>,
     analytics_interval_ms: i64,
     analytics_batch_limit: i64,
-    analytics_base_url: String,
-    analytics_model: String,
     analytics_labeler: RefCell<Option<Arc<ProxyLabeler>>>,
 
     tray: RefCell<Option<TrayIcon>>,
@@ -112,7 +107,6 @@ struct MenuIds {
     pause_indef: MenuId,
     resume: MenuId,
     show_data: MenuId,
-    set_key: MenuId,
     update: MenuId,
     quit: MenuId,
 }
@@ -247,7 +241,6 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         pause_indef: MenuId::new("pause_indef"),
         resume: MenuId::new("resume"),
         show_data: MenuId::new("show_data"),
-        set_key: MenuId::new("set_key"),
         update: MenuId::new("update"),
         quit: MenuId::new("quit"),
     };
@@ -279,8 +272,6 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         analytics_batch: RefCell::new(Vec::new()),
         analytics_interval_ms: cfg.analytics_interval_ms as i64,
         analytics_batch_limit: cfg.analytics_batch_limit,
-        analytics_base_url: cfg.analytics_base_url.clone(),
-        analytics_model: cfg.analytics_model.clone(),
         analytics_labeler: RefCell::new(labeler),
         tray: RefCell::new(None),
         timer: RefCell::new(None),
@@ -380,12 +371,6 @@ fn install_tray(rt: &Rc<Runtime>) {
         .expect("build pause submenu");
 
     let show_data = MenuItem::with_id(rt.ids.show_data.clone(), "Export my data…", true, None);
-    let set_key = MenuItem::with_id(
-        rt.ids.set_key.clone(),
-        analytics_menu_label(rt),
-        true,
-        None,
-    );
     let quit = MenuItem::with_id(rt.ids.quit.clone(), "Quit", true, None);
 
     let title = MenuItem::new(concat!("Houdini ", env!("CARGO_PKG_VERSION")), false, None);
@@ -399,7 +384,6 @@ fn install_tray(rt: &Rc<Runtime>) {
     menu.append(&rt.resume_item).expect("resume");
     menu.append(&PredefinedMenuItem::separator()).expect("sep2");
     menu.append(&show_data).expect("show_data");
-    menu.append(&set_key).expect("set_key");
     menu.append(&rt.update_item).expect("update");
     menu.append(&quit).expect("quit");
 
@@ -498,43 +482,6 @@ fn drain_web_messages(rt: &Rc<Runtime>) {
             Err(e) => log::warn!("web: dropped a message: {e}"),
         }
     }
-}
-
-fn analytics_menu_label(rt: &Rc<Runtime>) -> &'static str {
-    if rt.analytics_labeler.borrow().is_some() {
-        "Analytics on. Replace key from clipboard"
-    } else {
-        "Turn on analytics: copy key, then click here"
-    }
-}
-
-fn clipboard_string() -> Option<String> {
-    let pasteboard = NSPasteboard::generalPasteboard();
-    let value = unsafe { pasteboard.stringForType(NSPasteboardTypeString) }?;
-    Some(value.to_string())
-}
-
-fn do_set_analytics_key(rt: &Rc<Runtime>) {
-    let Some(raw) = clipboard_string() else {
-        log::warn!("analytics: clipboard holds no text; copy the key first");
-        return;
-    };
-    let key = raw.trim();
-    if key.is_empty() || key.split_whitespace().count() > 1 || key.len() > 200 {
-        log::warn!("analytics: clipboard does not look like an api key; nothing stored");
-        return;
-    }
-    if let Err(e) = crate::keychain::set_analytics_key(key) {
-        log::error!("{e}");
-        return;
-    }
-    *rt.analytics_labeler.borrow_mut() = Some(Arc::new(ProxyLabeler::new(
-        rt.analytics_base_url.clone(),
-        rt.analytics_model.clone(),
-        key.to_string(),
-    )));
-    rt.last_analytics.set(i64::MIN);
-    log::info!("analytics: key stored; labeling starts on the next tick");
 }
 
 fn spawn_analytics(rt: &Rc<Runtime>) {
@@ -733,8 +680,7 @@ fn drain_menu_events(rt: &Rc<Runtime>) {
         let id = &ev.id;
         if id == &rt.ids.show_data {
             do_show_data(rt);
-        } else if id == &rt.ids.set_key {
-            do_set_analytics_key(rt);
+
         } else if id == &rt.ids.update {
             do_update(rt);
         } else if id == &rt.ids.quit {

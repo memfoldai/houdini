@@ -45,7 +45,7 @@ orp = { version = "0.9", optional = true }
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-foundation = { version = "0.3", features = ["NSString", "NSArray", "NSDate", "NSRunLoop", "NSNotification", "NSTimer", "NSProcessInfo", "block2"] }
-objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSWorkspace", "NSRunningApplication", "NSPasteboard"] }
+objc2-app-kit = { version = "0.3", features = ["NSApplication", "NSResponder", "NSWorkspace", "NSRunningApplication"] }
 block2 = "0.6"
 # tray-icon re-exports the exact `muda` it was built against as `tray_icon::menu`
 # — depend on it there, never on `muda` directly, so the two can't diverge into

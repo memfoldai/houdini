@@ -62,7 +62,7 @@ fn labels_survive_a_reopen_and_export_as_aggregate_cells() {
     assert_eq!(report.labeled, 2);
     assert_eq!(report.failed, 0);
 
-    let counts = store.label_counts(TAXONOMY_VERSION).unwrap();
+    let counts = store.label_cells(TAXONOMY_VERSION).unwrap();
     assert_eq!(counts.len(), 2, "the two turns differ by depth and delegation");
     let orchestrated = counts
         .iter()
@@ -99,7 +99,7 @@ fn a_second_run_adds_nothing_and_costs_no_calls() {
 
     assert!(again.is_idle(), "an already-labeled store queues nothing");
     let total: i64 = store
-        .label_counts(TAXONOMY_VERSION)
+        .label_cells(TAXONOMY_VERSION)
         .unwrap()
         .iter()
         .map(|c| c.turns)

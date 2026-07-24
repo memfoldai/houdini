@@ -80,3 +80,37 @@ mod tests {
         assert_eq!(provider_for_model("some-unknown-model"), None);
     }
 }
+
+pub fn display_tool(tool: &str) -> &str {
+    match tool {
+        "openclaw" => "Alma",
+        "claude-code" => "Claude Code",
+        "codex" => "Codex",
+        "chatgpt-web" => "ChatGPT",
+        "claude-web" => "Claude",
+        "gemini-web" => "Gemini",
+        other => other,
+    }
+}
+
+#[cfg(test)]
+mod display_tests {
+    use super::*;
+
+    #[test]
+    fn openclaw_is_presented_as_alma_everywhere_a_human_reads_it() {
+        assert_eq!(display_tool("openclaw"), "Alma");
+    }
+
+    #[test]
+    fn stored_ids_are_never_rewritten_only_presented() {
+        for id in ["openclaw", "claude-code", "codex"] {
+            assert_ne!(display_tool(id), id, "{id} should have a product name");
+        }
+    }
+
+    #[test]
+    fn an_unknown_tool_passes_through_unchanged() {
+        assert_eq!(display_tool("some-new-cli"), "some-new-cli");
+    }
+}

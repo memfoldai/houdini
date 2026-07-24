@@ -457,20 +457,32 @@ impl Store {
         Ok(())
     }
 
-    pub fn label_counts(&self, taxonomy_version: i64) -> rusqlite::Result<Vec<LabelCount>> {
+    pub fn label_cells(&self, taxonomy_version: i64) -> rusqlite::Result<Vec<LabelCell>> {
         let mut stmt = self.conn.prepare(
-            "SELECT intent, domain, depth, delegation, COUNT(*)
-             FROM turn_labels WHERE taxonomy_version = ?1
-             GROUP BY intent, domain, depth, delegation
-             ORDER BY COUNT(*) DESC",
+            "SELECT strftime('%Y-%m-%d', t.ts / 1000, 'unixepoch') AS day,
+                    s.tool, s.provider, s.surface, s.model,
+                    l.intent, l.domain, l.depth, l.delegation,
+                    COUNT(*)
+             FROM turn_labels l
+             JOIN sessions s ON s.id = l.session_id
+             JOIN turns t ON t.session_id = l.session_id AND t.seq = l.seq
+             WHERE l.taxonomy_version = ?1
+             GROUP BY day, s.tool, s.provider, s.surface, s.model,
+                      l.intent, l.domain, l.depth, l.delegation
+             ORDER BY day DESC, COUNT(*) DESC",
         )?;
         let rows = stmt.query_map(params![taxonomy_version], |r| {
-            Ok(LabelCount {
-                intent: r.get(0)?,
-                domain: r.get(1)?,
-                depth: r.get(2)?,
-                delegation: r.get(3)?,
-                turns: r.get(4)?,
+            Ok(LabelCell {
+                day: r.get(0)?,
+                tool: r.get(1)?,
+                provider: r.get(2)?,
+                surface: r.get(3)?,
+                model: r.get(4)?,
+                intent: r.get(5)?,
+                domain: r.get(6)?,
+                depth: r.get(7)?,
+                delegation: r.get(8)?,
+                turns: r.get(9)?,
             })
         })?;
         rows.collect()
@@ -573,7 +585,12 @@ pub struct LabelCandidate<'a> {
 }
 
 #[derive(Debug, Clone)]
-pub struct LabelCount {
+pub struct LabelCell {
+    pub day: String,
+    pub tool: String,
+    pub provider: String,
+    pub surface: String,
+    pub model: Option<String>,
     pub intent: String,
     pub domain: String,
     pub depth: i64,
@@ -803,6 +820,9 @@ mod tests {
         for delegation in crate::taxonomy::DELEGATIONS {
             for depth in crate::taxonomy::MIN_DEPTH..=crate::taxonomy::MAX_DEPTH {
                 store
+                    .add_turn(id, seq, Role::User, "request", 1_700_000_000_000)
+                    .unwrap();
+                store
                     .insert_turn_label(&TurnLabelRecord {
                         session_id: id,
                         seq,
@@ -820,7 +840,7 @@ mod tests {
                 seq += 1;
             }
         }
-        let total: i64 = store.label_counts(1).unwrap().iter().map(|c| c.turns).sum();
+        let total: i64 = store.label_cells(1).unwrap().iter().map(|c| c.turns).sum();
         assert_eq!(total, seq);
     }
 

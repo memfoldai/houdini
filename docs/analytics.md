@@ -13,6 +13,7 @@ against a closed set of labels. Four facets are recorded per turn:
 
 | Facet | Values | Question it answers |
 |---|---|---|
+| `tool` | `Alma`, `Claude Code`, `Codex`, `ChatGPT`, `Claude`, `Gemini` | Which app the request went through |
 | `intent` | 20 ids, `src/taxonomy.rs` | What was the AI asked to do |
 | `domain` | 17 ids | What subject the request belongs to |
 | `depth` | 1 to 4 | A single lookup, an iterative dig, a synthesis across sources, or autonomous multi-step work |
@@ -53,9 +54,22 @@ labeling, but it deliberately keeps ordinary prose, which includes the names of
 people, companies and places you mention. Build with `--features ner` to strip
 personal identifiers as well.
 
-The export (`data/analytics.jsonl`) carries only aggregate cells: a count per
-label combination, with the versions attached. No text, no rationales, no
-session content.
+## The export is a dashboard fact table
+
+`data/analytics.jsonl` emits one `analytics_cell` row per unique combination of
+dimensions, with a turn count as the measure. The grain is:
+
+`day` x `tool` / `tool_name` / `provider` / `surface` / `model` x `intent` /
+`domain` / `depth` / `delegation`, plus `device`, `taxonomy_version` and
+`prompt_version`.
+
+That is a star-schema fact row, so a dashboard can slice by any dimension
+without further processing: usage per tool over time, depth mix per person,
+how much work is delegated from one AI to another, which domains each team
+touches. `tool` is the stable stored id and `tool_name` is the product name to
+display, so a rename never invalidates historical rows.
+
+No text, no rationales, no session content leaves the device.
 
 ## Configuration
 
@@ -76,16 +90,15 @@ app bundle. **It is deliberately not compiled into the binary**: releases are
 public, so a baked key would be extractable from the DMG by anyone who
 downloads it. Three ways in, pick per machine:
 
-**Menu bar, no terminal.** Copy the key, then click
-*Turn on analytics: copy key, then click here*. The item reads the clipboard,
-validates it, stores it, and labeling starts on the next tick. The menu item
-then reads *Analytics on* and can be used again to rotate the key.
-
-**Scripted or MDM.** Reads stdin, so the key never reaches the process list:
+**One command, send it to the team.** The key is read from stdin, so it never
+reaches the process list or shell history:
 
 ```sh
-printf %s "$LITELLM_API_KEY" | houdini --set-analytics-key
+printf %s 'PASTE_KEY_HERE' | /Applications/Houdini.app/Contents/MacOS/houdini --set-analytics-key
 ```
+
+Labeling starts on the next hourly tick. Run it again at any time to rotate the
+key. The same line works unchanged as an MDM script.
 
 **Backfill on demand.** Label a batch immediately instead of waiting for the
 hourly tick, which is how you work through a history the first time:

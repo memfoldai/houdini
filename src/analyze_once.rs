@@ -50,10 +50,16 @@ pub fn run() {
                 "considered {} | labeled {} | failed {} | candidates {}",
                 report.considered, report.labeled, report.failed, report.candidates
             );
-            for cell in store.label_counts(houdini::taxonomy::TAXONOMY_VERSION).unwrap_or_default() {
+            for cell in store.label_cells(houdini::taxonomy::TAXONOMY_VERSION).unwrap_or_default() {
                 println!(
-                    "  {:>5}  {} / {}  depth={} delegation={}",
-                    cell.turns, cell.intent, cell.domain, cell.depth, cell.delegation
+                    "  {:>5}  {:<12} {:<10} {} / {}  depth={} delegation={}",
+                    cell.turns,
+                    houdini::attribution::display_tool(&cell.tool),
+                    cell.day,
+                    cell.intent,
+                    cell.domain,
+                    cell.depth,
+                    cell.delegation
                 );
             }
         }

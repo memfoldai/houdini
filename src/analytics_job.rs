@@ -203,7 +203,7 @@ mod tests {
 
         let second = run_once(&store, &labeler, 100, 2_000).unwrap();
         assert!(second.is_idle());
-        assert_eq!(store.label_counts(TAXONOMY_VERSION).unwrap()[0].turns, 2);
+        assert_eq!(store.label_cells(TAXONOMY_VERSION).unwrap()[0].turns, 2);
     }
 
     #[test]
@@ -214,7 +214,7 @@ mod tests {
         assert_eq!(report.failed, 2);
         assert_eq!(report.labeled, 0);
         assert_eq!(collect(&store, 100).unwrap().len(), 2);
-        assert!(store.label_counts(TAXONOMY_VERSION).unwrap().is_empty());
+        assert!(store.label_cells(TAXONOMY_VERSION).unwrap().is_empty());
     }
 
     #[test]

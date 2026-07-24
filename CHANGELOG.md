@@ -18,12 +18,15 @@ include behavior changes.
   recorded as `other` plus a proposal with an observation count, rather than
   becoming an invented category. Proposals are promoted into the next taxonomy
   version by a human, so no two machines can mint near-duplicate labels.
-- Three ways to provision the proxy key, none of them compiling it into the
-  binary (releases are public, so a baked key would ship to the world): a menu
-  item that reads it from the clipboard with no terminal, `--set-analytics-key`
-  reading stdin for MDM and scripts, and `--analyze-once [n]` to label a batch
-  immediately instead of waiting for the hourly tick. Setting the key activates
-  labeling without a restart.
+- `--set-analytics-key` stores the proxy key in the login Keychain, read from
+  stdin so it never reaches the process list or shell history. The key is
+  deliberately never compiled into the binary: releases are public, so a baked
+  key would ship to the world. `--analyze-once [n]` labels a batch immediately
+  instead of waiting for the hourly tick.
+- Analytics cells carry the tool, provider, surface, model and day, so the
+  export is a star-schema fact table a dashboard can slice directly. `openclaw`
+  presents as **Alma** wherever a human or a dashboard reads it, while the
+  stored id stays stable.
 - `data/analytics.jsonl` in the export: aggregate counts per label combination
   with the taxonomy, prompt, and model versions attached. No text.
 - New doc: `docs/analytics.md`.

@@ -128,8 +128,14 @@ struct AnalyticsCellRow<'a> {
     schema: &'a str,
     kind: &'a str,
     device: String,
+    day: String,
     taxonomy_version: i64,
     prompt_version: i64,
+    tool: String,
+    tool_name: String,
+    provider: String,
+    surface: String,
+    model: Option<String>,
     intent: String,
     domain: String,
     depth: i64,
@@ -155,15 +161,21 @@ pub fn export_analytics(store: &Store, device: &str, dir: &Path) -> std::io::Res
     let mut out = BufWriter::new(File::create(&path)?);
 
     for cell in store
-        .label_counts(crate::taxonomy::TAXONOMY_VERSION)
+        .label_cells(crate::taxonomy::TAXONOMY_VERSION)
         .map_err(io_err)?
     {
         let row = AnalyticsCellRow {
             schema: SCHEMA,
             kind: "analytics_cell",
             device: device.to_string(),
+            day: cell.day,
             taxonomy_version: crate::taxonomy::TAXONOMY_VERSION,
             prompt_version: crate::analytics::PROMPT_VERSION,
+            tool_name: crate::attribution::display_tool(&cell.tool).to_string(),
+            tool: cell.tool,
+            provider: cell.provider,
+            surface: cell.surface,
+            model: cell.model,
             intent: cell.intent,
             domain: cell.domain,
             depth: cell.depth,
