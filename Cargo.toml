@@ -1,6 +1,6 @@
 [package]
 name = "houdini"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 description = "Internal, consenting-only macOS monitor that records AI usage from tools' own local transcripts and web chats (via an optional browser extension), storing redacted, structured records for the AI-research usage study."
 authors = ["Rahul Biliyar <rahul@memfold.ai>"]

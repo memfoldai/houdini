@@ -28,6 +28,7 @@ use tray_icon::{TrayIcon, TrayIconBuilder};
 use houdini::config::{self, AppConfig, Paths};
 use houdini::export;
 use houdini::ingest::Ingestor;
+use houdini::ingest_actions::ActionIngestor;
 use houdini::store::{ActivityStats, Store, PAUSE_UNTIL_KEY};
 use houdini::webingest;
 
@@ -56,6 +57,7 @@ struct Clock {
 struct Runtime {
     store: Rc<Store>,
     ingestor: RefCell<Ingestor>,
+    action_ingestor: RefCell<ActionIngestor>,
     install_id: String,
     export_dir: PathBuf,
 
@@ -190,8 +192,13 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         .unwrap_or(0);
 
     let ingestor = Ingestor::new(home.clone(), now_ms);
+    let action_ingestor = ActionIngestor::new(home.clone(), now_ms);
     let transcripts_changed = Arc::new(AtomicBool::new(false));
-    let watcher = start_watcher(&home, transcripts_changed.clone());
+    let watcher = start_watcher(
+        &home,
+        &action_ingestor.watch_dirs(),
+        transcripts_changed.clone(),
+    );
 
     let ids = MenuIds {
         pause_15m: MenuId::new("pause_15m"),
@@ -211,6 +218,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
     Rc::new(Runtime {
         store,
         ingestor: RefCell::new(ingestor),
+        action_ingestor: RefCell::new(action_ingestor),
         install_id: cfg.install_id.clone(),
         export_dir: paths.export_dir.clone(),
         transcript_poll_ms: cfg.transcript_poll_ms as i64,
@@ -262,17 +270,33 @@ fn start_web_listener(sock: PathBuf, tx: Sender<Vec<u8>>) {
     });
 }
 
-fn start_watcher(home: &PathBuf, changed: Arc<AtomicBool>) -> Option<RecommendedWatcher> {
+fn start_watcher(
+    home: &Path,
+    extra_dirs: &[PathBuf],
+    changed: Arc<AtomicBool>,
+) -> Option<RecommendedWatcher> {
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if res.is_ok() {
             changed.store(true, Ordering::Relaxed);
         }
     })
     .ok()?;
-    let dirs = [".claude/projects", ".codex", ".openclaw"];
+    let mut paths: Vec<PathBuf> = [
+        ".claude/projects",
+        ".codex",
+        ".openclaw",
+        ".openclaw-user",
+        ".openclaw-dev",
+    ]
+    .iter()
+    .map(|d| home.join(d))
+    .collect();
+    paths.extend(extra_dirs.iter().cloned());
+    paths.sort();
+    paths.dedup();
+
     let mut watched = 0;
-    for dir in dirs {
-        let path = home.join(dir);
+    for path in paths {
         if path.exists() && watcher.watch(&path, RecursiveMode::Recursive).is_ok() {
             watched += 1;
         }
@@ -308,11 +332,7 @@ fn install_tray(rt: &Rc<Runtime>) {
     let show_data = MenuItem::with_id(rt.ids.show_data.clone(), "Export my data…", true, None);
     let quit = MenuItem::with_id(rt.ids.quit.clone(), "Quit", true, None);
 
-    let title = MenuItem::new(
-        concat!("Houdini ", env!("CARGO_PKG_VERSION")),
-        false,
-        None,
-    );
+    let title = MenuItem::new(concat!("Houdini ", env!("CARGO_PKG_VERSION")), false, None);
 
     menu.append(&title).expect("title");
     menu.append(&PredefinedMenuItem::separator()).expect("sep0");
@@ -363,7 +383,8 @@ fn tick(rt: &Rc<Runtime>) {
 
     if !rt.is_paused() {
         let changed = rt.transcripts_changed.swap(false, Ordering::Relaxed);
-        let due_poll = clock.mono_ms.saturating_sub(rt.last_transcript_ms.get()) >= rt.transcript_poll_ms;
+        let due_poll =
+            clock.mono_ms.saturating_sub(rt.last_transcript_ms.get()) >= rt.transcript_poll_ms;
         if changed || due_poll {
             rt.last_transcript_ms.set(clock.mono_ms);
             let stats = rt.ingestor.borrow_mut().poll(&rt.store);
@@ -373,6 +394,10 @@ fn tick(rt: &Rc<Runtime>) {
                     stats.new_turns,
                     stats.sessions
                 );
+            }
+            let acted = rt.action_ingestor.borrow_mut().poll(&rt.store);
+            if acted > 0 {
+                log::info!("attributed {acted} new agent action(s)");
             }
         }
         if due(&rt.heartbeat_at, clock.mono_ms, HEARTBEAT_MS) {
@@ -516,19 +541,28 @@ fn refresh_menu(rt: &Rc<Runtime>, glyph: Glyph, now_ms: i64, stats: &ActivitySta
     };
     rt.status_item.set_text(status);
 
-    if stats.recent_interactions == 0 && stats.last_activity_ms.is_none() {
+    if stats.recent_interactions == 0 && stats.recent_actions == 0 {
         rt.detail_item.set_text("Nothing recorded yet today");
     } else {
         rt.detail_item.set_text(format!(
-            "{} AI session{} today · last {}",
+            "{} AI session{} · {} action{} today · last {}",
             stats.recent_interactions,
             if stats.recent_interactions == 1 {
                 ""
             } else {
                 "s"
             },
+            stats.recent_actions,
+            if stats.recent_actions == 1 { "" } else { "s" },
             relative_time(stats.last_activity_ms, now_ms)
         ));
+    }
+    if let Some(summary) = houdini::summary::format_action_summary(
+        &rt.store
+            .action_stats(now_ms - RECENT_WINDOW_MS)
+            .unwrap_or_default(),
+    ) {
+        rt.detail_item.set_text(summary);
     }
 
     rt.resume_item.set_enabled(rt.is_paused());
@@ -589,7 +623,9 @@ fn do_show_data(rt: &Rc<Runtime>) {
         }
         Err(e) => {
             log::error!("export failed: {e}");
-            let _ = Command::new("open").arg(export::data_dir_path(&rt.export_dir)).spawn();
+            let _ = Command::new("open")
+                .arg(export::data_dir_path(&rt.export_dir))
+                .spawn();
         }
     }
 }

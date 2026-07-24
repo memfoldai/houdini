@@ -7,14 +7,36 @@ report a concern see [../SECURITY.md](../SECURITY.md).
 
 ## What is recorded
 
-For each AI turn Houdini captures a single normalized record: the **provider**
-(`anthropic`, `openai`, …), **tool** (`claude-code`, `chatgpt-web`, …),
-**surface** (`cli`/`web`), **model**, a **session id**, a timestamp, the **role**
-(user/assistant), and the **redacted message text**. Nothing that is not a real
-AI message is recorded.
+Houdini keeps two kinds of local record.
 
-Sources: CLI/agent transcripts the user already has on disk (Claude Code, Codex,
-OpenClaw) and, if the extension is loaded, web chats (ChatGPT, Claude, Gemini).
+**AI turns.** For each AI turn: the **provider** (`anthropic`, `openai`, …),
+**tool** (`claude-code`, `chatgpt-web`, …), **surface** (`cli`/`web`), **model**,
+a **session id**, a timestamp, the **role** (user/assistant), and the **redacted
+message text**.
+
+**App actions (agent vs. human).** For each recognized action in a tracked app: the
+**actor** (`agent` or `human`), the **app** (e.g. `mail.google.com`), the
+**action** verb (`send`, `archive`, …), whether it changed state
+(`mutating`/`read_only`), a timestamp, and a **redacted** detail. This is what
+powers agent-vs-human attribution. Agent actions are read from the agent's own
+local transcripts; human actions are reported by the browser extension on the
+tracked sites.
+
+The **detail** field's contents depend on the source:
+
+- **Human (extension) actions** store the normalized action verb, not the clicked
+  control's raw label, so emails, files, and documents named in UI labels are not
+  persisted as action detail.
+- **Agent actions** store a redacted preview of the tool's arguments, which may
+  include a browser URL, an AppleScript/JXA snippet, a typed value, a file path,
+  or a query string. Redaction removes known secrets and PII patterns before
+  storage (see below), but does **not** guarantee removal of other potentially
+  sensitive text such as document titles, file names, or non-PII URLs.
+
+Sources: CLI/agent transcripts already on disk (Claude Code, Codex,
+OpenClaw/almaclaw) and, if the extension is loaded, web chats (ChatGPT, Claude,
+Gemini) plus Google Workspace app actions (Gmail, Drive, Docs, Sheets, Slides,
+Calendar).
 
 ## What is *not* recorded
 
@@ -42,9 +64,10 @@ OpenClaw) and, if the extension is loaded, web chats (ChatGPT, Claude, Gemini).
 
 ## Export
 
-The menu's **Export my data…** writes a flat, OLAP-ready snapshot to
-`data/interactions.jsonl` (one row per message) and reveals it, decrypted on
-demand, never written automatically:
+The menu's **Export my data…** writes a flat, OLAP-ready snapshot, decrypted on
+demand, never written automatically. It produces two files:
+
+**`data/interactions.jsonl`** — one row per AI-chat message:
 
 ```json
 {"schema":"aum/3","kind":"interaction","event_id":"<device>:<session>:0",
@@ -53,10 +76,20 @@ demand, never written automatically:
  "session_id":"…","turn_index":0,"role":"user","text":"…","text_chars":42}
 ```
 
-Every source produces this exact row shape, and each row carries a stable
-`event_id` and the device id, so exports from any number of machines merge with a
-plain `read_json_auto`. Provider grouping and clustering happen at analysis time,
-never in the app. See [grouping.md](grouping.md).
+**`data/actions.jsonl`** — one row per attributed app action (agent vs. human):
+
+```json
+{"schema":"aum/3","kind":"action","event_id":"<device>:<source>:<ext_id>",
+ "device":"…","day":"2026-07-16","ts_ms":…,"actor":"agent",
+ "app":"mail.google.com","source":"almaclaw","tool":"bdc__cua",
+ "action":"type_text","action_kind":"mutating","session_id":"…","target":"…"}
+```
+
+`actor` is `agent`, `human`, or `unknown`; `action_kind` is `mutating` or
+`read_only`; `app` and `target` are omitted when unknown. Every row in both files
+carries a stable `event_id` and the device id, so exports from any number of
+machines merge with a plain `read_json_auto`. Provider grouping and clustering
+happen at analysis time, never in the app. See [grouping.md](grouping.md).
 
 ## Retention & deletion
 

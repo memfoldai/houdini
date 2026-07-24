@@ -19,6 +19,22 @@ impl Surface {
         }
     }
 }
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Actor {
+    Agent,
+    Human,
+    Unknown,
+}
+
+impl Actor {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Actor::Agent => "agent",
+            Actor::Human => "human",
+            Actor::Unknown => "unknown",
+        }
+    }
+}
 
 pub mod provider {
     pub const ANTHROPIC: &str = "anthropic";

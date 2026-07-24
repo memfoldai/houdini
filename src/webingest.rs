@@ -1,12 +1,22 @@
 use std::io::{Read, Write};
 
 use serde::Deserialize;
+use serde_json::Value;
 
-use crate::attribution::provider;
+use crate::attribution::{provider, Actor};
 use crate::redact;
-use crate::store::{Role, SessionUpsert, Store, PAUSE_UNTIL_KEY};
+use crate::store::{ActionRecord, Role, SessionUpsert, Store, PAUSE_UNTIL_KEY};
 
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
+const HUMAN_SOURCE: &str = "web-extension";
+const HUMAN_APPS: &[&str] = &[
+    "mail.google.com",
+    "drive.google.com",
+    "docs.google.com",
+    "sheets.google.com",
+    "slides.google.com",
+    "calendar.google.com",
+];
 
 #[derive(Deserialize)]
 struct WebMessage {
@@ -21,6 +31,22 @@ struct WebMessage {
 struct WebTurn {
     role: String,
     text: String,
+    ts_ms: i64,
+}
+
+#[derive(Deserialize)]
+struct WebActionBatch {
+    actions: Vec<WebAction>,
+}
+
+#[derive(Deserialize)]
+struct WebAction {
+    ext_id: String,
+    app: String,
+    action: String,
+    kind: Option<String>,
+    #[serde(default)]
+    session_id: Option<String>,
     ts_ms: i64,
 }
 
@@ -41,16 +67,61 @@ pub fn write_frame<W: Write>(w: &mut W, payload: &[u8]) -> std::io::Result<()> {
     w.write_all(payload)?;
     w.flush()
 }
-
 pub fn ingest(store: &Store, bytes: &[u8]) -> Result<usize, String> {
-    let msg: WebMessage = serde_json::from_slice(bytes).map_err(|e| format!("bad json: {e}"))?;
+    let value: Value = serde_json::from_slice(bytes).map_err(|e| format!("bad json: {e}"))?;
+    if value.get("actions").is_some() {
+        let batch: WebActionBatch =
+            serde_json::from_value(value).map_err(|e| format!("bad json: {e}"))?;
+        return ingest_actions(store, &batch);
+    }
+    let msg: WebMessage = serde_json::from_value(value).map_err(|e| format!("bad json: {e}"))?;
+    ingest_chat(store, msg)
+}
+fn ingest_actions(store: &Store, batch: &WebActionBatch) -> Result<usize, String> {
+    if is_paused(store) {
+        return Ok(0);
+    }
+    let mut added = 0;
+    for a in &batch.actions {
+        if a.ext_id.is_empty() || a.action.is_empty() || !HUMAN_APPS.contains(&a.app.as_str()) {
+            continue;
+        }
+        let kind = match a.kind.as_deref() {
+            Some("read_only") => "read_only",
+            _ => "mutating",
+        };
+        let rec = ActionRecord {
+            ext_id: &a.ext_id,
+            source: HUMAN_SOURCE,
+            session_id: a.session_id.as_deref().unwrap_or(""),
+            actor: Actor::Human,
+            app: Some(&a.app),
+            tool: "browser",
+            action: &a.action,
+            kind,
+            target_redacted: None,
+            ts_ms: a.ts_ms,
+        };
+        if store.insert_action(&rec).map_err(|e| e.to_string())? {
+            added += 1;
+        }
+    }
+    Ok(added)
+}
+
+fn ingest_chat(store: &Store, msg: WebMessage) -> Result<usize, String> {
     if msg.turns.is_empty() || is_paused(store) {
         return Ok(0);
     }
     let (tool, provider) =
         resolve_tool(&msg.tool).ok_or_else(|| format!("unknown tool {:?}", msg.tool))?;
 
-    let started = msg.turns.iter().map(|t| t.ts_ms).min().unwrap_or_else(now_ms);
+    let started = msg
+        .turns
+        .iter()
+        .map(|t| t.ts_ms)
+        .min()
+        .unwrap_or_else(now_ms);
     let ended = msg.turns.iter().map(|t| t.ts_ms).max().unwrap_or(started);
 
     let (id, existing) = store
@@ -67,7 +138,11 @@ pub fn ingest(store: &Store, bytes: &[u8]) -> Result<usize, String> {
         .map_err(|e| e.to_string())?;
 
     let mut prev = if existing > 0 {
-        store.session_turns(id).map_err(|e| e.to_string())?.pop().map(|t| (t.role, t.redacted_text))
+        store
+            .session_turns(id)
+            .map_err(|e| e.to_string())?
+            .pop()
+            .map(|t| (t.role, t.redacted_text))
     } else {
         None
     };
@@ -80,7 +155,10 @@ pub fn ingest(store: &Store, bytes: &[u8]) -> Result<usize, String> {
         }
         let role = role_of(&turn.role);
         let report = redact::redact_deterministic(text);
-        if prev.as_ref().is_some_and(|(r, t)| r == role.as_str() && t == &report.text) {
+        if prev
+            .as_ref()
+            .is_some_and(|(r, t)| r == role.as_str() && t == &report.text)
+        {
             continue;
         }
         store
@@ -90,7 +168,9 @@ pub fn ingest(store: &Store, bytes: &[u8]) -> Result<usize, String> {
         added += 1;
     }
     if added > 0 {
-        store.set_progress(id, ended, existing + added).map_err(|e| e.to_string())?;
+        store
+            .set_progress(id, ended, existing + added)
+            .map_err(|e| e.to_string())?;
     }
     Ok(added as usize)
 }
@@ -151,13 +231,52 @@ mod tests {
         let turns = store.session_turns(1).unwrap();
         assert_eq!(turns.len(), 2);
         assert_eq!(turns[0].role, "user");
-        assert!(!turns[0].redacted_text.contains("AKIAIOSFODNN7EXAMPLE"), "secret redacted");
+        assert!(
+            !turns[0].redacted_text.contains("AKIAIOSFODNN7EXAMPLE"),
+            "secret redacted"
+        );
 
         let more = r#"{"tool":"chatgpt-web","external_id":"conv-1","turns":[
             {"role":"user","text":"thanks","ts_ms":3000}]}"#;
         assert_eq!(ingest(&store, more.as_bytes()).unwrap(), 1);
         assert_eq!(store.session_turns(1).unwrap().len(), 3);
         assert_eq!(store.session_count().unwrap(), 1, "one grouped web session");
+    }
+
+    #[test]
+    fn human_actions_are_stored_redacted_allowlisted_and_idempotent() {
+        let store = Store::open_in_memory().unwrap();
+        let json = r#"{"actions":[
+            {"ext_id":"e1","app":"mail.google.com","action":"send","target":"to bob@x.com","ts_ms":10},
+            {"ext_id":"e2","app":"drive.google.com","action":"delete","kind":"mutating","ts_ms":20},
+            {"ext_id":"e3","app":"evil.example.com","action":"send","ts_ms":30}
+        ]}"#;
+        assert_eq!(ingest(&store, json.as_bytes()).unwrap(), 2);
+        assert_eq!(ingest(&store, json.as_bytes()).unwrap(), 0);
+
+        let rows = store.all_actions().unwrap();
+        assert_eq!(rows.len(), 2);
+        assert!(rows
+            .iter()
+            .all(|r| r.actor == "human" && r.source == "web-extension"));
+        let send = rows.iter().find(|r| r.action == "send").unwrap();
+        assert_eq!(send.app.as_deref(), Some("mail.google.com"));
+        assert_eq!(
+            send.target_redacted, None,
+            "human action details are not stored"
+        );
+    }
+
+    #[test]
+    fn human_actions_are_dropped_while_paused() {
+        let store = Store::open_in_memory().unwrap();
+        store
+            .set_setting(PAUSE_UNTIL_KEY, &i64::MAX.to_string())
+            .unwrap();
+        let json =
+            r#"{"actions":[{"ext_id":"e1","app":"mail.google.com","action":"send","ts_ms":1}]}"#;
+        assert_eq!(ingest(&store, json.as_bytes()).unwrap(), 0);
+        assert_eq!(store.all_actions().unwrap().len(), 0);
     }
 
     #[test]
@@ -179,9 +298,15 @@ mod tests {
     #[test]
     fn paused_web_messages_are_dropped() {
         let store = Store::open_in_memory().unwrap();
-        store.set_setting(PAUSE_UNTIL_KEY, &i64::MAX.to_string()).unwrap();
+        store
+            .set_setting(PAUSE_UNTIL_KEY, &i64::MAX.to_string())
+            .unwrap();
         let json = r#"{"tool":"chatgpt-web","external_id":"c","turns":[{"role":"user","text":"hi","ts_ms":1}]}"#;
-        assert_eq!(ingest(&store, json.as_bytes()).unwrap(), 0, "dropped while paused");
+        assert_eq!(
+            ingest(&store, json.as_bytes()).unwrap(),
+            0,
+            "dropped while paused"
+        );
         assert_eq!(store.session_count().unwrap(), 0);
 
         store.set_setting(PAUSE_UNTIL_KEY, "0").unwrap();

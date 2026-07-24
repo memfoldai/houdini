@@ -39,7 +39,7 @@ code style, and it is kept lean for coding agents. The load-bearing ones:
 export). This checklist is what a person runs once on a real Mac to confirm the
 two live detectors work end-to-end and the data is safe to share. Do them in
 order; each has an explicit pass condition. Inspect data with **Export my data…**,
-which writes `data/interactions.jsonl`.
+which writes `data/interactions.jsonl` and `data/actions.jsonl`.
 
 1. **CLI/agent ingest.** Run a prompt in Claude Code or Codex, launch the app,
    wait ~20 s, Export. *Pass:* the export has flat `"kind":"interaction"` rows for
@@ -49,14 +49,17 @@ which writes `data/interactions.jsonl`.
    Gemini on the web. *Pass:* the export gains a `chatgpt-web`/`claude-web`/
    `gemini-web` row pair under one `session_id`. A missing assistant row means that
    site's selector needs updating (`extension/capture.js`).
-3. **False-positive gate.** With Slack, an editor, email, and unrelated tabs busy.
+3. **Workspace action capture** (extension loaded). Click a recognized control in
+   Gmail or Drive. *Pass:* the export gains an `actions` row with `actor:"human"`,
+   an allowlisted app host, and no clicked label text.
+4. **False-positive gate.** With Slack, an editor, email, and unrelated tabs busy.
    *Pass:* no `interaction` row is written for any of them.
-4. **Redaction audit** (safety gate, before sharing any data). Send a prompt with a
+5. **Redaction audit** (safety gate, before sharing any data). Send a prompt with a
    **fake** AWS-shaped key and email, e.g.
    `note key AKIAIOSFODNN7EXAMPLE, mail jane@example.com`; ingest; Export.
    *Pass:* neither raw value appears; each is a `[REDACTED:…]` placeholder. If any
    raw value survives, **do not share the data**; file the gap first.
-5. **Optional NER layer** (`--features ner`): a planted person name becomes
+6. **Optional NER layer** (`--features ner`): a planted person name becomes
    `[REDACTED:NER:PERSON]`, and a missing model fails closed (logs, continues with
    deterministic redaction, never crashes). Setup: [docs/NER.md](docs/NER.md).
 

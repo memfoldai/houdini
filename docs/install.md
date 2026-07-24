@@ -6,7 +6,7 @@ for verifying a build, [../CONTRIBUTING.md](../CONTRIBUTING.md).
 
 There are two audiences: the **maintainer** who builds and signs, and
 **teammates** who install the `.dmg`. Teammates only need [§4](#4-install-teammate)
-and [§5](#5-optional-web-chat-capture-browser-extension).
+and [§5](#5-optional-browser-capture-browser-extension).
 
 ---
 
@@ -79,14 +79,14 @@ xcrun stapler staple "dist/Houdini-<v>.dmg"
 There is no window; click the icon for status and the menu. Data handling and
 export are described in [privacy.md](privacy.md).
 
-## 5. Optional: web-chat capture (browser extension)
+## 5. Optional: browser capture (browser extension)
 
-To also capture web ChatGPT/Claude/Gemini, load the Chromium extension. The DMG
-ships it in a **Browser Extension** folder with a step-by-step
+To also capture web ChatGPT/Claude/Gemini and Google Workspace app actions, load
+the Chromium extension. The DMG ships it in a **Browser Extension** folder with a step-by-step
 **INSTALL-ME-FIRST.md** (the teammate guide is
 [extension.md](extension.md)). In short: `chrome://extensions` →
 **Developer mode** → **Load unpacked** → select the folder, then send one web AI
-message to confirm.
+message and click one recognized Workspace control to confirm.
 
 **No terminal step is needed**: the app registers the local native-messaging host
 on every launch. The extension and app **share a version** (the extension's fixed

@@ -1,7 +1,10 @@
 const HOST_NAME = "ai.memfold.houdini";
 
 chrome.runtime.onMessage.addListener((payload, _sender) => {
-  if (!payload || !payload.tool || !Array.isArray(payload.turns)) return;
+  if (!payload) return;
+  const isChat = payload.tool && Array.isArray(payload.turns);
+  const isActions = Array.isArray(payload.actions);
+  if (!isChat && !isActions) return;
   try {
     const port = chrome.runtime.connectNative(HOST_NAME);
     port.onDisconnect.addListener(() => {

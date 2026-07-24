@@ -52,7 +52,24 @@ CREATE TABLE IF NOT EXISTS settings (
 
 const SCHEMA_VERSION: i64 = 5;
 
-const MIGRATIONS: &[&str] = &[];
+const MIGRATIONS: &[&str] = &[r#"
+CREATE TABLE IF NOT EXISTS actions (
+    id              INTEGER PRIMARY KEY,
+    ext_id          TEXT NOT NULL,
+    source          TEXT NOT NULL,
+    session_id      TEXT NOT NULL DEFAULT '',
+    actor           TEXT NOT NULL CHECK (actor IN ('agent','human','unknown')),
+    app             TEXT,
+    tool            TEXT NOT NULL,
+    action          TEXT NOT NULL,
+    kind            TEXT NOT NULL CHECK (kind IN ('mutating','read_only')),
+    target_redacted TEXT,
+    ts              INTEGER NOT NULL,
+    UNIQUE (source, ext_id)
+);
+CREATE INDEX IF NOT EXISTS idx_actions_app_actor ON actions(app, actor);
+CREATE INDEX IF NOT EXISTS idx_actions_ts ON actions(ts);
+"#];
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let mut version: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
@@ -216,12 +233,21 @@ impl Store {
             params![since_ms],
             |r| r.get(0),
         )?;
-        let last: Option<i64> =
+        let actions: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM actions WHERE ts >= ?1",
+            params![since_ms],
+            |r| r.get(0),
+        )?;
+        let last_session: Option<i64> =
             self.conn
                 .query_row("SELECT MAX(ended_at) FROM sessions", [], |r| r.get(0))?;
+        let last_action: Option<i64> =
+            self.conn
+                .query_row("SELECT MAX(ts) FROM actions", [], |r| r.get(0))?;
         Ok(ActivityStats {
             recent_interactions: interactions,
-            last_activity_ms: last,
+            recent_actions: actions,
+            last_activity_ms: last_session.max(last_action),
         })
     }
 
@@ -242,6 +268,65 @@ impl Store {
                 started_at_ms: r.get(6)?,
                 ended_at_ms: r.get(7)?,
                 message_count: r.get(8)?,
+            })
+        })?;
+        rows.collect()
+    }
+    pub fn insert_action(&self, a: &ActionRecord) -> rusqlite::Result<bool> {
+        let n = self.conn.execute(
+            "INSERT OR IGNORE INTO actions
+                 (ext_id, source, session_id, actor, app, tool, action, kind, target_redacted, ts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                a.ext_id,
+                a.source,
+                a.session_id,
+                a.actor.as_str(),
+                a.app,
+                a.tool,
+                a.action,
+                a.kind,
+                a.target_redacted,
+                a.ts_ms,
+            ],
+        )?;
+        Ok(n > 0)
+    }
+    pub fn action_stats(&self, since_ms: i64) -> rusqlite::Result<Vec<ActionStat>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT app, actor, kind, COUNT(*) AS n FROM actions
+             WHERE ts >= ?1
+             GROUP BY app, actor, kind
+             ORDER BY n DESC",
+        )?;
+        let rows = stmt.query_map(params![since_ms], |r| {
+            Ok(ActionStat {
+                app: r.get(0)?,
+                actor: r.get(1)?,
+                kind: r.get(2)?,
+                count: r.get(3)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn all_actions(&self) -> rusqlite::Result<Vec<ActionRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT ext_id, source, session_id, actor, app, tool, action, kind, target_redacted, ts
+             FROM actions ORDER BY ts",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(ActionRow {
+                ext_id: r.get(0)?,
+                source: r.get(1)?,
+                session_id: r.get(2)?,
+                actor: r.get(3)?,
+                app: r.get(4)?,
+                tool: r.get(5)?,
+                action: r.get(6)?,
+                kind: r.get(7)?,
+                target_redacted: r.get(8)?,
+                ts_ms: r.get(9)?,
             })
         })?;
         rows.collect()
@@ -279,6 +364,7 @@ pub struct SessionUpsert<'a> {
 #[derive(Debug, Clone, Default)]
 pub struct ActivityStats {
     pub recent_interactions: i64,
+    pub recent_actions: i64,
     pub last_activity_ms: Option<i64>,
 }
 
@@ -300,6 +386,41 @@ pub struct TurnRow {
     pub seq: i64,
     pub role: String,
     pub redacted_text: String,
+    pub ts_ms: i64,
+}
+#[derive(Debug, Clone)]
+pub struct ActionRecord<'a> {
+    pub ext_id: &'a str,
+    pub source: &'a str,
+    pub session_id: &'a str,
+    pub actor: crate::attribution::Actor,
+    pub app: Option<&'a str>,
+    pub tool: &'a str,
+    pub action: &'a str,
+    pub kind: &'a str,
+    pub target_redacted: Option<&'a str>,
+    pub ts_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActionStat {
+    pub app: Option<String>,
+    pub actor: String,
+    pub kind: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ActionRow {
+    pub ext_id: String,
+    pub source: String,
+    pub session_id: String,
+    pub actor: String,
+    pub app: Option<String>,
+    pub tool: String,
+    pub action: String,
+    pub kind: String,
+    pub target_redacted: Option<String>,
     pub ts_ms: i64,
 }
 
@@ -348,6 +469,81 @@ mod tests {
     }
 
     #[test]
+    fn actions_insert_is_idempotent_and_stats_group_by_app_actor() {
+        use crate::attribution::Actor;
+        let s = Store::open_in_memory().unwrap();
+
+        let rec = |ext: &'static str, actor: Actor, app: &'static str, kind: &'static str, ts| {
+            ActionRecord {
+                ext_id: ext,
+                source: "almaclaw",
+                session_id: "sess-1",
+                actor,
+                app: Some(app),
+                tool: "bdc__cua",
+                action: "click",
+                kind,
+                target_redacted: None,
+                ts_ms: ts,
+            }
+        };
+
+        assert!(s
+            .insert_action(&rec("a1", Actor::Agent, "Mail", "mutating", 100))
+            .unwrap());
+        assert!(s
+            .insert_action(&rec("a2", Actor::Agent, "Mail", "mutating", 200))
+            .unwrap());
+        assert!(s
+            .insert_action(&rec("h1", Actor::Human, "Mail", "mutating", 300))
+            .unwrap());
+        assert!(!s
+            .insert_action(&rec("a1", Actor::Agent, "Mail", "mutating", 100))
+            .unwrap());
+
+        assert_eq!(s.all_actions().unwrap().len(), 3);
+
+        let stats = s.action_stats(0).unwrap();
+        let agent = stats
+            .iter()
+            .find(|st| st.app.as_deref() == Some("Mail") && st.actor == "agent")
+            .unwrap();
+        assert_eq!(agent.count, 2);
+        let human = stats
+            .iter()
+            .find(|st| st.app.as_deref() == Some("Mail") && st.actor == "human")
+            .unwrap();
+        assert_eq!(human.count, 1);
+        let recent = s.action_stats(250).unwrap();
+        assert_eq!(recent.iter().map(|st| st.count).sum::<i64>(), 1);
+    }
+
+    #[test]
+    fn activity_stats_include_action_only_activity() {
+        use crate::attribution::Actor;
+        let s = Store::open_in_memory().unwrap();
+        let rec = ActionRecord {
+            ext_id: "h1",
+            source: "web-extension",
+            session_id: "",
+            actor: Actor::Human,
+            app: Some("mail.google.com"),
+            tool: "browser",
+            action: "send",
+            kind: "mutating",
+            target_redacted: None,
+            ts_ms: 10_000,
+        };
+
+        assert!(s.insert_action(&rec).unwrap());
+
+        let stats = s.activity_stats(9_000).unwrap();
+        assert_eq!(stats.recent_interactions, 0);
+        assert_eq!(stats.recent_actions, 1);
+        assert_eq!(stats.last_activity_ms, Some(10_000));
+    }
+
+    #[test]
     fn encrypted_db_roundtrips_and_wrong_key_is_refused_without_data_loss() {
         let dir = std::env::temp_dir().join(format!("houdini-enc-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
@@ -376,7 +572,12 @@ mod tests {
                 "data survives a failed wrong-key open"
             );
         }
-        assert!(!std::fs::read(&path).unwrap().starts_with(b"SQLite format 3\0"), "file is encrypted, not plaintext SQLite");
+        assert!(
+            !std::fs::read(&path)
+                .unwrap()
+                .starts_with(b"SQLite format 3\0"),
+            "file is encrypted, not plaintext SQLite"
+        );
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -390,12 +591,15 @@ mod tests {
 
         {
             let s = Store::open(&path, &key).unwrap();
-            let (id, _) = s.upsert_session(&upsert("chatgpt-web", "c1", 5, 1)).unwrap();
+            let (id, _) = s
+                .upsert_session(&upsert("chatgpt-web", "c1", 5, 1))
+                .unwrap();
             s.add_turn(id, 0, Role::User, "keep me", 1).unwrap();
         }
         {
             let c = open_keyed(&path, &key).unwrap();
-            c.pragma_update(None, "user_version", SCHEMA_VERSION - 1).unwrap();
+            c.pragma_update(None, "user_version", SCHEMA_VERSION - 1)
+                .unwrap();
         }
         {
             let s = Store::open(&path, &key).unwrap();
@@ -404,7 +608,11 @@ mod tests {
                 1,
                 "an older-version DB is migrated in place, never dropped"
             );
-            assert_eq!(s.session_turns(1).unwrap().len(), 1, "its turns survive too");
+            assert_eq!(
+                s.session_turns(1).unwrap().len(),
+                1,
+                "its turns survive too"
+            );
         }
         std::fs::remove_dir_all(&dir).ok();
     }

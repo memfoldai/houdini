@@ -31,15 +31,25 @@ struct Asset {
 }
 
 pub fn check() -> Option<Update> {
-    let body = api_get(&format!("https://api.github.com/repos/{REPO}/releases/latest")).ok()?;
+    let body = api_get(&format!(
+        "https://api.github.com/repos/{REPO}/releases/latest"
+    ))
+    .ok()?;
     let release: Release = serde_json::from_slice(&body).ok()?;
 
     let version = release.tag_name.trim_start_matches('v').to_string();
     if !is_newer(&version, current_version()) {
         return None;
     }
-    let asset = release.assets.into_iter().find(|a| a.name.ends_with(".dmg"))?;
-    Some(Update { tag: release.tag_name, version, dmg_url: asset.browser_download_url })
+    let asset = release
+        .assets
+        .into_iter()
+        .find(|a| a.name.ends_with(".dmg"))?;
+    Some(Update {
+        tag: release.tag_name,
+        version,
+        dmg_url: asset.browser_download_url,
+    })
 }
 
 pub fn download_and_stage(update: &Update) -> Result<PathBuf, String> {
@@ -51,14 +61,35 @@ pub fn download_and_stage(update: &Update) -> Result<PathBuf, String> {
     std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
 
     let dmg = work.join("update.dmg");
-    run("curl", &["-fsSL", "-A", USER_AGENT, "-o", &dmg.to_string_lossy(), &update.dmg_url])?;
+    run(
+        "curl",
+        &[
+            "-fsSL",
+            "-A",
+            USER_AGENT,
+            "-o",
+            &dmg.to_string_lossy(),
+            &update.dmg_url,
+        ],
+    )?;
 
     let mount = work.join("mnt");
     std::fs::create_dir_all(&mount).map_err(|e| e.to_string())?;
-    run("hdiutil", &["attach", &dmg.to_string_lossy(), "-nobrowse", "-mountpoint", &mount.to_string_lossy()])?;
+    run(
+        "hdiutil",
+        &[
+            "attach",
+            &dmg.to_string_lossy(),
+            "-nobrowse",
+            "-mountpoint",
+            &mount.to_string_lossy(),
+        ],
+    )?;
 
     let result = swap_from_mount(&mount, &bundle);
-    let _ = Command::new("hdiutil").args(["detach", &mount.to_string_lossy(), "-force"]).output();
+    let _ = Command::new("hdiutil")
+        .args(["detach", &mount.to_string_lossy(), "-force"])
+        .output();
     result?;
 
     Ok(bundle)
@@ -81,17 +112,27 @@ fn api_get(url: &str) -> Result<Vec<u8>, String> {
     if out.status.success() {
         Ok(out.stdout)
     } else {
-        Err(format!("curl failed: {}", String::from_utf8_lossy(&out.stderr).trim()))
+        Err(format!(
+            "curl failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
     }
 }
 
 fn swap_from_mount(mount: &Path, bundle: &Path) -> Result<(), String> {
-    let new_app = first_with_ext(mount, "app").ok_or_else(|| "no .app inside the .dmg".to_string())?;
-    run("codesign", &["--verify", "--deep", &new_app.to_string_lossy()])?;
+    let new_app =
+        first_with_ext(mount, "app").ok_or_else(|| "no .app inside the .dmg".to_string())?;
+    run(
+        "codesign",
+        &["--verify", "--deep", &new_app.to_string_lossy()],
+    )?;
 
     let staged = bundle.with_extension("app.new");
     let _ = std::fs::remove_dir_all(&staged);
-    run("ditto", &[&new_app.to_string_lossy(), &staged.to_string_lossy()])?;
+    run(
+        "ditto",
+        &[&new_app.to_string_lossy(), &staged.to_string_lossy()],
+    )?;
 
     let backup = bundle.with_extension("app.old");
     let _ = std::fs::remove_dir_all(&backup);
@@ -106,8 +147,12 @@ fn swap_from_mount(mount: &Path, bundle: &Path) -> Result<(), String> {
 
 fn installed_app_bundle() -> Option<PathBuf> {
     let exe = std::env::current_exe().ok()?;
-    let bundle = exe.ancestors().find(|p| p.extension().is_some_and(|e| e == "app"))?;
-    bundle.starts_with("/Applications").then(|| bundle.to_path_buf())
+    let bundle = exe
+        .ancestors()
+        .find(|p| p.extension().is_some_and(|e| e == "app"))?;
+    bundle
+        .starts_with("/Applications")
+        .then(|| bundle.to_path_buf())
 }
 
 fn first_with_ext(dir: &Path, ext: &str) -> Option<PathBuf> {
@@ -119,11 +164,17 @@ fn first_with_ext(dir: &Path, ext: &str) -> Option<PathBuf> {
 }
 
 fn run(cmd: &str, args: &[&str]) -> Result<(), String> {
-    let out = Command::new(cmd).args(args).output().map_err(|e| format!("{cmd}: {e}"))?;
+    let out = Command::new(cmd)
+        .args(args)
+        .output()
+        .map_err(|e| format!("{cmd}: {e}"))?;
     if out.status.success() {
         Ok(())
     } else {
-        Err(format!("{cmd} failed: {}", String::from_utf8_lossy(&out.stderr).trim()))
+        Err(format!(
+            "{cmd} failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        ))
     }
 }
 
@@ -132,9 +183,17 @@ fn is_newer(candidate: &str, current: &str) -> bool {
 }
 
 fn parse(v: &str) -> (u64, u64, u64) {
-    let core = v.trim_start_matches('v').split(['-', '+']).next().unwrap_or(v);
+    let core = v
+        .trim_start_matches('v')
+        .split(['-', '+'])
+        .next()
+        .unwrap_or(v);
     let mut it = core.split('.').map(|p| p.parse::<u64>().unwrap_or(0));
-    (it.next().unwrap_or(0), it.next().unwrap_or(0), it.next().unwrap_or(0))
+    (
+        it.next().unwrap_or(0),
+        it.next().unwrap_or(0),
+        it.next().unwrap_or(0),
+    )
 }
 
 #[cfg(test)]
@@ -163,7 +222,11 @@ mod tests {
             {"name":"notes.txt","browser_download_url":"https://example.com/notes.txt"},
             {"name":"Houdini-0.5.0.dmg","browser_download_url":"https://example.com/app.dmg"}]}"#;
         let release: Release = serde_json::from_slice(json).unwrap();
-        let dmg = release.assets.into_iter().find(|a| a.name.ends_with(".dmg")).unwrap();
+        let dmg = release
+            .assets
+            .into_iter()
+            .find(|a| a.name.ends_with(".dmg"))
+            .unwrap();
         assert_eq!(dmg.browser_download_url, "https://example.com/app.dmg");
     }
 }
