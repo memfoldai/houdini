@@ -1,9 +1,12 @@
-# Houdini: browser extension (web chats)
+# Houdini: browser extension
 
 Captures **web AI chats** (ChatGPT, Claude, Gemini) that leave no local
-transcript, and delivers them to the local Houdini app. It reads each exchange
-from the **rendered page** (the prompt and reply the user actually saw) and works
-in **background tabs** because the DOM updates regardless of tab focus.
+transcript, plus recognized **Google Workspace app actions** (Gmail, Drive,
+Docs, Sheets, Slides, Calendar), and delivers them to the local Houdini app.
+For chats it reads each exchange from the **rendered page** (the prompt and
+reply the user actually saw) and works in **background tabs** because the DOM
+updates regardless of tab focus. For Workspace actions it records only the
+recognized action verb and clicked control label.
 
 Reading from the rendered DOM rather than each site's internal, un-versioned
 network API is deliberate: the API shapes are undocumented and change per deploy;
@@ -12,16 +15,19 @@ the rendered message is stable and uniform across sites.
 ## How it works
 
 ```
-page (content script)      service worker        native app (forwarder)     app
-capture.js  ──runtime──▶ background.js ──stdio──▶ houdini --native-host ──socket──▶ Houdini
- poll reply until stable   connectNative           forward only              redact → store
- → {user, assistant}       per message             (no DB, no keychain)      (single writer)
+page (content scripts)       service worker        native app (forwarder)     app
+capture*.js  ──runtime────▶ background.js ──stdio──▶ houdini --native-host ──socket──▶ Houdini
+ chat: stable exchange       connectNative           forward only              redact → store
+ action: recognized click    per message             (no DB, no keychain)      (single writer)
 ```
 
 - `capture.js` (one ISOLATED content script) picks the adapter for the current
   host, polls the latest assistant message until its text stops changing, then
   sends the latest `{user, assistant}` exchange to the background worker. The
   conversation id comes from the page URL.
+- `capture_actions.js` listens on allowlisted Workspace hosts and emits only
+  recognized state-changing controls, normalized to action verbs such as `send`,
+  `archive`, or `delete`.
 - `background.js` forwards each exchange to the native host over
   [native messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging)
   (32-bit length-prefixed JSON on stdio).
@@ -51,6 +57,14 @@ can need a small fix. An adapter captures nothing (rather than garbage) when it
 doesn't match. **They need one live confirmation in a logged-in browser** whenever
 a site changes.
 
+## Workspace action capture
+
+`capture_actions.js` runs only on the Workspace hosts listed in
+`manifest.json`. It classifies clicked controls by accessible labels
+(`aria-label` / `data-tooltip`) and ignores unrecognized controls. These labels
+are also reverse-engineered UI contracts and need live confirmation when Google
+changes the toolbar or compose controls.
+
 ## Install
 
 The app auto-registers the native-messaging host for every Chromium browser on
@@ -67,5 +81,5 @@ native-messaging protocol, upgraded together. Validate the capture logic without
 browser (CI runs this too):
 
 ```bash
-node --test extension/test/capture.test.mjs
+node --test extension/test/*.test.mjs
 ```

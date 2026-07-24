@@ -41,7 +41,8 @@ browser extension. Full steps and uninstall are in [docs/install.md](docs/instal
 
 Click the menu-bar ring for today's count and to:
 
-- **Export my data…** writes a flat, one-row-per-message file, ready for a warehouse.
+- **Export my data…** writes flat JSONL files for AI messages and app actions,
+  ready for a warehouse.
 - **Take a break** pauses for 15 minutes, an hour, or until you're back.
 - **Quit**.
 
