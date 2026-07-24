@@ -14,7 +14,8 @@ against a closed set of labels. Four facets are recorded per turn:
 | Facet | Values | Question it answers |
 |---|---|---|
 | `tool` | `Alma`, `Claude Code`, `Codex`, `ChatGPT`, `Claude`, `Gemini` | Which app the request went through |
-| `intent` | 20 ids, `src/taxonomy.rs` | What was the AI asked to do |
+| `intent` | 23 ids, `src/taxonomy.rs` | What was the AI asked to do |
+| `shape` | `research`, `artifact` | Finding something out, or producing something. Derived from intent, never asked |
 | `domain` | 17 ids | What subject the request belongs to |
 | `depth` | 1 to 4 | A single lookup, an iterative dig, a synthesis across sources, or autonomous multi-step work |
 | `delegation` | `none`, `tool_call`, `agent_run` | Whether the person drove this AI directly, had it call a tool, or had it drive **another** AI |
@@ -25,6 +26,32 @@ to run the deploy" is recorded as `agent_run` **to `alma`**, read from the
 request itself, so the caller and the callee are both known on one row. Each
 tool still writes its own transcript, so the work also shows up as that tool's
 own usage; the edge is what links them.
+
+## The categories come from published usage studies
+
+The intent list is not invented. It follows the activity categories in the
+AI-research-usage study, which are drawn from usage-log research rather than
+from surveys of intent: NBER w34255, Pew 2026, the Anthropic Economic Index,
+Stack Overflow 2025 and WildChat. The study's central finding is that
+research-shaped use (finding out or understanding) is the single largest thing
+people bring to AI, distinct from artifact-shaped use (producing something), and
+that the same question type recurs at very different depths. That is exactly the
+`shape` and `depth` axes here.
+
+## Each request is labeled with what came before it
+
+A request like "now do the same for the other one" means nothing alone, and
+follow-ups are the norm rather than the exception. So a turn is labeled together
+with up to six preceding turns of its own session, matching the published
+method. The difference is not marginal:
+
+```
+"now do the same for the other one"
+  without context -> other / other                          depth 1
+  with context    -> product_or_purchase_research / infra   depth 3
+```
+
+Only the latest request is labeled; the context exists to make it readable.
 
 ## Why a taxonomy and not clustering
 
@@ -163,6 +190,15 @@ minute; when the queue is drained the job settles back to hourly; a batch that
 fails outright waits fifteen minutes. That drains a week of history in under an
 hour of uptime instead of five working days, without ever running flat out once
 it has caught up.
+
+Houdini shows how far it has got in the menu ("Analytics: 62% analyzed (640 of
+1033)"), so the first pass over an existing history is visible rather than
+mysterious.
+
+When the taxonomy or the prompt changes, labels written under the old version
+are cleared at startup and their turns re-analyzed. The local database therefore
+only ever holds one shape of label, which is what makes merging across machines
+meaningful in the first place.
 
 Nothing expires from the queue. It is an anti-join over every unlabeled user
 turn, so a session that ends mid-batch, a laptop that sleeps, or an app that

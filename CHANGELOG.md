@@ -7,6 +7,21 @@ include behavior changes.
 
 ## [0.7.1] - 2026-07-24
 
+### Changed
+- **Categories now follow the published usage studies** rather than a plausible
+  invented list: the activity taxonomy is taken from the AI-research-usage study
+  (NBER w34255, Pew 2026, Anthropic Economic Index, Stack Overflow 2025,
+  WildChat), and every intent resolves to a `shape` of `research` or `artifact`,
+  the split that study is built around.
+- **Requests are labeled with their conversation context.** A turn now carries up
+  to six preceding turns of its own session, matching the published method.
+  "Now do the same for the other one" labeled as `other / other` in isolation and
+  as `product_or_purchase_research` at depth 3 with context, so follow-ups (the
+  majority of real turns) were being wasted before.
+- Labels from a superseded taxonomy or prompt version are cleared at startup and
+  their turns re-analyzed, so a machine only ever holds one shape of label.
+- The menu shows analysis progress ("Analytics: 62% analyzed (640 of 1033)").
+
 ### Fixed
 - **Backlog drains in minutes, not days.** The job ran one batch an hour
   regardless of how much work was waiting, so a week of existing history took

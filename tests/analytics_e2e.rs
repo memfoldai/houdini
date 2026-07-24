@@ -15,7 +15,7 @@ impl Labeler for ScriptedLabeler {
         Ok(Label {
             session_id: request.session_id,
             seq: request.seq,
-            intent: "refactor_or_cleanup".to_string(),
+            intent: "modify_code".to_string(),
             domain: "software_engineering".to_string(),
             depth: if orchestrating { 4 } else { 2 },
             delegation: if orchestrating { "agent_run" } else { "none" }.to_string(),

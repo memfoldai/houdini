@@ -413,6 +413,59 @@ impl Store {
         rows.collect()
     }
 
+    pub fn preceding_turns(
+        &self,
+        session_id: i64,
+        seq: i64,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<TurnRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT seq, role, redacted_text, ts FROM turns
+             WHERE session_id = ?1 AND seq < ?2
+             ORDER BY seq DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![session_id, seq, limit], |r| {
+            Ok(TurnRow {
+                seq: r.get(0)?,
+                role: r.get(1)?,
+                redacted_text: r.get(2)?,
+                ts_ms: r.get(3)?,
+            })
+        })?;
+        let mut turns = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        turns.reverse();
+        Ok(turns)
+    }
+
+    pub fn label_progress(&self, taxonomy_version: i64, prompt_version: i64) -> rusqlite::Result<(i64, i64)> {
+        self.conn.query_row(
+            "SELECT
+                 (SELECT COUNT(*) FROM turns WHERE role = 'user'),
+                 (SELECT COUNT(*) FROM turn_labels
+                   WHERE taxonomy_version = ?1 AND prompt_version = ?2)",
+            params![taxonomy_version, prompt_version],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+    }
+
+    pub fn drop_superseded_labels(
+        &self,
+        taxonomy_version: i64,
+        prompt_version: i64,
+    ) -> rusqlite::Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        let removed = tx.execute(
+            "DELETE FROM turn_labels WHERE taxonomy_version <> ?1 OR prompt_version <> ?2",
+            params![taxonomy_version, prompt_version],
+        )?;
+        tx.execute(
+            "DELETE FROM label_candidates WHERE taxonomy_version <> ?1 OR prompt_version <> ?2",
+            params![taxonomy_version, prompt_version],
+        )?;
+        tx.commit()?;
+        Ok(removed)
+    }
+
     pub fn insert_turn_label(&self, label: &TurnLabelRecord) -> rusqlite::Result<bool> {
         let changed = self.conn.execute(
             "INSERT INTO turn_labels

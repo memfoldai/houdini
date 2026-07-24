@@ -103,6 +103,7 @@ struct Runtime {
     painted: Cell<Option<Glyph>>,
     status_item: MenuItem,
     detail_item: MenuItem,
+    analytics_item: MenuItem,
     resume_item: MenuItem,
     update_item: MenuItem,
     ids: MenuIds,
@@ -223,6 +224,16 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
     };
 
     let labeler = resolve_labeler(cfg);
+    match store.drop_superseded_labels(
+        houdini::taxonomy::TAXONOMY_VERSION,
+        houdini::analytics::PROMPT_VERSION,
+    ) {
+        Ok(0) => {}
+        Ok(removed) => log::info!(
+            "analytics: cleared {removed} label(s) from a superseded taxonomy; they re-analyze under the current one"
+        ),
+        Err(e) => log::warn!("analytics: could not clear superseded labels: {e}"),
+    }
 
     let (web_tx, web_rx) = mpsc::channel();
     start_web_listener(paths.sock_file.clone(), web_tx);
@@ -254,6 +265,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
 
     let status_item = MenuItem::new("Starting…", false, None);
     let detail_item = MenuItem::new("", false, None);
+    let analytics_item = MenuItem::new("", false, None);
     let resume_item = MenuItem::with_id(ids.resume.clone(), "Resume now", false, None);
     let update_item = MenuItem::with_id(ids.update.clone(), "Check for updates…", true, None);
 
@@ -288,6 +300,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         painted: Cell::new(None),
         status_item,
         detail_item,
+        analytics_item,
         resume_item,
         update_item,
         ids,
@@ -388,6 +401,7 @@ fn install_tray(rt: &Rc<Runtime>) {
     menu.append(&PredefinedMenuItem::separator()).expect("sep0");
     menu.append(&rt.status_item).expect("status");
     menu.append(&rt.detail_item).expect("detail");
+    menu.append(&rt.analytics_item).expect("analytics");
     menu.append(&PredefinedMenuItem::separator()).expect("sep1");
     menu.append(&pause).expect("pause");
     menu.append(&rt.resume_item).expect("resume");
@@ -490,6 +504,29 @@ fn drain_web_messages(rt: &Rc<Runtime>) {
             Ok(n) => log::info!("web: stored {n} chat turn(s)"),
             Err(e) => log::warn!("web: dropped a message: {e}"),
         }
+    }
+}
+
+fn analytics_progress_text(rt: &Rc<Runtime>) -> String {
+    if rt.analytics_labeler.borrow().is_none() {
+        return String::new();
+    }
+    let Ok((total, labeled)) = rt.store.label_progress(
+        houdini::taxonomy::TAXONOMY_VERSION,
+        houdini::analytics::PROMPT_VERSION,
+    ) else {
+        return String::new();
+    };
+    if total == 0 {
+        return String::new();
+    }
+    if labeled >= total {
+        format!("Analytics: all {total} requests analyzed")
+    } else {
+        format!(
+            "Analytics: {}% analyzed ({labeled} of {total})",
+            labeled * 100 / total
+        )
     }
 }
 
@@ -681,6 +718,9 @@ fn refresh_menu(rt: &Rc<Runtime>, glyph: Glyph, now_ms: i64, stats: &ActivitySta
             relative_time(stats.last_activity_ms, now_ms)
         ));
     }
+    rt.analytics_item
+        .set_text(analytics_progress_text(rt));
+
     if let Some(summary) = houdini::summary::format_action_summary(
         &rt.store
             .action_stats(now_ms - RECENT_WINDOW_MS)

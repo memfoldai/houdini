@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-pub const PROMPT_VERSION: i64 = 3;
+pub const PROMPT_VERSION: i64 = 4;
 
 pub const DEFAULT_BASE_URL: &str = "https://litellm.memfold.ai";
 pub const DEFAULT_MODEL: &str = "gpt-5.5";
@@ -25,13 +25,19 @@ delegate_tool: when delegation is agent_run, which AI or agent is being driven, 
 
 Pick the single most pertinent value. Use \"other\" only when no listed value fits, and then propose a replacement label as a short snake_case id naming the missing category, plus one short sentence saying what the listed values failed to cover. Leave all three proposal fields null whenever a listed value fits.
 
-Judge only the request itself. Never infer from names, companies, or file paths that appear in it.";
+Earlier turns of the same conversation may be given as context. Use them only to understand what the latest request refers to. Label the LATEST REQUEST, never the context.
+
+Judge the request, not the people in it. Never infer from names, companies, or file paths that appear in it.";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LabelRequest {
     pub session_id: i64,
     pub seq: i64,
     pub text: String,
+    /// Earlier turns of the same session, oldest first. A request like "now fix
+    /// the other one" means nothing alone, so the published method labels a
+    /// message together with what came before it.
+    pub context: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -275,6 +281,32 @@ pub fn parse_label(request: &LabelRequest, body: &[u8]) -> Result<Label, String>
     })
 }
 
+pub fn build_user_message(request: &LabelRequest) -> String {
+    let text = truncate_input(&request.text);
+    if request.context.is_empty() {
+        return format!("LATEST REQUEST:\n{text}");
+    }
+    let context = request
+        .context
+        .iter()
+        .map(|t| format!("- {}", truncate_context(t)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("EARLIER IN THIS CONVERSATION:\n{context}\n\nLATEST REQUEST:\n{text}")
+}
+
+fn truncate_context(text: &str) -> &str {
+    const MAX: usize = 400;
+    if text.len() <= MAX {
+        return text;
+    }
+    let mut end = MAX;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
+}
+
 pub fn build_body(model: &str, text: &str) -> Result<String, String> {
     let request = ChatRequest {
         model,
@@ -322,7 +354,7 @@ impl Labeler for ProxyLabeler {
     }
 
     fn label(&self, request: &LabelRequest) -> Result<Label, String> {
-        let body = build_body(&self.model, truncate_input(&request.text))?;
+        let body = build_body(&self.model, &build_user_message(request))?;
         let response = post(&curl_config(&self.base_url, &self.api_key, &body))?;
         parse_label(request, &response)
     }
@@ -337,6 +369,7 @@ mod tests {
             session_id: 7,
             seq: 3,
             text: "fix the failing payment test".to_string(),
+            context: Vec::new(),
         }
     }
 
@@ -344,6 +377,23 @@ mod tests {
         serde_json::json!({ "choices": [{ "message": { "content": label } }] })
             .to_string()
             .into_bytes()
+    }
+
+    #[test]
+    fn context_frames_the_latest_request_without_replacing_it() {
+        let bare = build_user_message(&request());
+        assert!(bare.starts_with("LATEST REQUEST:"));
+        assert!(!bare.contains("EARLIER"));
+
+        let mut with_context = request();
+        with_context.context = vec!["user: rewrite the parser".into()];
+        let framed = build_user_message(&with_context);
+        assert!(framed.contains("EARLIER IN THIS CONVERSATION:"));
+        assert!(framed.contains("rewrite the parser"));
+        assert!(
+            framed.find("LATEST REQUEST:").unwrap() > framed.find("EARLIER").unwrap(),
+            "the request being labeled comes last"
+        );
     }
 
     #[test]
@@ -372,12 +422,12 @@ mod tests {
     #[test]
     fn a_valid_response_becomes_a_label() {
         let body = response_body(
-            r#"{"intent":"debug_or_fix","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null,"proposal_rationale":null}"#,
+            r#"{"intent":"debugging_research","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null,"proposal_rationale":null}"#,
         );
         let label = parse_label(&request(), &body).unwrap();
         assert_eq!(label.session_id, 7);
         assert_eq!(label.seq, 3);
-        assert_eq!(label.intent, "debug_or_fix");
+        assert_eq!(label.intent, "debugging_research");
         assert_eq!(label.depth, 2);
         assert!(label.proposed_intent.is_none());
     }
@@ -393,7 +443,7 @@ mod tests {
     #[test]
     fn an_out_of_range_depth_is_refused() {
         let body = response_body(
-            r#"{"intent":"debug_or_fix","domain":"software_engineering","depth":9,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null,"proposal_rationale":null}"#,
+            r#"{"intent":"debugging_research","domain":"software_engineering","depth":9,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null,"proposal_rationale":null}"#,
         );
         assert!(parse_label(&request(), &body).unwrap_err().contains("depth"));
     }
@@ -419,7 +469,7 @@ mod tests {
     #[test]
     fn confidence_is_clamped_into_range() {
         let body = response_body(
-            r#"{"intent":"debug_or_fix","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":4.2,"proposed_intent":null,"proposed_domain":null,"proposal_rationale":null}"#,
+            r#"{"intent":"debugging_research","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":4.2,"proposed_intent":null,"proposed_domain":null,"proposal_rationale":null}"#,
         );
         assert_eq!(parse_label(&request(), &body).unwrap().confidence, 1.0);
     }

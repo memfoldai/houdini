@@ -17,7 +17,7 @@ fn main() {
         "look into what changed in the EU AI act this quarter and summarise it with sources",
     ];
     for (i, text) in cases.iter().enumerate() {
-        let request = LabelRequest { session_id: 1, seq: i as i64, text: text.to_string() };
+        let request = LabelRequest { session_id: 1, seq: i as i64, text: text.to_string(), context: Vec::new() };
         match labeler.label(&request) {
             Ok(l) => println!(
                 "OK   {:<44} -> {}/{} depth={} delegation={} drove={} why={:?}",
