@@ -26,7 +26,7 @@ library; the menu-bar shell is the binary.
 | Path | Responsibility |
 |---|---|
 | `src/ingest/` | Transcript adapters (`claude_code`, `codex`, `openclaw`) + the `Ingestor` that scans and normalizes them. Adding a tool is adding one adapter. |
-| `src/webingest.rs` | Parse, redact, and store a web-chat message; the socket framing shared with the native host. |
+| `src/webingest.rs` | Parse, redact, and store browser-extension chat messages and Workspace action events; the socket framing shared with the native host. |
 | `src/store.rs` | The encrypted SQLite store (SQLCipher) and schema migrations. |
 | `src/keychain.rs` | Fetches the DB key from the macOS Keychain. |
 | `src/redact.rs` | Deterministic redaction of secrets/PII, applied before any text is stored. |

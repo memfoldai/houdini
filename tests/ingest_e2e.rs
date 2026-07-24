@@ -18,7 +18,7 @@ fn running_pipeline_ingests_redacts_and_exports() {
     let _ = fs::remove_dir_all(&home);
     let data_dir = home.join("data");
 
-    let path = write_transcript(
+    write_transcript(
         &home,
         &[
             r#"{"type":"user","sessionId":"e2e","timestamp":"2026-07-16T10:00:00.000Z","message":{"role":"user","content":"deploy with key AKIAIOSFODNN7EXAMPLE"}}"#,
@@ -71,6 +71,5 @@ fn running_pipeline_ingests_redacts_and_exports() {
     assert_eq!(grown.new_turns, 1, "only the appended turn is added");
     assert_eq!(store.session_turns(1).unwrap().len(), 3);
 
-    let _ = path;
     fs::remove_dir_all(&home).ok();
 }

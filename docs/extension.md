@@ -1,12 +1,12 @@
-# Set up web-chat capture (2 minutes, one time)
+# Set up browser capture (2 minutes, one time)
 
 Houdini already records your command-line AI use (Claude Code, Codex, OpenClaw) on
-its own. To also record web chats (ChatGPT, Claude, and Gemini in the browser), add
-this browser extension. It is optional, so skip it if you only use command-line
-tools.
+its own. To also record web chats (ChatGPT, Claude, and Gemini in the browser) and
+Google Workspace app actions, add this browser extension. It is optional, so skip it
+if you only use command-line tools.
 
-Everything stays on your Mac. The extension reads the chat in your own tab and hands
-it to the app locally. Nothing is uploaded.
+Everything stays on your Mac. The extension reads the chat or recognized action in
+your own tab and hands it to the app locally. Nothing is uploaded.
 
 ## Step 1: install the app first
 
@@ -37,8 +37,9 @@ This works in any Chromium browser (Chrome, Brave, Edge, Arc, Vivaldi).
 
 ## Step 3: check it works
 
-Open chatgpt.com, claude.ai, or gemini.google.com, send one message, and watch the
-menu-bar ring. It fills to a solid dot when a chat is recorded.
+Open chatgpt.com, claude.ai, or gemini.google.com, send one message, then click a
+recognized Workspace control such as Gmail Send or Drive Download. Watch the
+menu-bar ring; it fills to a solid dot when activity is recorded.
 
 ## Good to know
 

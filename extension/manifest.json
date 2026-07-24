@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Houdini (internal study)",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "minimum_chrome_version": "111",
-  "description": "Internal study only. Records your AI web-chat prompts/replies LOCALLY to the Houdini app. No data leaves your machine.",
+  "description": "Internal study only. Records AI web chats and Workspace app actions LOCALLY to the Houdini app. No data leaves your machine.",
   "author": "Rahul Biliyar <rahul@memfold.ai>",
   "homepage_url": "https://github.com/memfoldai/houdini",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAoiSpJ0BD8EipFXhWXJOZzgZGpYsDBlvX7Cc4C++tp8lm9tB71HaSNlZD0JJ6Xs5/6kVc3CTtwKwYnKoEG7AS4e6wEMemlwcDPKCA9A5RPjHGEzZTPEWrbZvT4UQ/Na6aIJIxYEWdXYrtyR8aLa1IMkrkvZOEskPRLgtzVHoCFxiBFXNHVmcKJLrJW5fBV3wO4EsFxZwLyfMgaJmmgT0IfsZKR5qkFV9nKuoRW3fIM2KfmDBdbUmuH2rgxfGjFb4ci2gT0N628D/xdIYf7tFuyOwhroh7iC4mWdnYhssrpqcnb1+mfrhn4JDiOggQCMtRYfzlEiCJy5u86sbiu08ZAQIDAQAB",

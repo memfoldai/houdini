@@ -27,9 +27,10 @@ jobs:
       - name: Validate extension (syntax, manifest, capture tests)
         run: |
           node --check extension/capture.js
+          node --check extension/capture_actions.js
           node --check extension/background.js
           node -e "JSON.parse(require('fs').readFileSync('extension/manifest.json','utf8'))"
-          node --test extension/test/capture.test.mjs
+          node --test extension/test/*.test.mjs
       - name: Release build
         run: cargo build --release --verbose
 
