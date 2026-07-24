@@ -29,7 +29,7 @@ use houdini::config::{self, AppConfig, Paths};
 use houdini::export;
 use houdini::ingest::Ingestor;
 use houdini::ingest_actions::ActionIngestor;
-use houdini::store::{ActivityStats, Store, PAUSE_UNTIL_KEY};
+use houdini::store::{ActivityStats, Store, INGEST_SINCE_KEY, PAUSE_UNTIL_KEY};
 use houdini::webingest;
 
 use houdini::analytics::{Label, LabelRequest, Labeler, ProxyLabeler};
@@ -246,8 +246,25 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
 
-    let ingestor = Ingestor::new(home.clone(), now_ms);
-    let action_ingestor = ActionIngestor::new(home.clone(), now_ms);
+    // Resume from where the last scan finished so nothing written while the app
+    // was closed is skipped. A first-ever run has no mark and starts at launch,
+    // which is what keeps a fresh install from importing years of history.
+    let ingest_since_ms = store
+        .get_setting(INGEST_SINCE_KEY)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|mark| *mark > 0 && *mark <= now_ms)
+        .unwrap_or(now_ms);
+    if ingest_since_ms < now_ms {
+        log::info!(
+            "ingest: resuming from the last scan, {} minute(s) ago",
+            (now_ms - ingest_since_ms) / 60_000
+        );
+    }
+
+    let ingestor = Ingestor::new(home.clone(), ingest_since_ms);
+    let action_ingestor = ActionIngestor::new(home.clone(), ingest_since_ms);
     let transcripts_changed = Arc::new(AtomicBool::new(false));
     let watcher = start_watcher(
         &home,
@@ -453,6 +470,7 @@ fn tick(rt: &Rc<Runtime>) {
             clock.mono_ms.saturating_sub(rt.last_transcript_ms.get()) >= rt.transcript_poll_ms;
         if changed || due_poll {
             rt.last_transcript_ms.set(clock.mono_ms);
+            let scan_started_ms = clock.wall_ms;
             let stats = rt.ingestor.borrow_mut().poll(&rt.store);
             if stats.new_turns > 0 {
                 log::info!(
@@ -465,6 +483,11 @@ fn tick(rt: &Rc<Runtime>) {
             if acted > 0 {
                 log::info!("attributed {acted} new agent action(s)");
             }
+            // Stamped from BEFORE the scan: a file written while it ran is then
+            // still newer than the mark and gets picked up next time.
+            let _ = rt
+                .store
+                .set_setting(INGEST_SINCE_KEY, &scan_started_ms.to_string());
         }
         if due(&rt.heartbeat_at, clock.mono_ms, HEARTBEAT_MS) {
             log::info!("heartbeat: watching for new AI messages");
