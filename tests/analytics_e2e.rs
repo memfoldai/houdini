@@ -19,6 +19,7 @@ impl Labeler for ScriptedLabeler {
             domain: "software_engineering".to_string(),
             depth: if orchestrating { 4 } else { 2 },
             delegation: if orchestrating { "agent_run" } else { "none" }.to_string(),
+            delegate_tool: if orchestrating { "codex" } else { "none" }.to_string(),
             confidence: 0.95,
             proposed_intent: None,
             proposed_domain: None,
@@ -69,6 +70,10 @@ fn labels_survive_a_reopen_and_export_as_aggregate_cells() {
         .find(|c| c.delegation == "agent_run")
         .expect("nested AI usage is recorded as its own cell");
     assert_eq!(orchestrated.depth, 4);
+    assert_eq!(
+        orchestrated.delegate_tool, "codex",
+        "the analytics name WHICH AI was driven, not just that delegation happened"
+    );
     assert_eq!(orchestrated.turns, 1);
 
     let identity = houdini::export::ExportIdentity {

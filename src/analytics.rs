@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-pub const PROMPT_VERSION: i64 = 1;
+pub const PROMPT_VERSION: i64 = 2;
 
 pub const DEFAULT_BASE_URL: &str = "https://litellm.memfold.ai";
 pub const DEFAULT_MODEL: &str = "gpt-5.5";
@@ -21,6 +21,7 @@ intent: what the person asked the AI to do.
 domain: the subject area the request belongs to.
 depth: how much research the request demands. 1 = a single fact or lookup. 2 = an iterative dig with follow-ups. 3 = synthesis across several sources. 4 = autonomous multi-step work the AI carries out on its own.
 delegation: none when the person works with this AI directly; tool_call when the AI is asked to invoke a tool; agent_run when the person directs this AI to drive another AI, agent, or coding assistant.
+delegate_tool: when delegation is agent_run, which AI or agent is being driven, named from the request itself. Use none when nothing is delegated, and other when something is delegated that is not listed.
 
 Pick the single most pertinent value. Use \"other\" only when no listed value fits, and then propose a replacement label as a short snake_case id naming the missing category. Leave proposals null whenever a listed value fits.
 
@@ -41,6 +42,7 @@ pub struct Label {
     pub domain: String,
     pub depth: i64,
     pub delegation: String,
+    pub delegate_tool: String,
     pub confidence: f64,
     pub proposed_intent: Option<String>,
     pub proposed_domain: Option<String>,
@@ -100,6 +102,7 @@ struct LabelPayload {
     domain: String,
     depth: i64,
     delegation: String,
+    delegate_tool: String,
     confidence: f64,
     proposed_intent: Option<String>,
     proposed_domain: Option<String>,
@@ -110,7 +113,7 @@ pub fn label_schema() -> serde_json::Value {
         "type": "object",
         "additionalProperties": false,
         "required": [
-            "intent", "domain", "depth", "delegation", "confidence",
+            "intent", "domain", "depth", "delegation", "delegate_tool", "confidence",
             "proposed_intent", "proposed_domain"
         ],
         "properties": {
@@ -118,6 +121,7 @@ pub fn label_schema() -> serde_json::Value {
             "domain": { "type": "string", "enum": taxonomy::DOMAINS },
             "depth": { "type": "integer", "enum": [1, 2, 3, 4] },
             "delegation": { "type": "string", "enum": taxonomy::DELEGATIONS },
+            "delegate_tool": { "type": "string", "enum": taxonomy::DELEGATE_TARGETS },
             "confidence": { "type": "number" },
             "proposed_intent": { "type": ["string", "null"] },
             "proposed_domain": { "type": ["string", "null"] }
@@ -220,6 +224,12 @@ pub fn parse_label(request: &LabelRequest, body: &[u8]) -> Result<Label, String>
     if !taxonomy::is_delegation(&payload.delegation) {
         return Err(format!("delegation outside taxonomy: {}", payload.delegation));
     }
+    if !taxonomy::is_delegate_target(&payload.delegate_tool) {
+        return Err(format!(
+            "delegate_tool outside taxonomy: {}",
+            payload.delegate_tool
+        ));
+    }
     if !taxonomy::is_depth(payload.depth) {
         return Err(format!("depth outside range: {}", payload.depth));
     }
@@ -235,6 +245,7 @@ pub fn parse_label(request: &LabelRequest, body: &[u8]) -> Result<Label, String>
         domain: payload.domain,
         depth: payload.depth,
         delegation: payload.delegation,
+        delegate_tool: payload.delegate_tool,
         confidence: payload.confidence.clamp(0.0, 1.0),
     })
 }
@@ -336,7 +347,7 @@ mod tests {
     #[test]
     fn a_valid_response_becomes_a_label() {
         let body = response_body(
-            r#"{"intent":"debug_or_fix","domain":"software_engineering","depth":2,"delegation":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null}"#,
+            r#"{"intent":"debug_or_fix","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null}"#,
         );
         let label = parse_label(&request(), &body).unwrap();
         assert_eq!(label.session_id, 7);
@@ -349,7 +360,7 @@ mod tests {
     #[test]
     fn a_label_outside_the_taxonomy_is_refused_rather_than_stored() {
         let body = response_body(
-            r#"{"intent":"vibe_coding","domain":"software_engineering","depth":2,"delegation":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null}"#,
+            r#"{"intent":"vibe_coding","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null}"#,
         );
         assert!(parse_label(&request(), &body).unwrap_err().contains("intent"));
     }
@@ -357,7 +368,7 @@ mod tests {
     #[test]
     fn an_out_of_range_depth_is_refused() {
         let body = response_body(
-            r#"{"intent":"debug_or_fix","domain":"software_engineering","depth":9,"delegation":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null}"#,
+            r#"{"intent":"debug_or_fix","domain":"software_engineering","depth":9,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null}"#,
         );
         assert!(parse_label(&request(), &body).unwrap_err().contains("depth"));
     }
@@ -373,7 +384,7 @@ mod tests {
     #[test]
     fn proposals_survive_only_alongside_other_and_normalize_to_ids() {
         let body = response_body(
-            r#"{"intent":"other","domain":"software_engineering","depth":2,"delegation":"none","confidence":0.4,"proposed_intent":"Pair Programming!","proposed_domain":"ignored"}"#,
+            r#"{"intent":"other","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":0.4,"proposed_intent":"Pair Programming!","proposed_domain":"ignored"}"#,
         );
         let label = parse_label(&request(), &body).unwrap();
         assert_eq!(label.proposed_intent.as_deref(), Some("pair_programming"));
@@ -383,7 +394,7 @@ mod tests {
     #[test]
     fn confidence_is_clamped_into_range() {
         let body = response_body(
-            r#"{"intent":"debug_or_fix","domain":"software_engineering","depth":2,"delegation":"none","confidence":4.2,"proposed_intent":null,"proposed_domain":null}"#,
+            r#"{"intent":"debug_or_fix","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":4.2,"proposed_intent":null,"proposed_domain":null}"#,
         );
         assert_eq!(parse_label(&request(), &body).unwrap().confidence, 1.0);
     }

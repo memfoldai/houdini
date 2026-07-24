@@ -63,6 +63,7 @@ pub fn persist(
             domain: &label.domain,
             depth: label.depth,
             delegation: &label.delegation,
+            delegate_tool: &label.delegate_tool,
             confidence: label.confidence,
             analyzed_at_ms: now_ms,
         };
@@ -146,6 +147,7 @@ mod tests {
             domain: "software_engineering".to_string(),
             depth: 2,
             delegation: "none".to_string(),
+            delegate_tool: "none".to_string(),
             confidence: 0.9,
             proposed_intent: proposed.map(str::to_string),
             proposed_domain: None,

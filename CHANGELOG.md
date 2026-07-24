@@ -11,8 +11,9 @@ include behavior changes.
 - **Usage analytics.** A background job labels each of your own requests against
   a versioned, closed taxonomy and stores the result locally, so team-wide "what
   is AI being used for" can be answered without anyone reading messages. Four
-  facets per turn: intent, domain, research depth (1 to 4), and delegation,
-  where `agent_run` records one AI being driven by another. New tables
+  facets per turn: intent, domain, research depth (1 to 4), delegation, and
+  `delegate_tool`, which names **which** AI was driven so nested usage is a real
+  edge rather than a flag. New tables
   `turn_labels` and `label_candidates` (schema version 7, additive).
 - **Out-of-taxonomy proposals.** A request that fits no existing label is
   recorded as `other` plus a proposal with an observation count, rather than

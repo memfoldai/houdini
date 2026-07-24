@@ -18,10 +18,13 @@ against a closed set of labels. Four facets are recorded per turn:
 | `domain` | 17 ids | What subject the request belongs to |
 | `depth` | 1 to 4 | A single lookup, an iterative dig, a synthesis across sources, or autonomous multi-step work |
 | `delegation` | `none`, `tool_call`, `agent_run` | Whether the person drove this AI directly, had it call a tool, or had it drive **another** AI |
+| `delegate_tool` | `alma`, `claude_code`, `codex`, `claude`, `chatgpt`, `gemini`, `copilot`, `cursor`, `devin`, `none`, `other` | **Which** AI was driven |
 
-`delegation: agent_run` is how nested usage becomes data. Asking Claude Code to
-have Codex do the work is one request with one label, and it is counted as such
-rather than inferred later from two unrelated transcripts.
+`delegation` plus `delegate_tool` is how nested usage becomes an edge. "Get Alma
+to run the deploy" is recorded as `agent_run` **to `alma`**, read from the
+request itself, so the caller and the callee are both known on one row. Each
+tool still writes its own transcript, so the work also shows up as that tool's
+own usage; the edge is what links them.
 
 ## Why a taxonomy and not clustering
 

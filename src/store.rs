@@ -81,6 +81,7 @@ CREATE TABLE IF NOT EXISTS turn_labels (
     domain           TEXT NOT NULL,
     depth            INTEGER NOT NULL CHECK (depth BETWEEN 1 AND 4),
     delegation       TEXT NOT NULL CHECK (delegation IN ('none','tool_call','agent_run')),
+    delegate_tool    TEXT NOT NULL DEFAULT 'none',
     confidence       REAL NOT NULL,
     analyzed_at      INTEGER NOT NULL,
     UNIQUE (session_id, seq, taxonomy_version, prompt_version)
@@ -101,6 +102,7 @@ CREATE TABLE IF NOT EXISTS label_candidates (
     UNIQUE (taxonomy_version, facet, proposed)
 );
 CREATE INDEX IF NOT EXISTS idx_label_candidates_seen ON label_candidates(last_seen_at);
+CREATE INDEX IF NOT EXISTS idx_turn_labels_delegate ON turn_labels(delegate_tool);
 "#];
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
@@ -415,8 +417,8 @@ impl Store {
         let changed = self.conn.execute(
             "INSERT INTO turn_labels
              (session_id, seq, taxonomy_version, prompt_version, model,
-              intent, domain, depth, delegation, confidence, analyzed_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+              intent, domain, depth, delegation, delegate_tool, confidence, analyzed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
              ON CONFLICT (session_id, seq, taxonomy_version, prompt_version) DO NOTHING",
             params![
                 label.session_id,
@@ -428,6 +430,7 @@ impl Store {
                 label.domain,
                 label.depth,
                 label.delegation,
+                label.delegate_tool,
                 label.confidence,
                 label.analyzed_at_ms,
             ],
@@ -461,14 +464,14 @@ impl Store {
         let mut stmt = self.conn.prepare(
             "SELECT strftime('%Y-%m-%d', t.ts / 1000, 'unixepoch') AS day,
                     s.tool, s.provider, s.surface, s.model,
-                    l.intent, l.domain, l.depth, l.delegation,
+                    l.intent, l.domain, l.depth, l.delegation, l.delegate_tool,
                     COUNT(*), COUNT(DISTINCT l.session_id), SUM(LENGTH(t.redacted_text))
              FROM turn_labels l
              JOIN sessions s ON s.id = l.session_id
              JOIN turns t ON t.session_id = l.session_id AND t.seq = l.seq
              WHERE l.taxonomy_version = ?1
              GROUP BY day, s.tool, s.provider, s.surface, s.model,
-                      l.intent, l.domain, l.depth, l.delegation
+                      l.intent, l.domain, l.depth, l.delegation, l.delegate_tool
              ORDER BY day DESC, COUNT(*) DESC",
         )?;
         let rows = stmt.query_map(params![taxonomy_version], |r| {
@@ -482,9 +485,10 @@ impl Store {
                 domain: r.get(6)?,
                 depth: r.get(7)?,
                 delegation: r.get(8)?,
-                turns: r.get(9)?,
-                sessions: r.get(10)?,
-                chars: r.get(11)?,
+                delegate_tool: r.get(9)?,
+                turns: r.get(10)?,
+                sessions: r.get(11)?,
+                chars: r.get(12)?,
             })
         })?;
         rows.collect()
@@ -571,6 +575,7 @@ pub struct TurnLabelRecord<'a> {
     pub domain: &'a str,
     pub depth: i64,
     pub delegation: &'a str,
+    pub delegate_tool: &'a str,
     pub confidence: f64,
     pub analyzed_at_ms: i64,
 }
@@ -597,6 +602,7 @@ pub struct LabelCell {
     pub domain: String,
     pub depth: i64,
     pub delegation: String,
+    pub delegate_tool: String,
     pub turns: i64,
     pub sessions: i64,
     pub chars: i64,
@@ -837,6 +843,7 @@ mod tests {
                         domain: crate::taxonomy::DOMAINS[0],
                         depth,
                         delegation,
+                        delegate_tool: crate::taxonomy::NONE,
                         confidence: 0.5,
                         analyzed_at_ms: 0,
                     })

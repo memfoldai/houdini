@@ -1,4 +1,4 @@
-pub const TAXONOMY_VERSION: i64 = 1;
+pub const TAXONOMY_VERSION: i64 = 2;
 
 pub const OTHER: &str = "other";
 
@@ -47,6 +47,29 @@ pub const DOMAINS: &[&str] = &[
 
 pub const DELEGATIONS: &[&str] = &["none", "tool_call", "agent_run"];
 
+pub const NONE: &str = "none";
+
+/// Who the request hands work to. Read from the request text by the labeler,
+/// so a tool driving another tool is recorded as an edge rather than inferred
+/// later from two unrelated transcripts.
+pub const DELEGATE_TARGETS: &[&str] = &[
+    NONE,
+    "alma",
+    "claude_code",
+    "codex",
+    "claude",
+    "chatgpt",
+    "gemini",
+    "copilot",
+    "cursor",
+    "devin",
+    OTHER,
+];
+
+pub fn is_delegate_target(value: &str) -> bool {
+    DELEGATE_TARGETS.contains(&value)
+}
+
 pub const MIN_DEPTH: i64 = 1;
 pub const MAX_DEPTH: i64 = 4;
 
@@ -72,7 +95,12 @@ mod tests {
 
     #[test]
     fn every_label_is_a_stable_snake_case_id() {
-        for label in INTENTS.iter().chain(DOMAINS.iter()).chain(DELEGATIONS.iter()) {
+        for label in INTENTS
+            .iter()
+            .chain(DOMAINS.iter())
+            .chain(DELEGATIONS.iter())
+            .chain(DELEGATE_TARGETS.iter())
+        {
             assert!(
                 label
                     .chars()
@@ -90,13 +118,22 @@ mod tests {
 
     #[test]
     fn label_sets_have_no_duplicates() {
-        for set in [INTENTS, DOMAINS, DELEGATIONS] {
+        for set in [INTENTS, DOMAINS, DELEGATIONS, DELEGATE_TARGETS] {
             let mut sorted = set.to_vec();
             sorted.sort_unstable();
             let before = sorted.len();
             sorted.dedup();
             assert_eq!(before, sorted.len());
         }
+    }
+
+    #[test]
+    fn a_delegated_run_can_name_the_tool_it_drove() {
+        assert!(is_delegate_target("claude_code"));
+        assert!(is_delegate_target("codex"));
+        assert!(is_delegate_target(NONE));
+        assert!(is_delegate_target(OTHER));
+        assert!(!is_delegate_target("some_agent"));
     }
 
     #[test]
