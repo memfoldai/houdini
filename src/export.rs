@@ -82,9 +82,6 @@ pub fn export_snapshot(store: &Store, device: &str, dir: &Path) -> std::io::Resu
     out.flush()?;
     Ok(path)
 }
-
-/// Write one flat row per attributed action to `actions.jsonl` — the agent-vs-
-/// human record, uniform regardless of source (agent transcript or human capture).
 pub fn export_actions(store: &Store, device: &str, dir: &Path) -> std::io::Result<PathBuf> {
     fs::create_dir_all(dir)?;
     let path = dir.join("actions.jsonl");

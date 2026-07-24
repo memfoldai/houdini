@@ -281,9 +281,6 @@ fn start_watcher(
         }
     })
     .ok()?;
-    // Every root any ingestor reads must be watched, or new files there only get
-    // picked up on the slow timer poll instead of via FSEvents. Keep this in sync
-    // with the openclaw chat adapter roots and the action ingestor roots.
     let mut paths: Vec<PathBuf> = [
         ".claude/projects",
         ".codex",
@@ -558,9 +555,6 @@ fn refresh_menu(rt: &Rc<Runtime>, glyph: Glyph, now_ms: i64, stats: &ActivitySta
             relative_time(stats.last_activity_ms, now_ms)
         ));
     }
-
-    // When agent-vs-human actions have been recorded, the attribution split is
-    // the headline the app exists for — surface it in place of the chat count.
     if let Some(summary) = houdini::summary::format_action_summary(
         &rt.store
             .action_stats(now_ms - RECENT_WINDOW_MS)

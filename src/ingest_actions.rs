@@ -1,11 +1,3 @@
-//! Ingest agent *actions* from almaclaw session transcripts into the store.
-//!
-//! This complements the AI-chat [`crate::ingest::Ingestor`]: instead of
-//! prompt/response turns, it scans almaclaw's JSONL sessions for the agent's
-//! tool-call actions and persists them as `actor = agent`. The human side of the
-//! same apps is recorded separately (browser extension / `AXObserver`), so both
-//! actors end up labeled in the one `actions` table for attribution.
-
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -13,17 +5,8 @@ use std::path::{Path, PathBuf};
 use crate::agent_actions;
 use crate::ingest::find_files;
 use crate::store::Store;
-
-/// almaclaw/openclaw state directories to scan, relative to the home dir. The
-/// agent stores session transcripts under `<state-dir>/agents/<id>/sessions/`;
-/// the default state dir is `~/.openclaw` (see almaclaw `resolveStateDir`), which
-/// is the same location Houdini's openclaw chat adapter already reads.
 const HOMES: &[&str] = &[".openclaw", ".openclaw-user", ".openclaw-dev"];
-
-/// Provenance tag stored on every action this ingestor writes.
 pub const SOURCE: &str = "almaclaw";
-
-/// `(mtime_ms, size)` — a cheap change signal so unchanged files are skipped.
 type Fingerprint = (i64, u64);
 
 pub struct ActionIngestor {
@@ -40,10 +23,6 @@ impl ActionIngestor {
             seen: HashMap::new(),
         }
     }
-
-    /// State directories to scan. Honors almaclaw's own overrides:
-    /// `$OPENCLAW_STATE_DIR` (the state dir itself) or `$OPENCLAW_HOME` (its
-    /// parent), falling back to the default `~/.openclaw*` locations.
     fn roots(&self) -> Vec<PathBuf> {
         if let Some(dir) = env_nonempty("OPENCLAW_STATE_DIR") {
             return vec![PathBuf::from(dir)];
@@ -53,14 +32,9 @@ impl ActionIngestor {
             .unwrap_or_else(|| self.home.clone());
         HOMES.iter().map(|h| base.join(h)).collect()
     }
-
-    /// Directories this ingestor reads, for the FS watcher to observe.
     pub fn watch_dirs(&self) -> Vec<PathBuf> {
         self.roots()
     }
-
-    /// Scan for new/changed transcripts and persist their agent actions.
-    /// Returns the number of newly stored actions.
     pub fn poll(&mut self, store: &Store) -> usize {
         let mut added = 0;
         for root in self.roots() {
@@ -90,8 +64,6 @@ impl ActionIngestor {
 fn is_session_file(name: &str) -> bool {
     name.ends_with(".jsonl") && !name.ends_with(".trajectory.jsonl")
 }
-
-/// Read an environment variable, returning `None` when it is unset or blank.
 fn env_nonempty(key: &str) -> Option<String> {
     std::env::var(key)
         .ok()
@@ -142,8 +114,6 @@ mod tests {
         assert!(rows
             .iter()
             .all(|r| r.actor == "agent" && r.source == SOURCE));
-
-        // A grown transcript re-scans; only the genuinely new action is stored.
         let mut grown = SAMPLE.to_string();
         grown.push_str("{\"type\":\"message\",\"message\":{\"role\":\"assistant\",\"content\":[{\"type\":\"toolCall\",\"id\":\"tc3\",\"name\":\"bdc__cua\",\"arguments\":{\"tool\":\"click\",\"args\":{\"appName\":\"Mail\"}}}],\"timestamp\":3000}}\n");
         fs::write(&f, &grown).unwrap();

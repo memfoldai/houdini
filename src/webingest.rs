@@ -8,12 +8,7 @@ use crate::redact;
 use crate::store::{ActionRecord, Role, SessionUpsert, Store, PAUSE_UNTIL_KEY};
 
 pub const MAX_MESSAGE_BYTES: usize = 64 * 1024 * 1024;
-
-/// Provenance tag for actions captured from the human's own browser.
 const HUMAN_SOURCE: &str = "web-extension";
-
-/// Workspace hosts the human-action capture is allowed to record. Mirrors the
-/// extension's content-script `matches`; anything else is dropped as a safety net.
 const HUMAN_APPS: &[&str] = &[
     "mail.google.com",
     "drive.google.com",
@@ -46,11 +41,8 @@ struct WebActionBatch {
 
 #[derive(Deserialize)]
 struct WebAction {
-    /// Unique id the extension assigns per action; the store dedup key.
     ext_id: String,
-    /// Host of the app the action happened in, e.g. `"mail.google.com"`.
     app: String,
-    /// Normalized verb, e.g. `"send"`, `"archive"`, `"delete"`.
     action: String,
     kind: Option<String>,
     #[serde(default)]
@@ -75,10 +67,6 @@ pub fn write_frame<W: Write>(w: &mut W, payload: &[u8]) -> std::io::Result<()> {
     w.write_all(payload)?;
     w.flush()
 }
-
-/// Entry point for a frame from the browser extension. Routes an action batch
-/// (`{"actions":[..]}`) to human-action capture, otherwise treats it as a web
-/// chat message. Both paths honor the pause switch.
 pub fn ingest(store: &Store, bytes: &[u8]) -> Result<usize, String> {
     let value: Value = serde_json::from_slice(bytes).map_err(|e| format!("bad json: {e}"))?;
     if value.get("actions").is_some() {
@@ -89,9 +77,6 @@ pub fn ingest(store: &Store, bytes: &[u8]) -> Result<usize, String> {
     let msg: WebMessage = serde_json::from_value(value).map_err(|e| format!("bad json: {e}"))?;
     ingest_chat(store, msg)
 }
-
-/// Store human-performed app actions (`actor = human`), redacting free text and
-/// dropping anything outside the allowed workspace hosts. Idempotent per `ext_id`.
 fn ingest_actions(store: &Store, batch: &WebActionBatch) -> Result<usize, String> {
     if is_paused(store) {
         return Ok(0);
@@ -266,9 +251,7 @@ mod tests {
             {"ext_id":"e2","app":"drive.google.com","action":"delete","kind":"mutating","ts_ms":20},
             {"ext_id":"e3","app":"evil.example.com","action":"send","ts_ms":30}
         ]}"#;
-        // The disallowed host is dropped; the two workspace actions are stored.
         assert_eq!(ingest(&store, json.as_bytes()).unwrap(), 2);
-        // Re-sending the same batch adds nothing (dedup by ext_id).
         assert_eq!(ingest(&store, json.as_bytes()).unwrap(), 0);
 
         let rows = store.all_actions().unwrap();
@@ -278,7 +261,10 @@ mod tests {
             .all(|r| r.actor == "human" && r.source == "web-extension"));
         let send = rows.iter().find(|r| r.action == "send").unwrap();
         assert_eq!(send.app.as_deref(), Some("mail.google.com"));
-        assert_eq!(send.target_redacted, None, "human action details are not stored");
+        assert_eq!(
+            send.target_redacted, None,
+            "human action details are not stored"
+        );
     }
 
     #[test]

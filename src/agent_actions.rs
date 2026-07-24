@@ -1,34 +1,12 @@
-//! Agent action extraction from almaclaw session transcripts.
-//!
-//! almaclaw (openclaw lineage) records every turn of an agent session as one
-//! JSON line whose `message` is an llm-core `Message`. Assistant turns carry
-//! `toolCall` content blocks (`{"type":"toolCall","id":..,"name":..,"arguments":..}`);
-//! each one is a concrete action the agent took in some app:
-//!
-//! * native macOS — `bdc__cua` (accessibility-tree driver: click / type_text /
-//!   set_value / press_key / hotkey / scroll, plus read-only observers like
-//!   get_window_state) and `bdc__run_applescript` (AppleScript/JXA source).
-//! * web — the browser tools (navigate / act / page_state), keyed by URL host.
-//!
-//! This module normalizes those tool calls into an [`AgentAction`] stream — the
-//! *agent* side of agent-vs-human attribution. The human side is captured
-//! separately (browser extension for web, `AXObserver` for native) and the two
-//! are diffed downstream. Everything here is pure parsing over the transcript;
-//! no store or macOS dependency, so it runs under `cargo test` anywhere.
-
 use serde_json::Value;
 
 use crate::attribution::Actor;
 use crate::redact;
 use crate::store::{ActionRecord, Store};
 use crate::timestamp::parse_rfc3339_ms;
-
-/// Whether an action changes app state (attributable "usage") or only observes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ActionKind {
-    /// Mutates state: click, type, set value, run script, navigate, ...
     Mutating,
-    /// Observation only: read the AX tree, screenshot, list windows/apps.
     ReadOnly,
 }
 
@@ -40,28 +18,17 @@ impl ActionKind {
         }
     }
 }
-
-/// One normalized action the agent performed, extracted from a `toolCall`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AgentAction {
-    /// Stable, unique id for this action — the transcript's `toolCall` id (or a
-    /// synthesized one if absent). Used as the store dedup key across re-ingest.
     pub id: String,
-    /// Session id from the transcript header (falls back to the tool-call id).
     pub session_id: String,
-    /// Raw tool name as recorded, e.g. `"bdc__cua"` or `"bdc__run_applescript"`.
     pub tool: String,
-    /// Normalized verb, e.g. `"click"`, `"type_text"`, `"run_applescript"`.
     pub action: String,
-    /// Target app / bundle id / web host, when resolvable from the arguments.
     pub app: Option<String>,
-    /// Human-readable detail: element ref, URL, script summary, typed value.
     pub target: Option<String>,
     pub kind: ActionKind,
     pub ts_ms: i64,
 }
-
-/// cua-driver tools that only read state; everything else is treated as mutating.
 const CUA_READ_ONLY: &[&str] = &[
     "get_window_state",
     "get_accessibility_tree",
@@ -69,16 +36,9 @@ const CUA_READ_ONLY: &[&str] = &[
     "list_windows",
     "screenshot",
 ];
-
-/// Parse a whole almaclaw JSONL session into the agent actions it contains.
-///
-/// Non-JSON lines, non-message entries, and non-tool-call content are skipped,
-/// mirroring the tolerant parsing the openclaw transcript adapter uses.
 pub fn parse_session(body: &str) -> Vec<AgentAction> {
     let mut session_id: Option<String> = None;
     let mut out: Vec<AgentAction> = Vec::new();
-    // Counter for synthesizing ids when a tool-call has none, so every action
-    // still gets a stable unique dedup key within the session.
     let mut synth = 0usize;
 
     for line in body.lines() {
@@ -89,17 +49,12 @@ pub fn parse_session(body: &str) -> Vec<AgentAction> {
         let Ok(v) = serde_json::from_str::<Value>(line) else {
             continue;
         };
-
-        // Session header carries the stable id we attribute actions to.
         if v.get("type").and_then(Value::as_str) == Some("session") {
             if session_id.is_none() {
                 session_id = v.get("id").and_then(Value::as_str).map(str::to_string);
             }
             continue;
         }
-
-        // Both `{"type":"message","message":{..}}` and bare `{"message":{..}}`
-        // shapes appear in the wild; key off the presence of `message`.
         let Some(message) = v.get("message") else {
             continue;
         };
@@ -151,13 +106,6 @@ pub fn parse_session(body: &str) -> Vec<AgentAction> {
 
     out
 }
-
-/// Persist parsed agent actions as attributed records (`actor = agent`),
-/// redacting the free-text target first per the "redact before storage" rule.
-///
-/// Idempotent by (session, action id): re-parsing a transcript that has grown
-/// since the last poll only inserts the genuinely new actions, while identical
-/// tool-call ids in *different* sessions stay distinct. Returns how many were added.
 pub fn persist(store: &Store, source: &str, actions: &[AgentAction]) -> rusqlite::Result<usize> {
     let mut added = 0;
     for a in actions {
@@ -165,8 +113,6 @@ pub fn persist(store: &Store, source: &str, actions: &[AgentAction]) -> rusqlite
             .target
             .as_deref()
             .map(|t| truncate(&redact::redact_deterministic(t).text, 120));
-        // Scope the dedupe key to the session so a call id reused across two
-        // sessions (or a synthesized id colliding by timestamp) is not dropped.
         let ext_id = format!("{}\u{1f}{}", a.session_id, a.id);
         let rec = ActionRecord {
             ext_id: &ext_id,
@@ -186,15 +132,6 @@ pub fn persist(store: &Store, source: &str, actions: &[AgentAction]) -> rusqlite
     }
     Ok(added)
 }
-
-/// Map a raw `(tool_name, arguments)` pair to a normalized action, or `None` if
-/// the tool is not an app/UI action we attribute.
-///
-/// Only tools that actually drive an application count: the native drivers
-/// (`bdc__cua`, `bdc__run_applescript`) and the browser tools. Everything else —
-/// `web_fetch`, `web_search`, `sessions_history`, `sessions_spawn`, and any other
-/// agent-internal operation — is deliberately ignored rather than guessed at, so
-/// it never inflates the attribution metric.
 fn normalize(
     name: &str,
     args: &Value,
@@ -206,13 +143,10 @@ fn normalize(
                 "run_applescript".to_string(),
                 applescript_app(script),
                 Some(script.trim().to_string()),
-                // A script could be a pure read, but AppleScript is opaque to us,
-                // so we conservatively treat it as state-changing.
                 ActionKind::Mutating,
             ))
         }
         "bdc__cua" => {
-            // `{ tool: <driver action>, args: { appName, element_index, value, .. } }`
             let driver = args.get("tool").and_then(Value::as_str).unwrap_or("cua");
             let inner = args.get("args").unwrap_or(&Value::Null);
             let app = string_field(inner, &["appName", "bundleId", "bundle_id"])
@@ -243,15 +177,9 @@ fn normalize(
             };
             Some((action, app, url, kind))
         }
-        // Not an app/UI action — ignore it (do not count agent-internal tools).
         _ => None,
     }
 }
-
-/// Pull the target application out of an AppleScript/JXA source string.
-///
-/// Handles `tell application "Mail"`, `application id "com.apple.mail"`, and the
-/// JXA `Application("Safari")` form.
 fn applescript_app(script: &str) -> Option<String> {
     for marker in ["application id \"", "application \"", "Application(\""] {
         if let Some(rest) = script.find(marker).map(|i| &script[i + marker.len()..]) {
@@ -390,7 +318,6 @@ mod tests {
         assert_eq!(actions[0].id, "tc1");
 
         assert_eq!(persist(&store, "almaclaw", &actions).unwrap(), 1);
-        // Re-persisting the same (grown) transcript adds nothing new.
         assert_eq!(persist(&store, "almaclaw", &actions).unwrap(), 0);
 
         let rows = store.all_actions().unwrap();
@@ -430,7 +357,6 @@ mod tests {
 
     #[test]
     fn non_app_tools_are_ignored() {
-        // web_search / sessions_history etc. are agent-internal, not app actions.
         let body = r#"
 {"type":"session","id":"sx","timestamp":"2026-07-20T10:00:00.000Z"}
 {"message":{"role":"assistant","content":[{"type":"toolCall","id":"w1","name":"web_search","arguments":{"query":"cats"}}],"timestamp":10}}
@@ -454,7 +380,6 @@ mod tests {
 "#
             )
         };
-        // Two different sessions both use tool-call id "tc1".
         let a = parse_session(&session("sess-A"));
         let b = parse_session(&session("sess-B"));
         assert_eq!(persist(&store, "almaclaw", &a).unwrap(), 1);
@@ -464,7 +389,6 @@ mod tests {
             "the second session's action is kept, not deduped away"
         );
         assert_eq!(store.all_actions().unwrap().len(), 2);
-        // Re-persisting session A still dedupes within its own session.
         assert_eq!(persist(&store, "almaclaw", &a).unwrap(), 0);
     }
 

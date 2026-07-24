@@ -1,12 +1,6 @@
-//! One-line agent-vs-human summaries for the menu bar, built from
-//! [`crate::store::ActionStat`] rows. Kept portable (no macOS deps) so it is
-//! unit-tested by `cargo test` on any platform.
-
 use std::collections::HashMap;
 
 use crate::store::ActionStat;
-
-/// Human-friendly app label for the menu; falls back to the raw host/app string.
 fn app_label(app: &str) -> &str {
     match app {
         "mail.google.com" => "Gmail",
@@ -18,13 +12,7 @@ fn app_label(app: &str) -> &str {
         other => other,
     }
 }
-
-/// Build a one-line summary for the busiest app, counting only state-changing
-/// (`mutating`) actions. Returns `None` when nothing attributable is recorded.
-///
-/// Example: `"Gmail — 12 agent · 5 you"`.
 pub fn format_action_summary(stats: &[ActionStat]) -> Option<String> {
-    // app -> (agent_count, human_count)
     let mut by_app: HashMap<&str, (i64, i64)> = HashMap::new();
     for s in stats {
         if s.kind != "mutating" {
