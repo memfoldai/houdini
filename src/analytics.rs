@@ -7,6 +7,7 @@ pub const PROMPT_VERSION: i64 = 1;
 
 pub const DEFAULT_BASE_URL: &str = "https://litellm.memfold.ai";
 pub const DEFAULT_MODEL: &str = "gpt-5.5";
+pub const DEFAULT_BATCH_LIMIT_HINT: i64 = 25;
 
 const REQUEST_TIMEOUT_S: u64 = 90;
 const CONNECT_TIMEOUT_S: u64 = 15;

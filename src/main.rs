@@ -3,6 +3,7 @@ mod app;
 #[cfg(target_os = "macos")]
 mod browserhost;
 #[cfg(target_os = "macos")]
+mod analyze_once;
 mod diagnose;
 #[cfg(target_os = "macos")]
 mod keychain;
@@ -46,6 +47,11 @@ fn main() {
                 std::process::exit(1);
             }
         }
+        return;
+    }
+
+    if args.iter().any(|a| a == "--analyze-once") {
+        analyze_once::run();
         return;
     }
 

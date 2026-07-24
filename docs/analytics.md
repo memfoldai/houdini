@@ -69,14 +69,48 @@ session content.
 | `analytics_interval_ms` | `3600000` | How often the job wakes |
 | `analytics_batch_limit` | `25` | Turns per batch |
 
-The API key lives in the login Keychain, never in the config file:
+## Getting the key onto a machine
+
+The key lives in the login Keychain, never in the config file and never in the
+app bundle. **It is deliberately not compiled into the binary**: releases are
+public, so a baked key would be extractable from the DMG by anyone who
+downloads it. Three ways in, pick per machine:
+
+**Menu bar, no terminal.** Copy the key, then click
+*Turn on analytics: copy key, then click here*. The item reads the clipboard,
+validates it, stores it, and labeling starts on the next tick. The menu item
+then reads *Analytics on* and can be used again to rotate the key.
+
+**Scripted or MDM.** Reads stdin, so the key never reaches the process list:
 
 ```sh
 printf %s "$LITELLM_API_KEY" | houdini --set-analytics-key
 ```
 
+**Backfill on demand.** Label a batch immediately instead of waiting for the
+hourly tick, which is how you work through a history the first time:
+
+```sh
+houdini --analyze-once 200
+```
+
 Without a key the job stays off and says so once in the log. Pausing recording
 pauses labeling too.
+
+## Why the key is on each machine rather than the data on one machine
+
+The alternative is routing every laptop's text to one operator machine that
+holds the key. That is worse on three counts: coworkers' work conversations
+would come to rest on a colleague's laptop rather than only reaching the
+organization's own proxy; the labeling job would depend on that laptop being
+awake and reachable, so it would stall silently whenever it was not; and it
+would need an internet-facing ingest endpoint with its own authentication,
+which is real attack surface for no analytical gain. Keeping the key next to
+the data means each machine talks only to the proxy the team already uses.
+
+Bound the exposure at the proxy instead: a dedicated LiteLLM virtual key with
+`models` restricted to the labeling model, a `max_budget`, and rate limits.
+Rotation is `/key/regenerate` with a grace period, then re-provision.
 
 ## Cost and pacing
 

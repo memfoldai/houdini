@@ -18,8 +18,12 @@ include behavior changes.
   recorded as `other` plus a proposal with an observation count, rather than
   becoming an invented category. Proposals are promoted into the next taxonomy
   version by a human, so no two machines can mint near-duplicate labels.
-- `houdini --set-analytics-key` stores the proxy key in the login Keychain,
-  reading it from stdin so it never reaches the process list.
+- Three ways to provision the proxy key, none of them compiling it into the
+  binary (releases are public, so a baked key would ship to the world): a menu
+  item that reads it from the clipboard with no terminal, `--set-analytics-key`
+  reading stdin for MDM and scripts, and `--analyze-once [n]` to label a batch
+  immediately instead of waiting for the hourly tick. Setting the key activates
+  labeling without a restart.
 - `data/analytics.jsonl` in the export: aggregate counts per label combination
   with the taxonomy, prompt, and model versions attached. No text.
 - New doc: `docs/analytics.md`.
