@@ -8,11 +8,12 @@ const CODE = readFileSync(fileURLToPath(new URL("../capture_actions.js", import.
 
 // Load capture_actions.js into a sandbox that mocks the page, capturing the
 // click handler it registers and the messages it posts.
-function load(hostname) {
+function load(hostname, options = {}) {
   const posted = [];
   let handler = null;
   const sandbox = {
     location: { hostname },
+    navigator: { webdriver: options.webdriver === true },
     document: {
       addEventListener: (type, fn) => {
         if (type === "click") handler = fn;
@@ -29,7 +30,10 @@ function load(hostname) {
   vm.runInContext(CODE, sandbox);
   const clickLabel = (label) =>
     handler &&
-    handler({ target: { getAttribute: (k) => (k === "aria-label" ? label : null), parentElement: null } });
+    handler({
+      isTrusted: options.trusted !== false,
+      target: { getAttribute: (k) => (k === "aria-label" ? label : null), parentElement: null },
+    });
   return { posted, clickLabel, active: () => handler !== null, matchVerb: sandbox.__bbMatchVerb };
 }
 
@@ -96,6 +100,15 @@ test("ignores clicks on unrecognized controls", () => {
   const h = load("drive.google.com");
   h.clickLabel("Sort direction");
   assert.equal(h.posted.length, 0);
+});
+
+test("does not record untrusted or automation-controlled action clicks", () => {
+  const scripted = load("mail.google.com", { trusted: false });
+  scripted.clickLabel("Send");
+  assert.equal(scripted.posted.length, 0);
+
+  const automated = load("mail.google.com", { webdriver: true });
+  assert.equal(automated.active(), false);
 });
 
 test("does nothing on a non-workspace host", () => {

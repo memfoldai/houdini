@@ -35,12 +35,14 @@
 
   const site = APPS.find((a) => location.hostname === a.app);
   if (!site) return;
+  if (navigator.webdriver) return;
   const PAGE_ID = Math.random().toString(36).slice(2);
   let counter = 0;
 
   document.addEventListener(
     "click",
     (ev) => {
+      if (!ev.isTrusted) return;
       const info = classify(ev.target);
       if (info) emit(info);
     },
