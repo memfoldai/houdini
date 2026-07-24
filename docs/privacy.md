@@ -20,8 +20,17 @@ message text**.
 (`mutating`/`read_only`), a timestamp, and a **redacted** detail. This is what
 powers agent-vs-human attribution. Agent actions are read from the agent's own
 local transcripts; human actions are reported by the browser extension on the
-tracked sites. Only the action itself is recorded — its verb and the control's
-label — never the emails, files, or documents it acts on.
+tracked sites.
+
+The **detail** field's contents depend on the source:
+
+- **Human (extension) actions** store only the clicked control's accessible label
+  (e.g. `"Archive"`) — never the emails, files, or documents acted on.
+- **Agent actions** store a redacted preview of the tool's arguments, which may
+  include a browser URL, an AppleScript/JXA snippet, a typed value, a file path,
+  or a query string. Redaction removes known secrets and PII patterns before
+  storage (see below), but does **not** guarantee removal of other potentially
+  sensitive text such as document titles, file names, or non-PII URLs.
 
 Sources: CLI/agent transcripts already on disk (Claude Code, Codex,
 OpenClaw/almaclaw) and, if the extension is loaded, web chats (ChatGPT, Claude,
