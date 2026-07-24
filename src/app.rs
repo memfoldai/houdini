@@ -541,17 +541,19 @@ fn refresh_menu(rt: &Rc<Runtime>, glyph: Glyph, now_ms: i64, stats: &ActivitySta
     };
     rt.status_item.set_text(status);
 
-    if stats.recent_interactions == 0 && stats.last_activity_ms.is_none() {
+    if stats.recent_interactions == 0 && stats.recent_actions == 0 {
         rt.detail_item.set_text("Nothing recorded yet today");
     } else {
         rt.detail_item.set_text(format!(
-            "{} AI session{} today · last {}",
+            "{} AI session{} · {} action{} today · last {}",
             stats.recent_interactions,
             if stats.recent_interactions == 1 {
                 ""
             } else {
                 "s"
             },
+            stats.recent_actions,
+            if stats.recent_actions == 1 { "" } else { "s" },
             relative_time(stats.last_activity_ms, now_ms)
         ));
     }

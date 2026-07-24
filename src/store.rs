@@ -233,12 +233,21 @@ impl Store {
             params![since_ms],
             |r| r.get(0),
         )?;
-        let last: Option<i64> =
+        let actions: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM actions WHERE ts >= ?1",
+            params![since_ms],
+            |r| r.get(0),
+        )?;
+        let last_session: Option<i64> =
             self.conn
                 .query_row("SELECT MAX(ended_at) FROM sessions", [], |r| r.get(0))?;
+        let last_action: Option<i64> =
+            self.conn
+                .query_row("SELECT MAX(ts) FROM actions", [], |r| r.get(0))?;
         Ok(ActivityStats {
             recent_interactions: interactions,
-            last_activity_ms: last,
+            recent_actions: actions,
+            last_activity_ms: last_session.max(last_action),
         })
     }
 
@@ -355,6 +364,7 @@ pub struct SessionUpsert<'a> {
 #[derive(Debug, Clone, Default)]
 pub struct ActivityStats {
     pub recent_interactions: i64,
+    pub recent_actions: i64,
     pub last_activity_ms: Option<i64>,
 }
 
@@ -506,6 +516,31 @@ mod tests {
         assert_eq!(human.count, 1);
         let recent = s.action_stats(250).unwrap();
         assert_eq!(recent.iter().map(|st| st.count).sum::<i64>(), 1);
+    }
+
+    #[test]
+    fn activity_stats_include_action_only_activity() {
+        use crate::attribution::Actor;
+        let s = Store::open_in_memory().unwrap();
+        let rec = ActionRecord {
+            ext_id: "h1",
+            source: "web-extension",
+            session_id: "",
+            actor: Actor::Human,
+            app: Some("mail.google.com"),
+            tool: "browser",
+            action: "send",
+            kind: "mutating",
+            target_redacted: None,
+            ts_ms: 10_000,
+        };
+
+        assert!(s.insert_action(&rec).unwrap());
+
+        let stats = s.activity_stats(9_000).unwrap();
+        assert_eq!(stats.recent_interactions, 0);
+        assert_eq!(stats.recent_actions, 1);
+        assert_eq!(stats.last_activity_ms, Some(10_000));
     }
 
     #[test]
