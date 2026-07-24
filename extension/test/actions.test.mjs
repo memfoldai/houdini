@@ -62,6 +62,7 @@ test("emits an action payload for a recognized click", () => {
   assert.equal(msg.actions[0].app, "mail.google.com");
   assert.equal(msg.actions[0].action, "send");
   assert.equal(msg.actions[0].kind, "mutating");
+  assert.equal(msg.actions[0].target, undefined);
   assert.match(msg.actions[0].ext_id, /^mail\.google\.com:/);
 });
 

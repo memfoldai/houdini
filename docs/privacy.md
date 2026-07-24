@@ -24,8 +24,9 @@ tracked sites.
 
 The **detail** field's contents depend on the source:
 
-- **Human (extension) actions** store only the clicked control's accessible label
-  (e.g. `"Archive"`) — never the emails, files, or documents acted on.
+- **Human (extension) actions** store the normalized action verb, not the clicked
+  control's raw label, so emails, files, and documents named in UI labels are not
+  persisted as action detail.
 - **Agent actions** store a redacted preview of the tool's arguments, which may
   include a browser URL, an AppleScript/JXA snippet, a typed value, a file path,
   or a query string. Redaction removes known secrets and PII patterns before

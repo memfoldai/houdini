@@ -52,9 +52,6 @@ struct WebAction {
     app: String,
     /// Normalized verb, e.g. `"send"`, `"archive"`, `"delete"`.
     action: String,
-    #[serde(default)]
-    target: Option<String>,
-    #[serde(default)]
     kind: Option<String>,
     #[serde(default)]
     session_id: Option<String>,
@@ -108,10 +105,6 @@ fn ingest_actions(store: &Store, batch: &WebActionBatch) -> Result<usize, String
             Some("read_only") => "read_only",
             _ => "mutating",
         };
-        let target = a
-            .target
-            .as_deref()
-            .map(|t| redact::redact_deterministic(t).text);
         let rec = ActionRecord {
             ext_id: &a.ext_id,
             source: HUMAN_SOURCE,
@@ -121,7 +114,7 @@ fn ingest_actions(store: &Store, batch: &WebActionBatch) -> Result<usize, String
             tool: "browser",
             action: &a.action,
             kind,
-            target_redacted: target.as_deref(),
+            target_redacted: None,
             ts_ms: a.ts_ms,
         };
         if store.insert_action(&rec).map_err(|e| e.to_string())? {
@@ -285,14 +278,7 @@ mod tests {
             .all(|r| r.actor == "human" && r.source == "web-extension"));
         let send = rows.iter().find(|r| r.action == "send").unwrap();
         assert_eq!(send.app.as_deref(), Some("mail.google.com"));
-        assert!(
-            !send
-                .target_redacted
-                .as_deref()
-                .unwrap_or("")
-                .contains("bob@x.com"),
-            "human action free text is redacted before storage"
-        );
+        assert_eq!(send.target_redacted, None, "human action details are not stored");
     }
 
     #[test]

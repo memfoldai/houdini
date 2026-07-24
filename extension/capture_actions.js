@@ -6,8 +6,8 @@
 // the current tab and hands each action to the local app; nothing is uploaded.
 //
 // Detection is intentionally conservative: it classifies a click by the
-// accessible label (aria-label / data-tooltip) of the control, so only clearly
-// recognized, state-changing controls are recorded.
+// accessible label (aria-label / data-tooltip) of the control, then stores
+// only the normalized action verb so page-specific names do not persist.
 (function () {
   "use strict";
 
@@ -75,7 +75,7 @@
           (node.getAttribute("aria-label") || node.getAttribute("data-tooltip"))) ||
         "";
       const verb = matchVerb(label);
-      if (verb) return { action: verb, target: label };
+      if (verb) return { action: verb };
       node = node.parentElement;
     }
     return null;
@@ -87,7 +87,6 @@
       ext_id: `${site.app}:${PAGE_ID}:${Date.now()}:${counter}`,
       app: site.app,
       action: info.action,
-      target: info.target,
       kind: "mutating",
       ts_ms: Date.now(),
     };

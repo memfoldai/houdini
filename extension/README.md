@@ -5,8 +5,8 @@ transcript, plus recognized **Google Workspace app actions** (Gmail, Drive,
 Docs, Sheets, Slides, Calendar), and delivers them to the local Houdini app.
 For chats it reads each exchange from the **rendered page** (the prompt and
 reply the user actually saw) and works in **background tabs** because the DOM
-updates regardless of tab focus. For Workspace actions it records only the
-recognized action verb and clicked control label.
+updates regardless of tab focus. For Workspace actions it uses clicked control
+labels only to classify the action, then records only the normalized verb.
 
 Reading from the rendered DOM rather than each site's internal, un-versioned
 network API is deliberate: the API shapes are undocumented and change per deploy;
