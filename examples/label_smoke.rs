@@ -13,14 +13,16 @@ fn main() {
         "compare Postgres vs DynamoDB for our event store, check current pricing and recommend one",
         "please knit me a jumper for my cat named Mochi",
         "get Alma to run the deploy and have Claude Code review the diff",
+        "research the best commuter bikes under 2 lakh and compare running costs",
+        "look into what changed in the EU AI act this quarter and summarise it with sources",
     ];
     for (i, text) in cases.iter().enumerate() {
         let request = LabelRequest { session_id: 1, seq: i as i64, text: text.to_string() };
         match labeler.label(&request) {
             Ok(l) => println!(
-                "OK   {:<44} -> {}/{} depth={} delegation={} drove={} proposal={:?}",
+                "OK   {:<44} -> {}/{} depth={} delegation={} drove={} why={:?}",
                 &text[..text.len().min(42)], l.intent, l.domain, l.depth, l.delegation, l.delegate_tool,
-                l.proposed_intent.or(l.proposed_domain)
+                l.proposal_rationale.clone()
             ),
             Err(e) => println!("FAIL {:<44} -> {e}", &text[..text.len().min(42)]),
         }

@@ -170,6 +170,7 @@ struct CandidateRow<'a> {
     taxonomy_version: i64,
     facet: String,
     proposed: String,
+    rationale: String,
     observations: i64,
     last_seen_ms: i64,
 }
@@ -222,6 +223,7 @@ pub fn export_analytics(
             taxonomy_version: candidate.taxonomy_version,
             facet: candidate.facet,
             proposed: candidate.proposed,
+            rationale: candidate.rationale,
             observations: candidate.observations,
             last_seen_ms: candidate.last_seen_at_ms,
         };

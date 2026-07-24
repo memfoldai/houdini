@@ -50,6 +50,11 @@ const UPDATE_CHECK_MS: i64 = 6 * 60 * 60 * 1000;
 
 const ANALYTICS_RETRY_MS: i64 = 15 * 60 * 1000;
 
+/// A full batch means the LIMIT was hit and work remains, so the next batch
+/// follows promptly instead of an hour later. Without this a backlog drains at
+/// batch-per-hour: a week of history took five working days of uptime.
+const ANALYTICS_DRAIN_MS: i64 = 60 * 1000;
+
 const PAUSE_15M_MS: i64 = 15 * 60 * 1000;
 const PAUSE_1H_MS: i64 = 60 * 60 * 1000;
 
@@ -540,9 +545,17 @@ fn poll_analytics(rt: &Rc<Runtime>, now_mono_ms: i64, now_wall_ms: i64) {
                 report.failed,
                 report.candidates
             );
-            if report.failed > 0 && report.labeled == 0 {
+            let backlog_remains = report.considered as i64 >= rt.analytics_batch_limit;
+            let next_in_ms = if report.failed > 0 && report.labeled == 0 {
+                Some(ANALYTICS_RETRY_MS)
+            } else if backlog_remains {
+                Some(ANALYTICS_DRAIN_MS)
+            } else {
+                None
+            };
+            if let Some(next_in_ms) = next_in_ms {
                 rt.last_analytics
-                    .set(now_mono_ms.saturating_sub(rt.analytics_interval_ms - ANALYTICS_RETRY_MS));
+                    .set(now_mono_ms.saturating_sub(rt.analytics_interval_ms - next_in_ms));
             }
         }
         Err(e) => log::warn!("analytics: could not store labels: {e}"),

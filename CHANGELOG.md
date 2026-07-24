@@ -5,6 +5,19 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.7.1] - 2026-07-24
+
+### Fixed
+- **Backlog drains in minutes, not days.** The job ran one batch an hour
+  regardless of how much work was waiting, so a week of existing history took
+  about five working days of uptime to label. A full batch now schedules the
+  next one a minute later and the job settles back to hourly once the queue is
+  empty, which drains a thousand turns in well under an hour.
+- Candidate proposals carry a real rationale written by the model ("the listed
+  intents do not cover a request to physically make a handcrafted item") instead
+  of the sibling facet's id stuffed into a column named `rationale`. It is
+  exported, since a human reads it before promoting a candidate.
+
 ## [0.7.0] - 2026-07-24
 
 ### Added

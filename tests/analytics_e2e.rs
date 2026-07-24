@@ -23,6 +23,7 @@ impl Labeler for ScriptedLabeler {
             confidence: 0.95,
             proposed_intent: None,
             proposed_domain: None,
+            proposal_rationale: None,
         })
     }
 }

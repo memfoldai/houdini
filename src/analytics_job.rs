@@ -87,11 +87,7 @@ pub fn persist(
                 model,
                 facet,
                 proposed,
-                rationale: if facet == "intent" {
-                    &label.domain
-                } else {
-                    &label.intent
-                },
+                rationale: label.proposal_rationale.as_deref().unwrap_or(""),
                 seen_at_ms: now_ms,
             })?;
             report.candidates += 1;
@@ -151,6 +147,7 @@ mod tests {
             confidence: 0.9,
             proposed_intent: proposed.map(str::to_string),
             proposed_domain: None,
+            proposal_rationale: proposed.map(|_| "nothing listed covered it".to_string()),
         }
     }
 

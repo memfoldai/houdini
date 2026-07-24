@@ -99,7 +99,7 @@ No text, no rationales, no session content leaves the device.
 | `analytics_enabled` | `true` | Turn the job off entirely |
 | `analytics_base_url` | `https://litellm.memfold.ai` | OpenAI-compatible endpoint |
 | `analytics_model` | `gpt-5.5` | Model id |
-| `analytics_interval_ms` | `3600000` | How often the job wakes |
+| `analytics_interval_ms` | `3600000` | How often the job wakes when it is caught up |
 | `analytics_batch_limit` | `25` | Turns per batch |
 
 ## Getting the key onto a machine
@@ -155,9 +155,19 @@ Rotation is `/key/regenerate` with a grace period, then re-provision.
 
 Labeling is per user turn, and user turns are a small share of captured
 traffic. A full backfill of a mature database (roughly a thousand user turns)
-costs a few dollars once; steady state is a few cents a day. Batches are small
-and hourly on purpose: the job is never allowed to become the reason a laptop is
-busy, and a failed batch leaves its turns queued rather than dropping them.
+costs a few dollars once; steady state is a few cents a day.
+
+The schedule adapts to the queue rather than running on a fixed clock. A full
+batch means the limit was hit and work remains, so the next batch follows in a
+minute; when the queue is drained the job settles back to hourly; a batch that
+fails outright waits fifteen minutes. That drains a week of history in under an
+hour of uptime instead of five working days, without ever running flat out once
+it has caught up.
+
+Nothing expires from the queue. It is an anti-join over every unlabeled user
+turn, so a session that ends mid-batch, a laptop that sleeps, or an app that
+quits simply resumes where it left off. Turns are labeled newest first, so
+recent work is always current and history fills in behind it.
 
 ## Determinism
 
