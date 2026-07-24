@@ -7,6 +7,7 @@ mod analyze_once;
 mod diagnose;
 #[cfg(target_os = "macos")]
 mod keychain;
+mod loginitem;
 #[cfg(target_os = "macos")]
 mod nativehost;
 #[cfg(target_os = "macos")]
@@ -31,6 +32,10 @@ fn main() {
     }
     if args.iter().any(|a| a == "--uninstall-browser-host") {
         browserhost::uninstall();
+        return;
+    }
+    if args.iter().any(|a| a == "--disable-login-item") {
+        loginitem::unregister();
         return;
     }
 

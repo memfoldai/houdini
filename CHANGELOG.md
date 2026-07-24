@@ -27,6 +27,14 @@ include behavior changes.
   their turns re-analyzed, so a machine only ever holds one shape of label.
 - The menu shows analysis progress ("Analytics: 62% analyzed (640 of 1033)").
 
+### Added
+- **Starts at login.** Houdini registers itself as a login item on first run
+  from `/Applications` via `SMAppService`, the API Apple documents for this since
+  macOS 13, so it comes back after a restart without anyone re-launching it.
+  macOS owns the off switch in System Settings > General > Login Items;
+  `--disable-login-item` covers scripted removal. A build outside
+  `/Applications` never registers, so development copies leave nothing behind.
+
 ### Fixed
 - **Backlog drains in minutes, not days.** The job ran one batch an hour
   regardless of how much work was waiting, so a week of existing history took

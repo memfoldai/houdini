@@ -223,6 +223,8 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         )
     };
 
+    crate::loginitem::ensure_registered(&bundle_path());
+
     let labeler = resolve_labeler(cfg);
     match store.drop_superseded_labels(
         houdini::taxonomy::TAXONOMY_VERSION,
@@ -505,6 +507,16 @@ fn drain_web_messages(rt: &Rc<Runtime>) {
             Err(e) => log::warn!("web: dropped a message: {e}"),
         }
     }
+}
+
+/// The .app bundle this process is running from, derived from the executable
+/// path rather than assumed, so a relocated or renamed install still resolves.
+fn bundle_path() -> PathBuf {
+    let exe = std::env::current_exe().unwrap_or_default();
+    exe.ancestors()
+        .find(|p| p.extension().is_some_and(|e| e == "app"))
+        .map(Path::to_path_buf)
+        .unwrap_or(exe)
 }
 
 fn analytics_progress_text(rt: &Rc<Runtime>) -> String {
