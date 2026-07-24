@@ -46,7 +46,10 @@ impl ActionIngestor {
                     continue;
                 }
                 if let Ok(body) = fs::read_to_string(&path) {
-                    let actions = agent_actions::parse_session(&body);
+                    let actions: Vec<_> = agent_actions::parse_session(&body)
+                        .into_iter()
+                        .filter(|a| a.ts_ms >= self.since_ms)
+                        .collect();
                     match agent_actions::persist(store, SOURCE, &actions) {
                         Ok(n) => added += n,
                         Err(e) => {
@@ -119,6 +122,29 @@ mod tests {
         fs::write(&f, &grown).unwrap();
         assert_eq!(ing.poll(&store), 1, "only the appended action is new");
         assert_eq!(store.all_actions().unwrap().len(), 3);
+
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn skips_prelaunch_actions_when_old_transcript_grows() {
+        let dir = std::env::temp_dir().join(format!("bb-actions-cutoff-{}", std::process::id()));
+        let sessions = dir
+            .join(".openclaw")
+            .join("agents")
+            .join("main")
+            .join("sessions");
+        fs::create_dir_all(&sessions).unwrap();
+        let f = sessions.join("sess-1.jsonl");
+        fs::write(&f, SAMPLE).unwrap();
+
+        let store = Store::open_in_memory().unwrap();
+        let mut ing = ActionIngestor::new(dir.clone(), 1500);
+
+        assert_eq!(ing.poll(&store), 1);
+        let rows = store.all_actions().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].ext_id, "sess-1\u{1f}tc2");
 
         fs::remove_dir_all(&dir).ok();
     }
