@@ -65,6 +65,23 @@ test("emits an action payload for a recognized click", () => {
   assert.match(msg.actions[0].ext_id, /^mail\.google\.com:/);
 });
 
+test("two tabs do not mint the same id on a same-millisecond first click", () => {
+  // Freeze time so both "tabs" see the identical Date.now() and counter=1.
+  const realNow = Date.now;
+  Date.now = () => 1_700_000_000_000;
+  try {
+    const a = load("mail.google.com");
+    const b = load("mail.google.com");
+    a.clickLabel("Send");
+    b.clickLabel("Send");
+    const idA = a.posted[0].actions[0].ext_id;
+    const idB = b.posted[0].actions[0].ext_id;
+    assert.notEqual(idA, idB, "per-tab nonce keeps the ids distinct");
+  } finally {
+    Date.now = realNow;
+  }
+});
+
 test("ignores clicks on unrecognized controls", () => {
   const h = load("drive.google.com");
   h.clickLabel("Sort direction");

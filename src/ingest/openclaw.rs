@@ -52,24 +52,38 @@ impl Adapter for OpenClaw {
                     }
                 }
                 "message" => {
-                    let Some(message) = v.get("message") else { continue };
-                    let Some(ts) = parse_ts(message.get("timestamp")).or_else(|| parse_ts(v.get("timestamp")))
+                    let Some(message) = v.get("message") else {
+                        continue;
+                    };
+                    let Some(ts) =
+                        parse_ts(message.get("timestamp")).or_else(|| parse_ts(v.get("timestamp")))
                     else {
                         continue;
                     };
                     if model.is_none() {
-                        model = message.get("model").and_then(Value::as_str).map(str::to_string);
+                        model = message
+                            .get("model")
+                            .and_then(Value::as_str)
+                            .map(str::to_string);
                     }
                     match message.get("role").and_then(Value::as_str) {
                         Some("user") => {
                             if let Some(text) = user_text(message) {
-                                turns.push(IngestedTurn { role: Role::User, text, ts_ms: ts });
+                                turns.push(IngestedTurn {
+                                    role: Role::User,
+                                    text,
+                                    ts_ms: ts,
+                                });
                             }
                         }
                         Some("assistant") => {
                             let text = assistant_text(message);
                             if !text.is_empty() {
-                                turns.push(IngestedTurn { role: Role::Assistant, text, ts_ms: ts });
+                                turns.push(IngestedTurn {
+                                    role: Role::Assistant,
+                                    text,
+                                    ts_ms: ts,
+                                });
                             }
                         }
                         _ => {}
@@ -82,11 +96,17 @@ impl Adapter for OpenClaw {
         if turns.is_empty() {
             return None;
         }
-        let external_id =
-            session_id.or_else(|| path.file_stem().and_then(|s| s.to_str()).map(str::to_string))?;
+        let external_id = session_id.or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        })?;
         let started = turns.iter().map(|t| t.ts_ms).min().unwrap_or(0);
         let ended = turns.iter().map(|t| t.ts_ms).max().unwrap_or(started);
-        let resolved = model.as_deref().and_then(provider_for_model).unwrap_or(provider::OPENCLAW);
+        let resolved = model
+            .as_deref()
+            .and_then(provider_for_model)
+            .unwrap_or(provider::OPENCLAW);
 
         Some(IngestedSession {
             tool: "openclaw",
@@ -119,11 +139,7 @@ fn user_text(message: &Value) -> Option<String> {
         .split_once("## Inbound user message")
         .map(|(_, rest)| rest)
         .unwrap_or(raw);
-    let cleaned = inner
-        .split("\n##")
-        .next()
-        .unwrap_or(inner)
-        .trim();
+    let cleaned = inner.split("\n##").next().unwrap_or(inner).trim();
     (!cleaned.is_empty()).then(|| cleaned.to_string())
 }
 
@@ -155,7 +171,11 @@ mod tests {
     #[test]
     fn parses_openclaw_session_with_envelope_stripped() {
         let dir = std::env::temp_dir().join(format!("oc-{}", std::process::id()));
-        let sessions = dir.join(".openclaw").join("agents").join("main").join("sessions");
+        let sessions = dir
+            .join(".openclaw")
+            .join("agents")
+            .join("main")
+            .join("sessions");
         fs::create_dir_all(&sessions).unwrap();
         let f = sessions.join("sess-oc.jsonl");
         fs::write(&f, SAMPLE).unwrap();
@@ -173,7 +193,11 @@ mod tests {
         assert_eq!(OpenClaw.discover(&dir).len(), 1);
         let traj = sessions.join("sess-oc.trajectory.jsonl");
         fs::write(&traj, SAMPLE).unwrap();
-        assert_eq!(OpenClaw.discover(&dir).len(), 1, "trajectory files are skipped");
+        assert_eq!(
+            OpenClaw.discover(&dir).len(),
+            1,
+            "trajectory files are skipped"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 

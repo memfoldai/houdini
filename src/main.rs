@@ -39,7 +39,11 @@ fn main() {
     }
     if args.iter().any(|a| a == "--check-update") {
         match updater::check() {
-            Some(u) => println!("update available: {} (current {})", u.version, updater::current_version()),
+            Some(u) => println!(
+                "update available: {} (current {})",
+                u.version,
+                updater::current_version()
+            ),
             None => println!("up to date ({})", updater::current_version()),
         }
         return;

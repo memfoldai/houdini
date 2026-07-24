@@ -120,7 +120,9 @@ pub fn parse_session(body: &str) -> Vec<AgentAction> {
                 continue;
             }
             let args = block.get("arguments").cloned().unwrap_or(Value::Null);
-            let (action, app, target, kind) = normalize(name, &args);
+            let Some((action, app, target, kind)) = normalize(name, &args) else {
+                continue;
+            };
 
             let call_id = block
                 .get("id")
@@ -153,8 +155,9 @@ pub fn parse_session(body: &str) -> Vec<AgentAction> {
 /// Persist parsed agent actions as attributed records (`actor = agent`),
 /// redacting the free-text target first per the "redact before storage" rule.
 ///
-/// Idempotent by action id: re-parsing a transcript that has grown since the
-/// last poll only inserts the genuinely new actions. Returns how many were added.
+/// Idempotent by (session, action id): re-parsing a transcript that has grown
+/// since the last poll only inserts the genuinely new actions, while identical
+/// tool-call ids in *different* sessions stay distinct. Returns how many were added.
 pub fn persist(store: &Store, source: &str, actions: &[AgentAction]) -> rusqlite::Result<usize> {
     let mut added = 0;
     for a in actions {
@@ -162,8 +165,11 @@ pub fn persist(store: &Store, source: &str, actions: &[AgentAction]) -> rusqlite
             .target
             .as_deref()
             .map(|t| redact::redact_deterministic(t).text);
+        // Scope the dedupe key to the session so a call id reused across two
+        // sessions (or a synthesized id colliding by timestamp) is not dropped.
+        let ext_id = format!("{}\u{1f}{}", a.session_id, a.id);
         let rec = ActionRecord {
-            ext_id: &a.id,
+            ext_id: &ext_id,
             source,
             session_id: &a.session_id,
             actor: Actor::Agent,
@@ -181,19 +187,29 @@ pub fn persist(store: &Store, source: &str, actions: &[AgentAction]) -> rusqlite
     Ok(added)
 }
 
-/// Map a raw `(tool_name, arguments)` pair to a normalized action tuple.
-fn normalize(name: &str, args: &Value) -> (String, Option<String>, Option<String>, ActionKind) {
+/// Map a raw `(tool_name, arguments)` pair to a normalized action, or `None` if
+/// the tool is not an app/UI action we attribute.
+///
+/// Only tools that actually drive an application count: the native drivers
+/// (`bdc__cua`, `bdc__run_applescript`) and the browser tools. Everything else —
+/// `web_fetch`, `web_search`, `sessions_history`, `sessions_spawn`, and any other
+/// agent-internal operation — is deliberately ignored rather than guessed at, so
+/// it never inflates the attribution metric.
+fn normalize(
+    name: &str,
+    args: &Value,
+) -> Option<(String, Option<String>, Option<String>, ActionKind)> {
     match name {
         "bdc__run_applescript" => {
             let script = args.get("script").and_then(Value::as_str).unwrap_or("");
-            (
+            Some((
                 "run_applescript".to_string(),
                 applescript_app(script),
                 Some(truncate(script.trim(), 120)),
                 // A script could be a pure read, but AppleScript is opaque to us,
                 // so we conservatively treat it as state-changing.
                 ActionKind::Mutating,
-            )
+            ))
         }
         "bdc__cua" => {
             // `{ tool: <driver action>, args: { appName, element_index, value, .. } }`
@@ -209,7 +225,7 @@ fn normalize(name: &str, args: &Value) -> (String, Option<String>, Option<String
             } else {
                 ActionKind::Mutating
             };
-            (driver.to_string(), app, target, kind)
+            Some((driver.to_string(), app, target, kind))
         }
         _ if name.starts_with("browser") => {
             let action = string_field(args, &["action"])
@@ -220,24 +236,15 @@ fn normalize(name: &str, args: &Value) -> (String, Option<String>, Option<String
                 action.as_str(),
                 "page_state" | "screenshot" | "read" | "snapshot"
             );
-            (
-                action,
-                app,
-                url,
-                if read {
-                    ActionKind::ReadOnly
-                } else {
-                    ActionKind::Mutating
-                },
-            )
+            let kind = if read {
+                ActionKind::ReadOnly
+            } else {
+                ActionKind::Mutating
+            };
+            Some((action, app, url, kind))
         }
-        // Unknown tool: keep the raw name, stash a compact arg preview, and be
-        // conservative about state so nothing attributable is silently dropped.
-        _ => {
-            let action = name.split("__").last().unwrap_or(name).to_string();
-            let target = (!args.is_null()).then(|| truncate(&args.to_string(), 120));
-            (action, None, target, ActionKind::Mutating)
-        }
+        // Not an app/UI action — ignore it (do not count agent-internal tools).
+        _ => None,
     }
 }
 
@@ -395,6 +402,46 @@ mod tests {
             !target.contains("a@b.com"),
             "free-text target is redacted before storage"
         );
+    }
+
+    #[test]
+    fn non_app_tools_are_ignored() {
+        // web_search / sessions_history etc. are agent-internal, not app actions.
+        let body = r#"
+{"type":"session","id":"sx","timestamp":"2026-07-20T10:00:00.000Z"}
+{"message":{"role":"assistant","content":[{"type":"toolCall","id":"w1","name":"web_search","arguments":{"query":"cats"}}],"timestamp":10}}
+{"message":{"role":"assistant","content":[{"type":"toolCall","id":"h1","name":"sessions_history","arguments":{}}],"timestamp":20}}
+{"message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"bdc__cua","arguments":{"tool":"click","args":{"appName":"Mail","element_index":2}}}],"timestamp":30}}
+"#;
+        let actions = parse_session(body);
+        assert_eq!(actions.len(), 1, "only the real app action is kept");
+        assert_eq!(actions[0].tool, "bdc__cua");
+        assert_eq!(actions[0].app.as_deref(), Some("Mail"));
+    }
+
+    #[test]
+    fn same_call_id_in_different_sessions_is_not_dropped() {
+        let store = Store::open_in_memory().unwrap();
+        let session = |id: &str| {
+            format!(
+                r#"
+{{"type":"session","id":"{id}","timestamp":"2026-07-20T10:00:00.000Z"}}
+{{"message":{{"role":"assistant","content":[{{"type":"toolCall","id":"tc1","name":"bdc__cua","arguments":{{"tool":"click","args":{{"appName":"Mail","element_index":1}}}}}}],"timestamp":100}}}}
+"#
+            )
+        };
+        // Two different sessions both use tool-call id "tc1".
+        let a = parse_session(&session("sess-A"));
+        let b = parse_session(&session("sess-B"));
+        assert_eq!(persist(&store, "almaclaw", &a).unwrap(), 1);
+        assert_eq!(
+            persist(&store, "almaclaw", &b).unwrap(),
+            1,
+            "the second session's action is kept, not deduped away"
+        );
+        assert_eq!(store.all_actions().unwrap().len(), 2);
+        // Re-persisting session A still dedupes within its own session.
+        assert_eq!(persist(&store, "almaclaw", &a).unwrap(), 0);
     }
 
     #[test]

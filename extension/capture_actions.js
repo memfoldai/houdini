@@ -51,6 +51,10 @@
   const site = APPS.find((a) => location.hostname === a.app);
   if (!site) return;
 
+  // Per-tab nonce so two tabs of the same app can't mint the same id when their
+  // first recognized click lands in the same millisecond (the store dedupes on
+  // (source, ext_id), which would otherwise silently drop one).
+  const PAGE_ID = Math.random().toString(36).slice(2);
   let counter = 0;
 
   document.addEventListener(
@@ -80,7 +84,7 @@
   function emit(info) {
     counter += 1;
     const action = {
-      ext_id: `${site.app}:${Date.now()}:${counter}`,
+      ext_id: `${site.app}:${PAGE_ID}:${Date.now()}:${counter}`,
       app: site.app,
       action: info.action,
       target: info.target,

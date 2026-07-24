@@ -142,7 +142,10 @@ mod tests {
         assert_eq!(cfg.install_id, "keep-me", "existing id preserved");
         assert_eq!(cfg.transcript_poll_ms, 2_000, "missing field takes default");
         let reread = fs::read_to_string(&cf).unwrap();
-        assert!(reread.contains("transcript_poll_ms"), "file upgraded on load");
+        assert!(
+            reread.contains("transcript_poll_ms"),
+            "file upgraded on load"
+        );
         fs::remove_dir_all(&dir).ok();
     }
 

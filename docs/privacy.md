@@ -42,9 +42,10 @@ OpenClaw) and, if the extension is loaded, web chats (ChatGPT, Claude, Gemini).
 
 ## Export
 
-The menu's **Export my data…** writes a flat, OLAP-ready snapshot to
-`data/interactions.jsonl` (one row per message) and reveals it, decrypted on
-demand, never written automatically:
+The menu's **Export my data…** writes a flat, OLAP-ready snapshot, decrypted on
+demand, never written automatically. It produces two files:
+
+**`data/interactions.jsonl`** — one row per AI-chat message:
 
 ```json
 {"schema":"aum/3","kind":"interaction","event_id":"<device>:<session>:0",
@@ -53,10 +54,20 @@ demand, never written automatically:
  "session_id":"…","turn_index":0,"role":"user","text":"…","text_chars":42}
 ```
 
-Every source produces this exact row shape, and each row carries a stable
-`event_id` and the device id, so exports from any number of machines merge with a
-plain `read_json_auto`. Provider grouping and clustering happen at analysis time,
-never in the app. See [grouping.md](grouping.md).
+**`data/actions.jsonl`** — one row per attributed app action (agent vs. human):
+
+```json
+{"schema":"aum/3","kind":"action","event_id":"<device>:<source>:<ext_id>",
+ "device":"…","day":"2026-07-16","ts_ms":…,"actor":"agent",
+ "app":"mail.google.com","source":"almaclaw","tool":"bdc__cua",
+ "action":"type_text","action_kind":"mutating","session_id":"…","target":"…"}
+```
+
+`actor` is `agent`, `human`, or `unknown`; `action_kind` is `mutating` or
+`read_only`; `app` and `target` are omitted when unknown. Every row in both files
+carries a stable `event_id` and the device id, so exports from any number of
+machines merge with a plain `read_json_auto`. Provider grouping and clustering
+happen at analysis time, never in the app. See [grouping.md](grouping.md).
 
 ## Retention & deletion
 
