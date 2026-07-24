@@ -15,7 +15,7 @@ impl Labeler for ScriptedLabeler {
         Ok(Label {
             session_id: request.session_id,
             seq: request.seq,
-            intent: "refactor_or_cleanup".to_string(),
+            intent: "write_code".to_string(),
             domain: "software_engineering".to_string(),
             depth: if orchestrating { 4 } else { 2 },
             delegation: if orchestrating { "agent_run" } else { "none" }.to_string(),
@@ -23,6 +23,7 @@ impl Labeler for ScriptedLabeler {
             confidence: 0.95,
             proposed_intent: None,
             proposed_domain: None,
+            proposal_rationale: None,
         })
     }
 }
@@ -83,11 +84,19 @@ fn labels_survive_a_reopen_and_export_as_aggregate_cells() {
     };
     let path = houdini::export::export_analytics(&store, &identity, &dir).unwrap();
     let body = std::fs::read_to_string(&path).unwrap();
-    let rows: Vec<serde_json::Value> = body
+    let all: Vec<serde_json::Value> = body
         .lines()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
-    assert_eq!(rows.len(), 2);
+    assert!(
+        all.iter().any(|r| r["kind"] == "session_span"),
+        "the export also carries time-spent rows a wrapped needs"
+    );
+    let rows: Vec<&serde_json::Value> = all
+        .iter()
+        .filter(|r| r["kind"] == "analytics_cell")
+        .collect();
+    assert_eq!(rows.len(), 2, "one cell per distinct dimension combination");
     for row in &rows {
         assert_eq!(row["kind"], "analytics_cell");
         assert_eq!(row["tool_name"], "Claude Code", "the product name is what a dashboard shows");
@@ -97,6 +106,12 @@ fn labels_survive_a_reopen_and_export_as_aggregate_cells() {
         assert_eq!(row["device_name"], "Rahul's MacBook");
         assert!(!row["day"].as_str().unwrap().is_empty(), "cells carry a day for trends");
         assert!(row["turns"].is_i64() && row["sessions"].is_i64() && row["chars"].is_i64());
+        assert!(row["hour"].is_i64(), "cells carry the hour for time-of-day insight");
+        assert!(
+            ["asking", "doing", "expressing", "other"]
+                .contains(&row["shape"].as_str().unwrap()),
+            "every cell resolves to a usage shape"
+        );
         assert_eq!(row["taxonomy_version"], TAXONOMY_VERSION);
         assert!(row["prompt_version"].is_i64(), "every cell pins its prompt");
         assert!(row.get("text").is_none(), "no content leaves the device");

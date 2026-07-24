@@ -5,6 +5,47 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.7.1] - 2026-07-24
+
+### Changed
+- **Categories now follow the published usage studies and cover all use, not one
+  kind.** Coding, writing, learning, admin, health, travel, creative work and
+  casual conversation sit in one flat list drawn from NBER w34255's ChatGPT topic
+  taxonomy, the Anthropic Economic Index, Stack Overflow 2025 and WildChat. Every
+  intent resolves to a `shape` of `asking`, `doing` or `expressing`, NBER's split
+  of real traffic, and a test keeps the taxonomy from drifting back toward any
+  single kind of use.
+- Cells carry the hour of day, and a new `session_span` export row carries
+  sessions, total minutes and longest session per day and tool, so a weekly
+  wrapped can show time spent and peak hours rather than only counts.
+- **Requests are labeled with their conversation context.** A turn now carries up
+  to six preceding turns of its own session, matching the published method.
+  "Now do the same for the other one" labeled as `other / other` in isolation and
+  as `product_or_purchase_research` at depth 3 with context, so follow-ups (the
+  majority of real turns) were being wasted before.
+- Labels from a superseded taxonomy or prompt version are cleared at startup and
+  their turns re-analyzed, so a machine only ever holds one shape of label.
+- The menu shows analysis progress ("Analytics: 62% analyzed (640 of 1033)").
+
+### Added
+- **Starts at login.** Houdini registers itself as a login item on first run
+  from `/Applications` via `SMAppService`, the API Apple documents for this since
+  macOS 13, so it comes back after a restart without anyone re-launching it.
+  macOS owns the off switch in System Settings > General > Login Items;
+  `--disable-login-item` covers scripted removal. A build outside
+  `/Applications` never registers, so development copies leave nothing behind.
+
+### Fixed
+- **Backlog drains in minutes, not days.** The job ran one batch an hour
+  regardless of how much work was waiting, so a week of existing history took
+  about five working days of uptime to label. A full batch now schedules the
+  next one a minute later and the job settles back to hourly once the queue is
+  empty, which drains a thousand turns in well under an hour.
+- Candidate proposals carry a real rationale written by the model ("the listed
+  intents do not cover a request to physically make a handcrafted item") instead
+  of the sibling facet's id stuffed into a column named `rationale`. It is
+  exported, since a human reads it before promoting a candidate.
+
 ## [0.7.0] - 2026-07-24
 
 ### Added

@@ -14,7 +14,8 @@ against a closed set of labels. Four facets are recorded per turn:
 | Facet | Values | Question it answers |
 |---|---|---|
 | `tool` | `Alma`, `Claude Code`, `Codex`, `ChatGPT`, `Claude`, `Gemini` | Which app the request went through |
-| `intent` | 20 ids, `src/taxonomy.rs` | What was the AI asked to do |
+| `intent` | 28 ids, `src/taxonomy.rs` | What was the AI asked to do |
+| `shape` | `asking`, `doing`, `expressing` | The NBER split of real chat traffic. Derived from intent, never asked |
 | `domain` | 17 ids | What subject the request belongs to |
 | `depth` | 1 to 4 | A single lookup, an iterative dig, a synthesis across sources, or autonomous multi-step work |
 | `delegation` | `none`, `tool_call`, `agent_run` | Whether the person drove this AI directly, had it call a tool, or had it drive **another** AI |
@@ -25,6 +26,38 @@ to run the deploy" is recorded as `agent_run` **to `alma`**, read from the
 request itself, so the caller and the callee are both known on one row. Each
 tool still writes its own transcript, so the work also shows up as that tool's
 own usage; the edge is what links them.
+
+## The categories come from published usage studies, and cover everything
+
+The intent list is not invented, and it is deliberately not weighted toward any
+one kind of use. Coding, writing, learning, admin, health, travel, creative work
+and idle conversation all sit in the same flat list, because that is what people
+actually bring to an AI. Categories follow the published usage-log studies
+(NBER w34255's ChatGPT topic taxonomy, the Anthropic Economic Index, Stack
+Overflow 2025, WildChat) rather than a plausible-sounding list.
+
+`shape` is NBER's three-way split of real traffic: **asking** (seeking
+information or guidance, about half of all messages), **doing** (asking the
+model to produce or perform something) and **expressing**. It is derived from
+the intent, so it costs no tokens and can never contradict the label it
+summarises. A test asserts the `doing` categories are at least as numerous as
+the `asking` ones, so the taxonomy cannot quietly drift back toward one kind of
+use.
+
+## Each request is labeled with what came before it
+
+A request like "now do the same for the other one" means nothing alone, and
+follow-ups are the norm rather than the exception. So a turn is labeled together
+with up to six preceding turns of its own session, matching the published
+method. The difference is not marginal:
+
+```
+"now do the same for the other one"
+  without context -> other / other                          depth 1
+  with context    -> product_or_purchase_research / infra   depth 3
+```
+
+Only the latest request is labeled; the context exists to make it readable.
 
 ## Why a taxonomy and not clustering
 
@@ -69,6 +102,12 @@ machine's friendly name), `device` (a stable install id, the join key).
 `prompt_version`.
 **Measures**: `turns`, `sessions` (distinct), `chars` (redacted volume).
 
+A second row kind, `session_span`, carries per day and tool: session count,
+total minutes and longest session. Filter on `kind` before aggregating. Between
+the two, a weekly wrapped has everything it needs: time spent, peak hour, top
+tool, the asking/doing/expressing mix, depth profile, and how often one AI drove
+another.
+
 That is a star-schema fact row, so a dashboard slices it directly. A leaderboard
 of who used a given tool most is a single grouping:
 
@@ -99,7 +138,7 @@ No text, no rationales, no session content leaves the device.
 | `analytics_enabled` | `true` | Turn the job off entirely |
 | `analytics_base_url` | `https://litellm.memfold.ai` | OpenAI-compatible endpoint |
 | `analytics_model` | `gpt-5.5` | Model id |
-| `analytics_interval_ms` | `3600000` | How often the job wakes |
+| `analytics_interval_ms` | `3600000` | How often the job wakes when it is caught up |
 | `analytics_batch_limit` | `25` | Turns per batch |
 
 ## Getting the key onto a machine
@@ -155,9 +194,28 @@ Rotation is `/key/regenerate` with a grace period, then re-provision.
 
 Labeling is per user turn, and user turns are a small share of captured
 traffic. A full backfill of a mature database (roughly a thousand user turns)
-costs a few dollars once; steady state is a few cents a day. Batches are small
-and hourly on purpose: the job is never allowed to become the reason a laptop is
-busy, and a failed batch leaves its turns queued rather than dropping them.
+costs a few dollars once; steady state is a few cents a day.
+
+The schedule adapts to the queue rather than running on a fixed clock. A full
+batch means the limit was hit and work remains, so the next batch follows in a
+minute; when the queue is drained the job settles back to hourly; a batch that
+fails outright waits fifteen minutes. That drains a week of history in under an
+hour of uptime instead of five working days, without ever running flat out once
+it has caught up.
+
+Houdini shows how far it has got in the menu ("Analytics: 62% analyzed (640 of
+1033)"), so the first pass over an existing history is visible rather than
+mysterious.
+
+When the taxonomy or the prompt changes, labels written under the old version
+are cleared at startup and their turns re-analyzed. The local database therefore
+only ever holds one shape of label, which is what makes merging across machines
+meaningful in the first place.
+
+Nothing expires from the queue. It is an anti-join over every unlabeled user
+turn, so a session that ends mid-batch, a laptop that sleeps, or an app that
+quits simply resumes where it left off. Turns are labeled newest first, so
+recent work is always current and history fills in behind it.
 
 ## Determinism
 

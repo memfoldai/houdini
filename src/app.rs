@@ -50,6 +50,11 @@ const UPDATE_CHECK_MS: i64 = 6 * 60 * 60 * 1000;
 
 const ANALYTICS_RETRY_MS: i64 = 15 * 60 * 1000;
 
+/// A full batch means the LIMIT was hit and work remains, so the next batch
+/// follows promptly instead of an hour later. Without this a backlog drains at
+/// batch-per-hour: a week of history took five working days of uptime.
+const ANALYTICS_DRAIN_MS: i64 = 60 * 1000;
+
 const PAUSE_15M_MS: i64 = 15 * 60 * 1000;
 const PAUSE_1H_MS: i64 = 60 * 60 * 1000;
 
@@ -98,6 +103,7 @@ struct Runtime {
     painted: Cell<Option<Glyph>>,
     status_item: MenuItem,
     detail_item: MenuItem,
+    analytics_item: MenuItem,
     resume_item: MenuItem,
     update_item: MenuItem,
     ids: MenuIds,
@@ -217,7 +223,19 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         )
     };
 
+    crate::loginitem::ensure_registered(&bundle_path());
+
     let labeler = resolve_labeler(cfg);
+    match store.drop_superseded_labels(
+        houdini::taxonomy::TAXONOMY_VERSION,
+        houdini::analytics::PROMPT_VERSION,
+    ) {
+        Ok(0) => {}
+        Ok(removed) => log::info!(
+            "analytics: cleared {removed} label(s) from a superseded taxonomy; they re-analyze under the current one"
+        ),
+        Err(e) => log::warn!("analytics: could not clear superseded labels: {e}"),
+    }
 
     let (web_tx, web_rx) = mpsc::channel();
     start_web_listener(paths.sock_file.clone(), web_tx);
@@ -249,6 +267,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
 
     let status_item = MenuItem::new("Starting…", false, None);
     let detail_item = MenuItem::new("", false, None);
+    let analytics_item = MenuItem::new("", false, None);
     let resume_item = MenuItem::with_id(ids.resume.clone(), "Resume now", false, None);
     let update_item = MenuItem::with_id(ids.update.clone(), "Check for updates…", true, None);
 
@@ -283,6 +302,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         painted: Cell::new(None),
         status_item,
         detail_item,
+        analytics_item,
         resume_item,
         update_item,
         ids,
@@ -383,6 +403,7 @@ fn install_tray(rt: &Rc<Runtime>) {
     menu.append(&PredefinedMenuItem::separator()).expect("sep0");
     menu.append(&rt.status_item).expect("status");
     menu.append(&rt.detail_item).expect("detail");
+    menu.append(&rt.analytics_item).expect("analytics");
     menu.append(&PredefinedMenuItem::separator()).expect("sep1");
     menu.append(&pause).expect("pause");
     menu.append(&rt.resume_item).expect("resume");
@@ -488,6 +509,39 @@ fn drain_web_messages(rt: &Rc<Runtime>) {
     }
 }
 
+/// The .app bundle this process is running from, derived from the executable
+/// path rather than assumed, so a relocated or renamed install still resolves.
+fn bundle_path() -> PathBuf {
+    let exe = std::env::current_exe().unwrap_or_default();
+    exe.ancestors()
+        .find(|p| p.extension().is_some_and(|e| e == "app"))
+        .map(Path::to_path_buf)
+        .unwrap_or(exe)
+}
+
+fn analytics_progress_text(rt: &Rc<Runtime>) -> String {
+    if rt.analytics_labeler.borrow().is_none() {
+        return String::new();
+    }
+    let Ok((total, labeled)) = rt.store.label_progress(
+        houdini::taxonomy::TAXONOMY_VERSION,
+        houdini::analytics::PROMPT_VERSION,
+    ) else {
+        return String::new();
+    };
+    if total == 0 {
+        return String::new();
+    }
+    if labeled >= total {
+        format!("Analytics: all {total} requests analyzed")
+    } else {
+        format!(
+            "Analytics: {}% analyzed ({labeled} of {total})",
+            labeled * 100 / total
+        )
+    }
+}
+
 fn spawn_analytics(rt: &Rc<Runtime>) {
     let Some(labeler) = rt.analytics_labeler.borrow().clone() else {
         return;
@@ -540,9 +594,17 @@ fn poll_analytics(rt: &Rc<Runtime>, now_mono_ms: i64, now_wall_ms: i64) {
                 report.failed,
                 report.candidates
             );
-            if report.failed > 0 && report.labeled == 0 {
+            let backlog_remains = report.considered as i64 >= rt.analytics_batch_limit;
+            let next_in_ms = if report.failed > 0 && report.labeled == 0 {
+                Some(ANALYTICS_RETRY_MS)
+            } else if backlog_remains {
+                Some(ANALYTICS_DRAIN_MS)
+            } else {
+                None
+            };
+            if let Some(next_in_ms) = next_in_ms {
                 rt.last_analytics
-                    .set(now_mono_ms.saturating_sub(rt.analytics_interval_ms - ANALYTICS_RETRY_MS));
+                    .set(now_mono_ms.saturating_sub(rt.analytics_interval_ms - next_in_ms));
             }
         }
         Err(e) => log::warn!("analytics: could not store labels: {e}"),
@@ -668,6 +730,9 @@ fn refresh_menu(rt: &Rc<Runtime>, glyph: Glyph, now_ms: i64, stats: &ActivitySta
             relative_time(stats.last_activity_ms, now_ms)
         ));
     }
+    rt.analytics_item
+        .set_text(analytics_progress_text(rt));
+
     if let Some(summary) = houdini::summary::format_action_summary(
         &rt.store
             .action_stats(now_ms - RECENT_WINDOW_MS)

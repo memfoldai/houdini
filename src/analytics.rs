@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::io::Write;
 use std::process::{Command, Stdio};
 
-pub const PROMPT_VERSION: i64 = 2;
+pub const PROMPT_VERSION: i64 = 4;
 
 pub const DEFAULT_BASE_URL: &str = "https://litellm.memfold.ai";
 pub const DEFAULT_MODEL: &str = "gpt-5.5";
@@ -23,15 +23,21 @@ depth: how much research the request demands. 1 = a single fact or lookup. 2 = a
 delegation: none when the person works with this AI directly; tool_call when the AI is asked to invoke a tool; agent_run when the person directs this AI to drive another AI, agent, or coding assistant.
 delegate_tool: when delegation is agent_run, which AI or agent is being driven, named from the request itself. Use none when nothing is delegated, and other when something is delegated that is not listed.
 
-Pick the single most pertinent value. Use \"other\" only when no listed value fits, and then propose a replacement label as a short snake_case id naming the missing category. Leave proposals null whenever a listed value fits.
+Pick the single most pertinent value. Use \"other\" only when no listed value fits, and then propose a replacement label as a short snake_case id naming the missing category, plus one short sentence saying what the listed values failed to cover. Leave all three proposal fields null whenever a listed value fits.
 
-Judge only the request itself. Never infer from names, companies, or file paths that appear in it.";
+Earlier turns of the same conversation may be given as context. Use them only to understand what the latest request refers to. Label the LATEST REQUEST, never the context.
+
+Judge the request, not the people in it. Never infer from names, companies, or file paths that appear in it.";
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct LabelRequest {
     pub session_id: i64,
     pub seq: i64,
     pub text: String,
+    /// Earlier turns of the same session, oldest first. A request like "now fix
+    /// the other one" means nothing alone, so the published method labels a
+    /// message together with what came before it.
+    pub context: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,6 +52,9 @@ pub struct Label {
     pub confidence: f64,
     pub proposed_intent: Option<String>,
     pub proposed_domain: Option<String>,
+    /// One sentence on what the taxonomy failed to cover. Reviewed by a human
+    /// before a candidate is promoted, so it must read as prose, not an id.
+    pub proposal_rationale: Option<String>,
 }
 
 pub trait Labeler: Send {
@@ -106,6 +115,7 @@ struct LabelPayload {
     confidence: f64,
     proposed_intent: Option<String>,
     proposed_domain: Option<String>,
+    proposal_rationale: Option<String>,
 }
 
 pub fn label_schema() -> serde_json::Value {
@@ -114,7 +124,7 @@ pub fn label_schema() -> serde_json::Value {
         "additionalProperties": false,
         "required": [
             "intent", "domain", "depth", "delegation", "delegate_tool", "confidence",
-            "proposed_intent", "proposed_domain"
+            "proposed_intent", "proposed_domain", "proposal_rationale"
         ],
         "properties": {
             "intent": { "type": "string", "enum": taxonomy::INTENTS },
@@ -124,7 +134,8 @@ pub fn label_schema() -> serde_json::Value {
             "delegate_tool": { "type": "string", "enum": taxonomy::DELEGATE_TARGETS },
             "confidence": { "type": "number" },
             "proposed_intent": { "type": ["string", "null"] },
-            "proposed_domain": { "type": ["string", "null"] }
+            "proposed_domain": { "type": ["string", "null"] },
+            "proposal_rationale": { "type": ["string", "null"] }
         }
     })
 }
@@ -186,6 +197,18 @@ fn post(config: &str) -> Result<Vec<u8>, String> {
     }
 }
 
+fn clamp_rationale(value: &str) -> String {
+    const MAX: usize = 200;
+    if value.len() <= MAX {
+        return value.to_string();
+    }
+    let mut end = MAX;
+    while end > 0 && !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_string()
+}
+
 fn normalize_proposal(value: Option<String>, facet_is_other: bool) -> Option<String> {
     if !facet_is_other {
         return None;
@@ -241,6 +264,14 @@ pub fn parse_label(request: &LabelRequest, body: &[u8]) -> Result<Label, String>
         seq: request.seq,
         proposed_intent: normalize_proposal(payload.proposed_intent, intent_is_other),
         proposed_domain: normalize_proposal(payload.proposed_domain, domain_is_other),
+        proposal_rationale: if intent_is_other || domain_is_other {
+            payload
+                .proposal_rationale
+                .map(|r| clamp_rationale(r.trim()))
+                .filter(|r| !r.is_empty())
+        } else {
+            None
+        },
         intent: payload.intent,
         domain: payload.domain,
         depth: payload.depth,
@@ -248,6 +279,32 @@ pub fn parse_label(request: &LabelRequest, body: &[u8]) -> Result<Label, String>
         delegate_tool: payload.delegate_tool,
         confidence: payload.confidence.clamp(0.0, 1.0),
     })
+}
+
+pub fn build_user_message(request: &LabelRequest) -> String {
+    let text = truncate_input(&request.text);
+    if request.context.is_empty() {
+        return format!("LATEST REQUEST:\n{text}");
+    }
+    let context = request
+        .context
+        .iter()
+        .map(|t| format!("- {}", truncate_context(t)))
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!("EARLIER IN THIS CONVERSATION:\n{context}\n\nLATEST REQUEST:\n{text}")
+}
+
+fn truncate_context(text: &str) -> &str {
+    const MAX: usize = 400;
+    if text.len() <= MAX {
+        return text;
+    }
+    let mut end = MAX;
+    while end > 0 && !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    &text[..end]
 }
 
 pub fn build_body(model: &str, text: &str) -> Result<String, String> {
@@ -297,7 +354,7 @@ impl Labeler for ProxyLabeler {
     }
 
     fn label(&self, request: &LabelRequest) -> Result<Label, String> {
-        let body = build_body(&self.model, truncate_input(&request.text))?;
+        let body = build_body(&self.model, &build_user_message(request))?;
         let response = post(&curl_config(&self.base_url, &self.api_key, &body))?;
         parse_label(request, &response)
     }
@@ -312,6 +369,7 @@ mod tests {
             session_id: 7,
             seq: 3,
             text: "fix the failing payment test".to_string(),
+            context: Vec::new(),
         }
     }
 
@@ -319,6 +377,23 @@ mod tests {
         serde_json::json!({ "choices": [{ "message": { "content": label } }] })
             .to_string()
             .into_bytes()
+    }
+
+    #[test]
+    fn context_frames_the_latest_request_without_replacing_it() {
+        let bare = build_user_message(&request());
+        assert!(bare.starts_with("LATEST REQUEST:"));
+        assert!(!bare.contains("EARLIER"));
+
+        let mut with_context = request();
+        with_context.context = vec!["user: rewrite the parser".into()];
+        let framed = build_user_message(&with_context);
+        assert!(framed.contains("EARLIER IN THIS CONVERSATION:"));
+        assert!(framed.contains("rewrite the parser"));
+        assert!(
+            framed.find("LATEST REQUEST:").unwrap() > framed.find("EARLIER").unwrap(),
+            "the request being labeled comes last"
+        );
     }
 
     #[test]
@@ -347,12 +422,12 @@ mod tests {
     #[test]
     fn a_valid_response_becomes_a_label() {
         let body = response_body(
-            r#"{"intent":"debug_or_fix","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null}"#,
+            r#"{"intent":"modify_or_debug_code","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null,"proposal_rationale":null}"#,
         );
         let label = parse_label(&request(), &body).unwrap();
         assert_eq!(label.session_id, 7);
         assert_eq!(label.seq, 3);
-        assert_eq!(label.intent, "debug_or_fix");
+        assert_eq!(label.intent, "modify_or_debug_code");
         assert_eq!(label.depth, 2);
         assert!(label.proposed_intent.is_none());
     }
@@ -360,7 +435,7 @@ mod tests {
     #[test]
     fn a_label_outside_the_taxonomy_is_refused_rather_than_stored() {
         let body = response_body(
-            r#"{"intent":"vibe_coding","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null}"#,
+            r#"{"intent":"vibe_coding","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null,"proposal_rationale":null}"#,
         );
         assert!(parse_label(&request(), &body).unwrap_err().contains("intent"));
     }
@@ -368,7 +443,7 @@ mod tests {
     #[test]
     fn an_out_of_range_depth_is_refused() {
         let body = response_body(
-            r#"{"intent":"debug_or_fix","domain":"software_engineering","depth":9,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null}"#,
+            r#"{"intent":"modify_or_debug_code","domain":"software_engineering","depth":9,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null,"proposal_rationale":null}"#,
         );
         assert!(parse_label(&request(), &body).unwrap_err().contains("depth"));
     }
@@ -384,7 +459,7 @@ mod tests {
     #[test]
     fn proposals_survive_only_alongside_other_and_normalize_to_ids() {
         let body = response_body(
-            r#"{"intent":"other","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":0.4,"proposed_intent":"Pair Programming!","proposed_domain":"ignored"}"#,
+            r#"{"intent":"other","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":0.4,"proposed_intent":"Pair Programming!","proposed_domain":"ignored","proposal_rationale":"nothing covers collaborative live coding"}"#,
         );
         let label = parse_label(&request(), &body).unwrap();
         assert_eq!(label.proposed_intent.as_deref(), Some("pair_programming"));
@@ -394,7 +469,7 @@ mod tests {
     #[test]
     fn confidence_is_clamped_into_range() {
         let body = response_body(
-            r#"{"intent":"debug_or_fix","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":4.2,"proposed_intent":null,"proposed_domain":null}"#,
+            r#"{"intent":"modify_or_debug_code","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":4.2,"proposed_intent":null,"proposed_domain":null,"proposal_rationale":null}"#,
         );
         assert_eq!(parse_label(&request(), &body).unwrap().confidence, 1.0);
     }

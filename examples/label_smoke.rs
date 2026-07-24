@@ -8,19 +8,22 @@ fn main() {
         key,
     );
     let cases = [
-        "Ask Claude Code to have Codex refactor the payment module and run the tests",
-        "what is the capital of Australia",
-        "compare Postgres vs DynamoDB for our event store, check current pricing and recommend one",
-        "please knit me a jumper for my cat named Mochi",
+        "write a birthday message for my mum who loves gardening",
+        "my knee hurts after running, what should I do",
+        "plan a 5 day trip to Vietnam in December on a mid budget",
+        "turn this spreadsheet of sales into a chart and tell me the trend",
+        "fix the failing payment test in the checkout module",
+        "just chatting, how has your day been",
+        "translate this contract clause into plain english",
         "get Alma to run the deploy and have Claude Code review the diff",
     ];
     for (i, text) in cases.iter().enumerate() {
-        let request = LabelRequest { session_id: 1, seq: i as i64, text: text.to_string() };
+        let request = LabelRequest { session_id: 1, seq: i as i64, text: text.to_string(), context: Vec::new() };
         match labeler.label(&request) {
             Ok(l) => println!(
-                "OK   {:<44} -> {}/{} depth={} delegation={} drove={} proposal={:?}",
+                "OK   {:<44} -> {}/{} depth={} delegation={} drove={} why={:?}",
                 &text[..text.len().min(42)], l.intent, l.domain, l.depth, l.delegation, l.delegate_tool,
-                l.proposed_intent.or(l.proposed_domain)
+                l.proposal_rationale.clone()
             ),
             Err(e) => println!("FAIL {:<44} -> {e}", &text[..text.len().min(42)]),
         }

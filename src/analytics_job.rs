@@ -4,6 +4,10 @@ use crate::taxonomy::TAXONOMY_VERSION;
 
 pub const DEFAULT_BATCH_LIMIT: i64 = 25;
 
+/// Earlier turns handed to the labeler so a follow-up like "now the other one"
+/// is readable. The published method uses up to ten preceding messages.
+const CONTEXT_TURNS: i64 = 6;
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct JobReport {
     pub considered: usize,
@@ -19,16 +23,26 @@ impl JobReport {
 }
 
 pub fn collect(store: &Store, limit: i64) -> rusqlite::Result<Vec<LabelRequest>> {
-    Ok(store
-        .unlabeled_turns(TAXONOMY_VERSION, PROMPT_VERSION, limit)?
-        .into_iter()
-        .filter(|turn| !turn.redacted_text.trim().is_empty())
-        .map(|turn| LabelRequest {
+    let pending = store.unlabeled_turns(TAXONOMY_VERSION, PROMPT_VERSION, limit)?;
+    let mut requests = Vec::with_capacity(pending.len());
+    for turn in pending {
+        if turn.redacted_text.trim().is_empty() {
+            continue;
+        }
+        let context = store
+            .preceding_turns(turn.session_id, turn.seq, CONTEXT_TURNS)?
+            .into_iter()
+            .filter(|t| !t.redacted_text.trim().is_empty())
+            .map(|t| format!("{}: {}", t.role, t.redacted_text))
+            .collect();
+        requests.push(LabelRequest {
             session_id: turn.session_id,
             seq: turn.seq,
             text: turn.redacted_text,
-        })
-        .collect())
+            context,
+        });
+    }
+    Ok(requests)
 }
 
 pub fn label_batch(labeler: &dyn Labeler, requests: &[LabelRequest]) -> Vec<Result<Label, String>> {
@@ -87,11 +101,7 @@ pub fn persist(
                 model,
                 facet,
                 proposed,
-                rationale: if facet == "intent" {
-                    &label.domain
-                } else {
-                    &label.intent
-                },
+                rationale: label.proposal_rationale.as_deref().unwrap_or(""),
                 seen_at_ms: now_ms,
             })?;
             report.candidates += 1;
@@ -151,6 +161,7 @@ mod tests {
             confidence: 0.9,
             proposed_intent: proposed.map(str::to_string),
             proposed_domain: None,
+            proposal_rationale: proposed.map(|_| "nothing listed covered it".to_string()),
         }
     }
 
@@ -197,7 +208,7 @@ mod tests {
     fn labeled_turns_leave_the_queue_and_re_running_is_idempotent() {
         let store = store_with_turns(2);
         let labeler = FakeLabeler {
-            label: Some(label("debug_or_fix", None)),
+            label: Some(label("modify_or_debug_code", None)),
         };
         let first = run_once(&store, &labeler, 100, 1_000).unwrap();
         assert_eq!(first.labeled, 2);
@@ -228,7 +239,7 @@ mod tests {
         let report = run_once(&store, &labeler, 100, 1_000).unwrap();
         assert_eq!(report.candidates, 3);
 
-        let candidates = store.all_label_candidates().unwrap();
+        let candidates = store.all_label_candidates(TAXONOMY_VERSION).unwrap();
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].proposed, "pair_programming");
         assert_eq!(candidates[0].observations, 3);

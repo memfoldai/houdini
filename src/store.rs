@@ -413,6 +413,59 @@ impl Store {
         rows.collect()
     }
 
+    pub fn preceding_turns(
+        &self,
+        session_id: i64,
+        seq: i64,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<TurnRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT seq, role, redacted_text, ts FROM turns
+             WHERE session_id = ?1 AND seq < ?2
+             ORDER BY seq DESC LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![session_id, seq, limit], |r| {
+            Ok(TurnRow {
+                seq: r.get(0)?,
+                role: r.get(1)?,
+                redacted_text: r.get(2)?,
+                ts_ms: r.get(3)?,
+            })
+        })?;
+        let mut turns = rows.collect::<rusqlite::Result<Vec<_>>>()?;
+        turns.reverse();
+        Ok(turns)
+    }
+
+    pub fn label_progress(&self, taxonomy_version: i64, prompt_version: i64) -> rusqlite::Result<(i64, i64)> {
+        self.conn.query_row(
+            "SELECT
+                 (SELECT COUNT(*) FROM turns WHERE role = 'user'),
+                 (SELECT COUNT(*) FROM turn_labels
+                   WHERE taxonomy_version = ?1 AND prompt_version = ?2)",
+            params![taxonomy_version, prompt_version],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+    }
+
+    pub fn drop_superseded_labels(
+        &self,
+        taxonomy_version: i64,
+        prompt_version: i64,
+    ) -> rusqlite::Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        let removed = tx.execute(
+            "DELETE FROM turn_labels WHERE taxonomy_version <> ?1 OR prompt_version <> ?2",
+            params![taxonomy_version, prompt_version],
+        )?;
+        tx.execute(
+            "DELETE FROM label_candidates WHERE taxonomy_version <> ?1 OR prompt_version <> ?2",
+            params![taxonomy_version, prompt_version],
+        )?;
+        tx.commit()?;
+        Ok(removed)
+    }
+
     pub fn insert_turn_label(&self, label: &TurnLabelRecord) -> rusqlite::Result<bool> {
         let changed = self.conn.execute(
             "INSERT INTO turn_labels
@@ -463,6 +516,7 @@ impl Store {
     pub fn label_cells(&self, taxonomy_version: i64) -> rusqlite::Result<Vec<LabelCell>> {
         let mut stmt = self.conn.prepare(
             "SELECT strftime('%Y-%m-%d', t.ts / 1000, 'unixepoch') AS day,
+                    CAST(strftime('%H', t.ts / 1000, 'unixepoch') AS INTEGER) AS hour,
                     s.tool, s.provider, s.surface, s.model,
                     l.intent, l.domain, l.depth, l.delegation, l.delegate_tool,
                     COUNT(*), COUNT(DISTINCT l.session_id), SUM(LENGTH(t.redacted_text))
@@ -470,36 +524,66 @@ impl Store {
              JOIN sessions s ON s.id = l.session_id
              JOIN turns t ON t.session_id = l.session_id AND t.seq = l.seq
              WHERE l.taxonomy_version = ?1
-             GROUP BY day, s.tool, s.provider, s.surface, s.model,
+             GROUP BY day, hour, s.tool, s.provider, s.surface, s.model,
                       l.intent, l.domain, l.depth, l.delegation, l.delegate_tool
              ORDER BY day DESC, COUNT(*) DESC",
         )?;
         let rows = stmt.query_map(params![taxonomy_version], |r| {
             Ok(LabelCell {
                 day: r.get(0)?,
-                tool: r.get(1)?,
-                provider: r.get(2)?,
-                surface: r.get(3)?,
-                model: r.get(4)?,
-                intent: r.get(5)?,
-                domain: r.get(6)?,
-                depth: r.get(7)?,
-                delegation: r.get(8)?,
-                delegate_tool: r.get(9)?,
-                turns: r.get(10)?,
-                sessions: r.get(11)?,
-                chars: r.get(12)?,
+                hour: r.get(1)?,
+                tool: r.get(2)?,
+                provider: r.get(3)?,
+                surface: r.get(4)?,
+                model: r.get(5)?,
+                intent: r.get(6)?,
+                domain: r.get(7)?,
+                depth: r.get(8)?,
+                delegation: r.get(9)?,
+                delegate_tool: r.get(10)?,
+                turns: r.get(11)?,
+                sessions: r.get(12)?,
+                chars: r.get(13)?,
             })
         })?;
         rows.collect()
     }
 
-    pub fn all_label_candidates(&self) -> rusqlite::Result<Vec<LabelCandidateRow>> {
+    pub fn session_spans(&self) -> rusqlite::Result<Vec<SessionSpan>> {
         let mut stmt = self.conn.prepare(
-            "SELECT taxonomy_version, facet, proposed, rationale, observations, last_seen_at
-             FROM label_candidates ORDER BY observations DESC, proposed",
+            "SELECT strftime('%Y-%m-%d', s.started_at / 1000, 'unixepoch') AS day,
+                    s.tool,
+                    COUNT(*),
+                    SUM(CASE WHEN s.ended_at > s.started_at
+                             THEN s.ended_at - s.started_at ELSE 0 END) / 60000,
+                    MAX(CASE WHEN s.ended_at > s.started_at
+                             THEN s.ended_at - s.started_at ELSE 0 END) / 60000
+             FROM sessions s
+             GROUP BY day, s.tool
+             ORDER BY day DESC",
         )?;
         let rows = stmt.query_map([], |r| {
+            Ok(SessionSpan {
+                day: r.get(0)?,
+                tool: r.get(1)?,
+                sessions: r.get(2)?,
+                total_minutes: r.get(3)?,
+                longest_minutes: r.get(4)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn all_label_candidates(
+        &self,
+        taxonomy_version: i64,
+    ) -> rusqlite::Result<Vec<LabelCandidateRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT taxonomy_version, facet, proposed, rationale, observations, last_seen_at
+             FROM label_candidates WHERE taxonomy_version = ?1
+             ORDER BY observations DESC, proposed",
+        )?;
+        let rows = stmt.query_map(params![taxonomy_version], |r| {
             Ok(LabelCandidateRow {
                 taxonomy_version: r.get(0)?,
                 facet: r.get(1)?,
@@ -594,6 +678,7 @@ pub struct LabelCandidate<'a> {
 #[derive(Debug, Clone)]
 pub struct LabelCell {
     pub day: String,
+    pub hour: i64,
     pub tool: String,
     pub provider: String,
     pub surface: String,
@@ -606,6 +691,15 @@ pub struct LabelCell {
     pub turns: i64,
     pub sessions: i64,
     pub chars: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionSpan {
+    pub day: String,
+    pub tool: String,
+    pub sessions: i64,
+    pub total_minutes: i64,
+    pub longest_minutes: i64,
 }
 
 #[derive(Debug, Clone)]

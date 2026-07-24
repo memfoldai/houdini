@@ -113,3 +113,20 @@ changes (it rarely does).
 Quit from the menu, drag the app to the Trash, and remove
 `~/Library/Application Support/ai.memfold.houdini/` (and the Keychain item
 `ai.memfold.houdini`). There are no permissions to revoke.
+
+## Starting at login
+
+Houdini registers itself as a login item the first time it runs from
+`/Applications`, using `SMAppService` (the API Apple documents for this since
+macOS 13). Nothing to configure, and it survives a restart.
+
+macOS shows the registration in **System Settings > General > Login Items**,
+which is where you turn it off; that is deliberately the only switch, so the app
+never disagrees with what the system shows. For scripted removal:
+
+```sh
+/Applications/Houdini.app/Contents/MacOS/houdini --disable-login-item
+```
+
+A build running outside `/Applications` never registers, so a development copy
+cannot leave a stale login item behind.

@@ -31,6 +31,15 @@ pub fn run() {
         }
     };
 
+    if let Ok(removed) = store.drop_superseded_labels(
+        houdini::taxonomy::TAXONOMY_VERSION,
+        houdini::analytics::PROMPT_VERSION,
+    ) {
+        if removed > 0 {
+            println!("cleared {removed} label(s) from a superseded taxonomy");
+        }
+    }
+
     let labeler = ProxyLabeler::new(cfg.analytics_base_url, cfg.analytics_model, api_key);
     let limit = std::env::args()
         .skip_while(|a| a != "--analyze-once")
