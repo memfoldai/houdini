@@ -17,10 +17,45 @@ pub struct AppConfig {
 
     #[serde(default)]
     pub ner_model_dir: Option<PathBuf>,
+
+    #[serde(default = "d_analytics_enabled")]
+    pub analytics_enabled: bool,
+
+    #[serde(default = "d_analytics_base_url")]
+    pub analytics_base_url: String,
+
+    #[serde(default = "d_analytics_model")]
+    pub analytics_model: String,
+
+    #[serde(default = "d_analytics_interval_ms")]
+    pub analytics_interval_ms: u64,
+
+    #[serde(default = "d_analytics_batch_limit")]
+    pub analytics_batch_limit: i64,
 }
 
 fn d_transcript_poll_ms() -> u64 {
     2_000
+}
+
+fn d_analytics_enabled() -> bool {
+    true
+}
+
+fn d_analytics_base_url() -> String {
+    crate::analytics::DEFAULT_BASE_URL.to_string()
+}
+
+fn d_analytics_model() -> String {
+    crate::analytics::DEFAULT_MODEL.to_string()
+}
+
+fn d_analytics_interval_ms() -> u64 {
+    60 * 60 * 1000
+}
+
+fn d_analytics_batch_limit() -> i64 {
+    crate::analytics_job::DEFAULT_BATCH_LIMIT
 }
 
 impl AppConfig {
@@ -29,6 +64,11 @@ impl AppConfig {
             install_id,
             transcript_poll_ms: d_transcript_poll_ms(),
             ner_model_dir: None,
+            analytics_enabled: d_analytics_enabled(),
+            analytics_base_url: d_analytics_base_url(),
+            analytics_model: d_analytics_model(),
+            analytics_interval_ms: d_analytics_interval_ms(),
+            analytics_batch_limit: d_analytics_batch_limit(),
         }
     }
 }
@@ -145,6 +185,11 @@ mod tests {
         assert!(
             reread.contains("transcript_poll_ms"),
             "file upgraded on load"
+        );
+        assert_eq!(cfg.analytics_model, "gpt-5.5", "analytics defaults fill in");
+        assert!(
+            reread.contains("analytics_base_url"),
+            "analytics fields materialize in an older file"
         );
         fs::remove_dir_all(&dir).ok();
     }

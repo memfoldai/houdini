@@ -1,4 +1,6 @@
 pub mod agent_actions;
+pub mod analytics;
+pub mod analytics_job;
 pub mod attribution;
 pub mod config;
 pub mod export;
@@ -8,6 +10,7 @@ pub mod logging;
 pub mod redact;
 pub mod store;
 pub mod summary;
+pub mod taxonomy;
 pub mod timestamp;
 pub mod webingest;
 

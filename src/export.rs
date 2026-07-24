@@ -50,6 +50,7 @@ struct ActionRow {
 pub fn export_snapshot(store: &Store, device: &str, dir: &Path) -> std::io::Result<PathBuf> {
     fs::create_dir_all(dir)?;
     export_actions(store, device, dir)?;
+    export_analytics(store, device, dir)?;
     let path = dir.join("interactions.jsonl");
     let mut out = BufWriter::new(File::create(&path)?);
 
@@ -120,6 +121,81 @@ pub fn data_dir_path(data_dir: &Path) -> PathBuf {
 
 fn io_err(e: rusqlite::Error) -> std::io::Error {
     std::io::Error::other(e.to_string())
+}
+
+#[derive(serde::Serialize)]
+struct AnalyticsCellRow<'a> {
+    schema: &'a str,
+    kind: &'a str,
+    device: String,
+    taxonomy_version: i64,
+    prompt_version: i64,
+    intent: String,
+    domain: String,
+    depth: i64,
+    delegation: String,
+    turns: i64,
+}
+
+#[derive(serde::Serialize)]
+struct CandidateRow<'a> {
+    schema: &'a str,
+    kind: &'a str,
+    device: String,
+    taxonomy_version: i64,
+    facet: String,
+    proposed: String,
+    observations: i64,
+    last_seen_ms: i64,
+}
+
+pub fn export_analytics(store: &Store, device: &str, dir: &Path) -> std::io::Result<PathBuf> {
+    fs::create_dir_all(dir)?;
+    let path = dir.join("analytics.jsonl");
+    let mut out = BufWriter::new(File::create(&path)?);
+
+    for cell in store
+        .label_counts(crate::taxonomy::TAXONOMY_VERSION)
+        .map_err(io_err)?
+    {
+        let row = AnalyticsCellRow {
+            schema: SCHEMA,
+            kind: "analytics_cell",
+            device: device.to_string(),
+            taxonomy_version: crate::taxonomy::TAXONOMY_VERSION,
+            prompt_version: crate::analytics::PROMPT_VERSION,
+            intent: cell.intent,
+            domain: cell.domain,
+            depth: cell.depth,
+            delegation: cell.delegation,
+            turns: cell.turns,
+        };
+        write_row(&mut out, &row)?;
+    }
+
+    for candidate in store.all_label_candidates().map_err(io_err)? {
+        let row = CandidateRow {
+            schema: SCHEMA,
+            kind: "label_candidate",
+            device: device.to_string(),
+            taxonomy_version: candidate.taxonomy_version,
+            facet: candidate.facet,
+            proposed: candidate.proposed,
+            observations: candidate.observations,
+            last_seen_ms: candidate.last_seen_at_ms,
+        };
+        write_row(&mut out, &row)?;
+    }
+
+    out.flush()?;
+    Ok(path)
+}
+
+fn write_row<W: Write, T: serde::Serialize>(out: &mut W, row: &T) -> std::io::Result<()> {
+    let line = serde_json::to_string(row)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    out.write_all(line.as_bytes())?;
+    out.write_all(b"\n")
 }
 
 #[cfg(test)]

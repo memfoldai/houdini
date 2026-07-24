@@ -5,6 +5,32 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.7.0] - 2026-07-24
+
+### Added
+- **Usage analytics.** A background job labels each of your own requests against
+  a versioned, closed taxonomy and stores the result locally, so team-wide "what
+  is AI being used for" can be answered without anyone reading messages. Four
+  facets per turn: intent, domain, research depth (1 to 4), and delegation,
+  where `agent_run` records one AI being driven by another. New tables
+  `turn_labels` and `label_candidates` (schema version 7, additive).
+- **Out-of-taxonomy proposals.** A request that fits no existing label is
+  recorded as `other` plus a proposal with an observation count, rather than
+  becoming an invented category. Proposals are promoted into the next taxonomy
+  version by a human, so no two machines can mint near-duplicate labels.
+- `houdini --set-analytics-key` stores the proxy key in the login Keychain,
+  reading it from stdin so it never reaches the process list.
+- `data/analytics.jsonl` in the export: aggregate counts per label combination
+  with the taxonomy, prompt, and model versions attached. No text.
+- New doc: `docs/analytics.md`.
+
+### Changed
+- Egress is now enumerated rather than absent. Capture is still local, and the
+  analytics job is the second path off the machine after the updater; it sends
+  redacted request text to the configured LiteLLM proxy. `AGENTS.md`,
+  `docs/privacy.md`, `docs/architecture.md`, and `docs/grouping.md` say so
+  plainly. Set `analytics_enabled: false` to opt out.
+
 ## [0.5.0] - 2026-07-18
 
 First release as **Houdini** (was "AI Usage Monitor"). By Rahul Biliyar.

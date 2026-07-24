@@ -32,6 +32,9 @@ use houdini::ingest_actions::ActionIngestor;
 use houdini::store::{ActivityStats, Store, PAUSE_UNTIL_KEY};
 use houdini::webingest;
 
+use houdini::analytics::{Label, LabelRequest, Labeler, ProxyLabeler};
+use houdini::analytics_job;
+
 use crate::tray_glyph::{self, Glyph};
 use crate::updater;
 
@@ -44,6 +47,8 @@ const ACTIVE_WINDOW_MS: i64 = 6_000;
 const HEARTBEAT_MS: i64 = 30_000;
 
 const UPDATE_CHECK_MS: i64 = 6 * 60 * 60 * 1000;
+
+const ANALYTICS_RETRY_MS: i64 = 15 * 60 * 1000;
 
 const PAUSE_15M_MS: i64 = 15 * 60 * 1000;
 const PAUSE_1H_MS: i64 = 60 * 60 * 1000;
@@ -77,6 +82,13 @@ struct Runtime {
     last_update_check: Cell<i64>,
     update_rx: RefCell<Option<Receiver<(bool, UpdateOutcome)>>>,
     update_notice_until: Cell<i64>,
+
+    last_analytics: Cell<i64>,
+    analytics_rx: RefCell<Option<Receiver<Vec<Result<Label, String>>>>>,
+    analytics_batch: RefCell<Vec<LabelRequest>>,
+    analytics_interval_ms: i64,
+    analytics_batch_limit: i64,
+    analytics_labeler: Option<Arc<ProxyLabeler>>,
 
     tray: RefCell<Option<TrayIcon>>,
     timer: RefCell<Option<Retained<NSTimer>>>,
@@ -164,6 +176,27 @@ pub fn run() {
     app.run();
 }
 
+fn resolve_labeler(cfg: &AppConfig) -> Option<Arc<ProxyLabeler>> {
+    if !cfg.analytics_enabled {
+        log::info!("analytics: disabled by config");
+        return None;
+    }
+    let Some(key) = crate::keychain::analytics_key() else {
+        log::info!("analytics: no api key provisioned; labeling stays off");
+        return None;
+    };
+    log::info!(
+        "analytics: labeling with {} via {}",
+        cfg.analytics_model,
+        cfg.analytics_base_url
+    );
+    Some(Arc::new(ProxyLabeler::new(
+        cfg.analytics_base_url.clone(),
+        cfg.analytics_model.clone(),
+        key,
+    )))
+}
+
 fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
     let key = crate::keychain::db_key().unwrap_or_else(|e| {
         log::error!("{e}");
@@ -181,6 +214,8 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
             &reason,
         )
     };
+
+    let labeler = resolve_labeler(cfg);
 
     let (web_tx, web_rx) = mpsc::channel();
     start_web_listener(paths.sock_file.clone(), web_tx);
@@ -232,6 +267,12 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         last_update_check: Cell::new(i64::MIN),
         update_rx: RefCell::new(None),
         update_notice_until: Cell::new(0),
+        last_analytics: Cell::new(i64::MIN),
+        analytics_rx: RefCell::new(None),
+        analytics_batch: RefCell::new(Vec::new()),
+        analytics_interval_ms: cfg.analytics_interval_ms as i64,
+        analytics_batch_limit: cfg.analytics_batch_limit,
+        analytics_labeler: labeler,
         tray: RefCell::new(None),
         timer: RefCell::new(None),
         _app_nap: app_nap,
@@ -407,6 +448,11 @@ fn tick(rt: &Rc<Runtime>) {
 
     drain_web_messages(rt);
 
+    if !rt.is_paused() && due(&rt.last_analytics, clock.mono_ms, rt.analytics_interval_ms) {
+        spawn_analytics(rt);
+    }
+    poll_analytics(rt, clock.mono_ms, clock.wall_ms);
+
     if due(&rt.last_update_check, clock.mono_ms, UPDATE_CHECK_MS) {
         spawn_update_check(rt, false);
     }
@@ -435,6 +481,66 @@ fn drain_web_messages(rt: &Rc<Runtime>) {
             Ok(n) => log::info!("web: stored {n} chat turn(s)"),
             Err(e) => log::warn!("web: dropped a message: {e}"),
         }
+    }
+}
+
+fn spawn_analytics(rt: &Rc<Runtime>) {
+    let Some(labeler) = rt.analytics_labeler.clone() else {
+        return;
+    };
+    if rt.analytics_rx.borrow().is_some() {
+        return;
+    }
+    let requests = match analytics_job::collect(&rt.store, rt.analytics_batch_limit) {
+        Ok(requests) => requests,
+        Err(e) => {
+            log::warn!("analytics: could not read pending turns: {e}");
+            return;
+        }
+    };
+    if requests.is_empty() {
+        return;
+    }
+    let (tx, rx) = mpsc::channel();
+    let batch = requests.clone();
+    thread::spawn(move || {
+        let _ = tx.send(analytics_job::label_batch(labeler.as_ref(), &batch));
+    });
+    *rt.analytics_batch.borrow_mut() = requests;
+    *rt.analytics_rx.borrow_mut() = Some(rx);
+}
+
+fn poll_analytics(rt: &Rc<Runtime>, now_mono_ms: i64, now_wall_ms: i64) {
+    let received = {
+        let rx = rt.analytics_rx.borrow();
+        rx.as_ref().and_then(|rx| rx.try_recv().ok())
+    };
+    let Some(results) = received else {
+        return;
+    };
+    *rt.analytics_rx.borrow_mut() = None;
+    rt.analytics_batch.borrow_mut().clear();
+
+    let model = rt
+        .analytics_labeler
+        .as_ref()
+        .map(|l| l.model().to_string())
+        .unwrap_or_default();
+    match analytics_job::persist(&rt.store, &model, &results, now_wall_ms) {
+        Ok(report) => {
+            log::info!(
+                "analytics: labeled {} of {} turn(s), {} failed, {} candidate(s)",
+                report.labeled,
+                report.considered,
+                report.failed,
+                report.candidates
+            );
+            if report.failed > 0 && report.labeled == 0 {
+                rt.last_analytics
+                    .set(now_mono_ms.saturating_sub(rt.analytics_interval_ms - ANALYTICS_RETRY_MS));
+            }
+        }
+        Err(e) => log::warn!("analytics: could not store labels: {e}"),
     }
 }
 
