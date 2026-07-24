@@ -5,6 +5,41 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.7.0] - 2026-07-24
+
+### Added
+- **Usage analytics.** A background job labels each of your own requests against
+  a versioned, closed taxonomy and stores the result locally, so team-wide "what
+  is AI being used for" can be answered without anyone reading messages. Four
+  facets per turn: intent, domain, research depth (1 to 4), delegation, and
+  `delegate_tool`, which names **which** AI was driven so nested usage is a real
+  edge rather than a flag. New tables
+  `turn_labels` and `label_candidates` (schema version 7, additive).
+- **Out-of-taxonomy proposals.** A request that fits no existing label is
+  recorded as `other` plus a proposal with an observation count, rather than
+  becoming an invented category. Proposals are promoted into the next taxonomy
+  version by a human, so no two machines can mint near-duplicate labels.
+- `--set-analytics-key` stores the proxy key in the login Keychain, read from
+  stdin so it never reaches the process list or shell history. The key is
+  deliberately never compiled into the binary: releases are public, so a baked
+  key would ship to the world. `--analyze-once [n]` labels a batch immediately
+  instead of waiting for the hourly tick.
+- Analytics cells carry identity (`person`, `device_name`, install id), the day,
+  and the tool/provider/surface/model dimensions, with `turns`, `sessions` and
+  `chars` as measures. The export is a star-schema fact table, so a leaderboard
+  or an adoption trend is one GROUP BY. `openclaw` presents as **Alma** wherever
+  a human or dashboard reads it, while the stored id stays stable.
+- `data/analytics.jsonl` in the export: aggregate counts per label combination
+  with the taxonomy, prompt, and model versions attached. No text.
+- New doc: `docs/analytics.md`.
+
+### Changed
+- Egress is now enumerated rather than absent. Capture is still local, and the
+  analytics job is the second path off the machine after the updater; it sends
+  redacted request text to the configured LiteLLM proxy. `AGENTS.md`,
+  `docs/privacy.md`, `docs/architecture.md`, and `docs/grouping.md` say so
+  plainly. Set `analytics_enabled: false` to opt out.
+
 ## [0.5.0] - 2026-07-18
 
 First release as **Houdini** (was "AI Usage Monitor"). By Rahul Biliyar.

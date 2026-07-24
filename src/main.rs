@@ -3,6 +3,7 @@ mod app;
 #[cfg(target_os = "macos")]
 mod browserhost;
 #[cfg(target_os = "macos")]
+mod analyze_once;
 mod diagnose;
 #[cfg(target_os = "macos")]
 mod keychain;
@@ -30,6 +31,27 @@ fn main() {
     }
     if args.iter().any(|a| a == "--uninstall-browser-host") {
         browserhost::uninstall();
+        return;
+    }
+
+    if args.iter().any(|a| a == "--set-analytics-key") {
+        let mut key = String::new();
+        if std::io::stdin().read_line(&mut key).is_err() || key.trim().is_empty() {
+            eprintln!("read the key from stdin: printf %s \"$KEY\" | houdini --set-analytics-key");
+            std::process::exit(1);
+        }
+        match keychain::set_analytics_key(&key) {
+            Ok(()) => println!("analytics key stored in the login keychain"),
+            Err(e) => {
+                eprintln!("{e}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
+
+    if args.iter().any(|a| a == "--analyze-once") {
+        analyze_once::run();
         return;
     }
 

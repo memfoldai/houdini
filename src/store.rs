@@ -69,6 +69,40 @@ CREATE TABLE IF NOT EXISTS actions (
 );
 CREATE INDEX IF NOT EXISTS idx_actions_app_actor ON actions(app, actor);
 CREATE INDEX IF NOT EXISTS idx_actions_ts ON actions(ts);
+"#, r#"
+CREATE TABLE IF NOT EXISTS turn_labels (
+    id               INTEGER PRIMARY KEY,
+    session_id       INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    seq              INTEGER NOT NULL,
+    taxonomy_version INTEGER NOT NULL,
+    prompt_version   INTEGER NOT NULL,
+    model            TEXT NOT NULL,
+    intent           TEXT NOT NULL,
+    domain           TEXT NOT NULL,
+    depth            INTEGER NOT NULL CHECK (depth BETWEEN 1 AND 4),
+    delegation       TEXT NOT NULL CHECK (delegation IN ('none','tool_call','agent_run')),
+    delegate_tool    TEXT NOT NULL DEFAULT 'none',
+    confidence       REAL NOT NULL,
+    analyzed_at      INTEGER NOT NULL,
+    UNIQUE (session_id, seq, taxonomy_version, prompt_version)
+);
+CREATE INDEX IF NOT EXISTS idx_turn_labels_analyzed ON turn_labels(analyzed_at);
+CREATE INDEX IF NOT EXISTS idx_turn_labels_facets ON turn_labels(intent, domain);
+CREATE TABLE IF NOT EXISTS label_candidates (
+    id               INTEGER PRIMARY KEY,
+    taxonomy_version INTEGER NOT NULL,
+    prompt_version   INTEGER NOT NULL,
+    model            TEXT NOT NULL,
+    facet            TEXT NOT NULL CHECK (facet IN ('intent','domain')),
+    proposed         TEXT NOT NULL,
+    rationale        TEXT NOT NULL,
+    observations     INTEGER NOT NULL DEFAULT 1,
+    first_seen_at    INTEGER NOT NULL,
+    last_seen_at     INTEGER NOT NULL,
+    UNIQUE (taxonomy_version, facet, proposed)
+);
+CREATE INDEX IF NOT EXISTS idx_label_candidates_seen ON label_candidates(last_seen_at);
+CREATE INDEX IF NOT EXISTS idx_turn_labels_delegate ON turn_labels(delegate_tool);
 "#];
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
@@ -347,6 +381,136 @@ impl Store {
         })?;
         rows.collect()
     }
+
+    pub fn unlabeled_turns(
+        &self,
+        taxonomy_version: i64,
+        prompt_version: i64,
+        limit: i64,
+    ) -> rusqlite::Result<Vec<LabelInput>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT t.session_id, t.seq, t.redacted_text, t.ts, s.tool, s.provider, s.surface
+             FROM turns t
+             JOIN sessions s ON s.id = t.session_id
+             LEFT JOIN turn_labels l
+               ON l.session_id = t.session_id AND l.seq = t.seq
+              AND l.taxonomy_version = ?1 AND l.prompt_version = ?2
+             WHERE t.role = 'user' AND l.id IS NULL
+             ORDER BY t.ts DESC
+             LIMIT ?3",
+        )?;
+        let rows = stmt.query_map(params![taxonomy_version, prompt_version, limit], |r| {
+            Ok(LabelInput {
+                session_id: r.get(0)?,
+                seq: r.get(1)?,
+                redacted_text: r.get(2)?,
+                ts_ms: r.get(3)?,
+                tool: r.get(4)?,
+                provider: r.get(5)?,
+                surface: r.get(6)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn insert_turn_label(&self, label: &TurnLabelRecord) -> rusqlite::Result<bool> {
+        let changed = self.conn.execute(
+            "INSERT INTO turn_labels
+             (session_id, seq, taxonomy_version, prompt_version, model,
+              intent, domain, depth, delegation, delegate_tool, confidence, analyzed_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+             ON CONFLICT (session_id, seq, taxonomy_version, prompt_version) DO NOTHING",
+            params![
+                label.session_id,
+                label.seq,
+                label.taxonomy_version,
+                label.prompt_version,
+                label.model,
+                label.intent,
+                label.domain,
+                label.depth,
+                label.delegation,
+                label.delegate_tool,
+                label.confidence,
+                label.analyzed_at_ms,
+            ],
+        )?;
+        Ok(changed > 0)
+    }
+
+    pub fn record_label_candidate(&self, candidate: &LabelCandidate) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "INSERT INTO label_candidates
+             (taxonomy_version, prompt_version, model, facet, proposed, rationale,
+              observations, first_seen_at, last_seen_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, 1, ?7, ?7)
+             ON CONFLICT(taxonomy_version, facet, proposed) DO UPDATE SET
+                 observations = observations + 1,
+                 last_seen_at = excluded.last_seen_at",
+            params![
+                candidate.taxonomy_version,
+                candidate.prompt_version,
+                candidate.model,
+                candidate.facet,
+                candidate.proposed,
+                candidate.rationale,
+                candidate.seen_at_ms,
+            ],
+        )?;
+        Ok(())
+    }
+
+    pub fn label_cells(&self, taxonomy_version: i64) -> rusqlite::Result<Vec<LabelCell>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT strftime('%Y-%m-%d', t.ts / 1000, 'unixepoch') AS day,
+                    s.tool, s.provider, s.surface, s.model,
+                    l.intent, l.domain, l.depth, l.delegation, l.delegate_tool,
+                    COUNT(*), COUNT(DISTINCT l.session_id), SUM(LENGTH(t.redacted_text))
+             FROM turn_labels l
+             JOIN sessions s ON s.id = l.session_id
+             JOIN turns t ON t.session_id = l.session_id AND t.seq = l.seq
+             WHERE l.taxonomy_version = ?1
+             GROUP BY day, s.tool, s.provider, s.surface, s.model,
+                      l.intent, l.domain, l.depth, l.delegation, l.delegate_tool
+             ORDER BY day DESC, COUNT(*) DESC",
+        )?;
+        let rows = stmt.query_map(params![taxonomy_version], |r| {
+            Ok(LabelCell {
+                day: r.get(0)?,
+                tool: r.get(1)?,
+                provider: r.get(2)?,
+                surface: r.get(3)?,
+                model: r.get(4)?,
+                intent: r.get(5)?,
+                domain: r.get(6)?,
+                depth: r.get(7)?,
+                delegation: r.get(8)?,
+                delegate_tool: r.get(9)?,
+                turns: r.get(10)?,
+                sessions: r.get(11)?,
+                chars: r.get(12)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn all_label_candidates(&self) -> rusqlite::Result<Vec<LabelCandidateRow>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT taxonomy_version, facet, proposed, rationale, observations, last_seen_at
+             FROM label_candidates ORDER BY observations DESC, proposed",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(LabelCandidateRow {
+                taxonomy_version: r.get(0)?,
+                facet: r.get(1)?,
+                proposed: r.get(2)?,
+                rationale: r.get(3)?,
+                observations: r.get(4)?,
+                last_seen_at_ms: r.get(5)?,
+            })
+        })?;
+        rows.collect()
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -387,6 +551,71 @@ pub struct TurnRow {
     pub role: String,
     pub redacted_text: String,
     pub ts_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LabelInput {
+    pub session_id: i64,
+    pub seq: i64,
+    pub redacted_text: String,
+    pub ts_ms: i64,
+    pub tool: String,
+    pub provider: String,
+    pub surface: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct TurnLabelRecord<'a> {
+    pub session_id: i64,
+    pub seq: i64,
+    pub taxonomy_version: i64,
+    pub prompt_version: i64,
+    pub model: &'a str,
+    pub intent: &'a str,
+    pub domain: &'a str,
+    pub depth: i64,
+    pub delegation: &'a str,
+    pub delegate_tool: &'a str,
+    pub confidence: f64,
+    pub analyzed_at_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LabelCandidate<'a> {
+    pub taxonomy_version: i64,
+    pub prompt_version: i64,
+    pub model: &'a str,
+    pub facet: &'a str,
+    pub proposed: &'a str,
+    pub rationale: &'a str,
+    pub seen_at_ms: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LabelCell {
+    pub day: String,
+    pub tool: String,
+    pub provider: String,
+    pub surface: String,
+    pub model: Option<String>,
+    pub intent: String,
+    pub domain: String,
+    pub depth: i64,
+    pub delegation: String,
+    pub delegate_tool: String,
+    pub turns: i64,
+    pub sessions: i64,
+    pub chars: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct LabelCandidateRow {
+    pub taxonomy_version: i64,
+    pub facet: String,
+    pub proposed: String,
+    pub rationale: String,
+    pub observations: i64,
+    pub last_seen_at_ms: i64,
 }
 #[derive(Debug, Clone)]
 pub struct ActionRecord<'a> {
@@ -579,6 +808,51 @@ mod tests {
             "file is encrypted, not plaintext SQLite"
         );
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn every_taxonomy_value_round_trips_through_the_label_columns() {
+        let store = Store::open_in_memory().unwrap();
+        let (id, _) = store
+            .upsert_session(&SessionUpsert {
+                tool: "t",
+                external_id: "e",
+                provider: "p",
+                surface: "cli",
+                model: None,
+                started_at_ms: 0,
+                ended_at_ms: 0,
+                message_count: 0,
+            })
+            .unwrap();
+
+        let mut seq = 0;
+        for delegation in crate::taxonomy::DELEGATIONS {
+            for depth in crate::taxonomy::MIN_DEPTH..=crate::taxonomy::MAX_DEPTH {
+                store
+                    .add_turn(id, seq, Role::User, "request", 1_700_000_000_000)
+                    .unwrap();
+                store
+                    .insert_turn_label(&TurnLabelRecord {
+                        session_id: id,
+                        seq,
+                        taxonomy_version: 1,
+                        prompt_version: 1,
+                        model: "m",
+                        intent: crate::taxonomy::INTENTS[0],
+                        domain: crate::taxonomy::DOMAINS[0],
+                        depth,
+                        delegation,
+                        delegate_tool: crate::taxonomy::NONE,
+                        confidence: 0.5,
+                        analyzed_at_ms: 0,
+                    })
+                    .expect("the schema must accept every value the taxonomy can emit");
+                seq += 1;
+            }
+        }
+        let total: i64 = store.label_cells(1).unwrap().iter().map(|c| c.turns).sum();
+        assert_eq!(total, seq);
     }
 
     #[test]

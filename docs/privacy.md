@@ -48,8 +48,17 @@ Calendar).
 
 ## The guarantees
 
-- **Local-only.** No network egress anywhere except the updater (GitHub) and the
-  extension talking to the *local* app. Nothing uploads.
+- **Capture is local.** Nothing Houdini records is uploaded anywhere as content.
+  The store never leaves your Mac, and the extension talks only to the *local*
+  app.
+- **Two paths leave the machine, and both are named.** The updater talks to
+  GitHub. The usage-analytics job sends the redacted text of your own requests
+  to your organization's LiteLLM proxy so it can be classified, and stores only
+  the resulting labels locally. That text is redacted first, but redaction
+  removes credential and identifier *shapes*, not the names of people,
+  companies, or places you mention. Turn analytics off in `config.json`
+  (`"analytics_enabled": false`), or pause recording, if you would rather it did
+  not. See [analytics](analytics.md).
 - **Encrypted at rest.** The store is an encrypted SQLite database (SQLCipher,
   AES-256). The key is generated once and held in the **macOS Keychain**, never on
   disk beside the data. Nothing readable sits in a folder.

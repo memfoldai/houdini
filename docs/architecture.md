@@ -28,6 +28,7 @@ library; the menu-bar shell is the binary.
 | `src/ingest/` | Transcript adapters (`claude_code`, `codex`, `openclaw`) + the `Ingestor` that scans and normalizes them. Adding a tool is adding one adapter. |
 | `src/webingest.rs` | Parse, redact, and store browser-extension chat messages and Workspace action events; the socket framing shared with the native host. |
 | `src/store.rs` | The encrypted SQLite store (SQLCipher) and schema migrations. |
+| `src/analytics.rs`, `src/analytics_job.rs`, `src/taxonomy.rs` | Usage labeling: the versioned closed taxonomy, the strict-schema proxy call, and the batch job that fills `turn_labels`. |
 | `src/keychain.rs` | Fetches the DB key from the macOS Keychain. |
 | `src/redact.rs` | Deterministic redaction of secrets/PII, applied before any text is stored. |
 | `src/updater.rs` | Over-the-air update from GitHub Releases. |
@@ -84,8 +85,10 @@ cannot lose data.
   the native host only forwards. Do not make the native host open the database.
 - **Redaction is a gate, not a filter.** Text is redacted before it is stored,
   never after.
-- **Local-only.** No code path makes a network call except the updater (GitHub)
-  and the browser extension talking to the *local* native host.
+- **Egress is enumerated.** Exactly three code paths reach the network: the
+  updater (GitHub), the browser extension talking to the *local* native host,
+  and the usage-analytics labeler (`src/analytics.rs`) calling the configured
+  LiteLLM proxy. Capture itself never does.
 - **Migrations only add.** Never drop or rebuild a table on version bump; append a
   step to `MIGRATIONS`.
 - **Identity in the clear, content redacted.** The provider/tool is the research

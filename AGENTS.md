@@ -34,13 +34,20 @@ Keep builds at **zero warnings**.
    (`src/attribution.rs`), never from classifying what the text *says*. No
    keyword/embedding classification in the daemon. A per-tool adapter is metadata
    (which tool belongs to which vendor); guessing intent from content is not.
+   The usage-analytics job (`src/analytics.rs`) is the one exception and is
+   deliberately fenced: it never writes attribution columns, only the versioned
+   `turn_labels` table, and every row records the taxonomy, prompt and model it
+   came from so a label is always traceable to how it was produced.
 3. **Redaction is a hard gate, not a feature.** Raw transcript text must never
    reach disk. `redact_deterministic` runs before every turn is stored, offline.
    No redactor may make a network call.
-4. **Local-only, no egress.** The daemon makes zero network calls. It reads files
-   the user owns; the extension reads the page in the user's browser. Any semantic/LLM labeling
-   is an analysis-time job over the exported files (see docs/grouping.md), never
-   in the app.
+4. **Egress is the updater and the analytics job, nothing else.** Capture stays
+   local: the daemon reads files the user owns, the extension reads the page in
+   the user's browser, and no capture path talks to the network. Two paths do
+   leave the machine, both deliberate: the updater (GitHub) and the usage
+   analytics labeler, which sends redacted turn text to the organization's own
+   LiteLLM proxy and stores only structured labels locally
+   (see docs/analytics.md). Anything else making a network call is a bug.
 5. **No cheap fallbacks.** No hardcoded one-off fixes in prod code. Fix with a
    general rule or say it is unfixed. Adapters/attribution rules are a maintained
    registry, not per-case patches.

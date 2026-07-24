@@ -47,9 +47,15 @@ struct ActionRow {
     target: Option<String>,
 }
 
-pub fn export_snapshot(store: &Store, device: &str, dir: &Path) -> std::io::Result<PathBuf> {
+pub fn export_snapshot(
+    store: &Store,
+    identity: &ExportIdentity,
+    dir: &Path,
+) -> std::io::Result<PathBuf> {
+    let device = identity.install_id;
     fs::create_dir_all(dir)?;
     export_actions(store, device, dir)?;
+    export_analytics(store, identity, dir)?;
     let path = dir.join("interactions.jsonl");
     let mut out = BufWriter::new(File::create(&path)?);
 
@@ -122,6 +128,117 @@ fn io_err(e: rusqlite::Error) -> std::io::Error {
     std::io::Error::other(e.to_string())
 }
 
+/// Who and which machine a row came from. `install_id` is the stable join key;
+/// `person` groups a human's several machines; `device_name` names the machine.
+#[derive(Debug, Clone, Copy)]
+pub struct ExportIdentity<'a> {
+    pub install_id: &'a str,
+    pub person: &'a str,
+    pub device_name: &'a str,
+}
+
+#[derive(serde::Serialize)]
+struct AnalyticsCellRow<'a> {
+    schema: &'a str,
+    kind: &'a str,
+    device: String,
+    person: String,
+    device_name: String,
+    day: String,
+    taxonomy_version: i64,
+    prompt_version: i64,
+    tool: String,
+    tool_name: String,
+    provider: String,
+    surface: String,
+    model: Option<String>,
+    intent: String,
+    domain: String,
+    depth: i64,
+    delegation: String,
+    delegate_tool: String,
+    turns: i64,
+    sessions: i64,
+    chars: i64,
+}
+
+#[derive(serde::Serialize)]
+struct CandidateRow<'a> {
+    schema: &'a str,
+    kind: &'a str,
+    device: String,
+    taxonomy_version: i64,
+    facet: String,
+    proposed: String,
+    observations: i64,
+    last_seen_ms: i64,
+}
+
+pub fn export_analytics(
+    store: &Store,
+    identity: &ExportIdentity,
+    dir: &Path,
+) -> std::io::Result<PathBuf> {
+    let device = identity.install_id;
+    fs::create_dir_all(dir)?;
+    let path = dir.join("analytics.jsonl");
+    let mut out = BufWriter::new(File::create(&path)?);
+
+    for cell in store
+        .label_cells(crate::taxonomy::TAXONOMY_VERSION)
+        .map_err(io_err)?
+    {
+        let row = AnalyticsCellRow {
+            schema: SCHEMA,
+            kind: "analytics_cell",
+            device: device.to_string(),
+            person: identity.person.to_string(),
+            device_name: identity.device_name.to_string(),
+            day: cell.day,
+            taxonomy_version: crate::taxonomy::TAXONOMY_VERSION,
+            prompt_version: crate::analytics::PROMPT_VERSION,
+            tool_name: crate::attribution::display_tool(&cell.tool).to_string(),
+            tool: cell.tool,
+            provider: cell.provider,
+            surface: cell.surface,
+            model: cell.model,
+            intent: cell.intent,
+            domain: cell.domain,
+            depth: cell.depth,
+            delegation: cell.delegation,
+            delegate_tool: cell.delegate_tool,
+            turns: cell.turns,
+            sessions: cell.sessions,
+            chars: cell.chars,
+        };
+        write_row(&mut out, &row)?;
+    }
+
+    for candidate in store.all_label_candidates().map_err(io_err)? {
+        let row = CandidateRow {
+            schema: SCHEMA,
+            kind: "label_candidate",
+            device: device.to_string(),
+            taxonomy_version: candidate.taxonomy_version,
+            facet: candidate.facet,
+            proposed: candidate.proposed,
+            observations: candidate.observations,
+            last_seen_ms: candidate.last_seen_at_ms,
+        };
+        write_row(&mut out, &row)?;
+    }
+
+    out.flush()?;
+    Ok(path)
+}
+
+fn write_row<W: Write, T: serde::Serialize>(out: &mut W, row: &T) -> std::io::Result<()> {
+    let line = serde_json::to_string(row)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    out.write_all(line.as_bytes())?;
+    out.write_all(b"\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -163,7 +280,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join(format!("houdini-snap-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        let path = export_snapshot(&store, "dev", &dir).unwrap();
+        let path = export_snapshot(&store, &ExportIdentity { install_id: "dev", person: "p", device_name: "d" }, &dir).unwrap();
 
         let rows: Vec<serde_json::Value> = fs::read_to_string(&path)
             .unwrap()
@@ -203,7 +320,7 @@ mod tests {
 
         let dir = std::env::temp_dir().join(format!("houdini-actsnap-{}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
-        export_snapshot(&store, "dev", &dir).unwrap();
+        export_snapshot(&store, &ExportIdentity { install_id: "dev", person: "p", device_name: "d" }, &dir).unwrap();
 
         let body = fs::read_to_string(dir.join("actions.jsonl")).unwrap();
         let rows: Vec<serde_json::Value> = body
