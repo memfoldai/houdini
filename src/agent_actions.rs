@@ -164,7 +164,7 @@ pub fn persist(store: &Store, source: &str, actions: &[AgentAction]) -> rusqlite
         let target = a
             .target
             .as_deref()
-            .map(|t| redact::redact_deterministic(t).text);
+            .map(|t| truncate(&redact::redact_deterministic(t).text, 120));
         // Scope the dedupe key to the session so a call id reused across two
         // sessions (or a synthesized id colliding by timestamp) is not dropped.
         let ext_id = format!("{}\u{1f}{}", a.session_id, a.id);
@@ -205,7 +205,7 @@ fn normalize(
             Some((
                 "run_applescript".to_string(),
                 applescript_app(script),
-                Some(truncate(script.trim(), 120)),
+                Some(script.trim().to_string()),
                 // A script could be a pure read, but AppleScript is opaque to us,
                 // so we conservatively treat it as state-changing.
                 ActionKind::Mutating,
@@ -401,6 +401,30 @@ mod tests {
         assert!(
             !target.contains("a@b.com"),
             "free-text target is redacted before storage"
+        );
+    }
+
+    #[test]
+    fn persist_redacts_before_truncating_agent_action_targets() {
+        let store = Store::open_in_memory().unwrap();
+        let prefix = "x".repeat(118);
+        let body = format!(
+            r#"
+{{"type":"session","id":"sess-script","timestamp":"2026-07-20T10:00:00.000Z"}}
+{{"message":{{"role":"assistant","content":[{{"type":"toolCall","id":"tc1","name":"bdc__run_applescript","arguments":{{"script":"tell application \"Mail\" to set note to \"{prefix}bob@example.com\""}}}}],"timestamp":1000}}}}
+"#
+        );
+        let actions = parse_session(&body);
+
+        assert_eq!(persist(&store, "almaclaw", &actions).unwrap(), 1);
+
+        let target = store.all_actions().unwrap()[0]
+            .target_redacted
+            .clone()
+            .unwrap();
+        assert!(
+            !target.contains("bob@example.com"),
+            "redaction must run before the preview is truncated"
         );
     }
 
