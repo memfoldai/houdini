@@ -239,7 +239,7 @@ mod tests {
         let report = run_once(&store, &labeler, 100, 1_000).unwrap();
         assert_eq!(report.candidates, 3);
 
-        let candidates = store.all_label_candidates().unwrap();
+        let candidates = store.all_label_candidates(TAXONOMY_VERSION).unwrap();
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].proposed, "pair_programming");
         assert_eq!(candidates[0].observations, 3);

@@ -574,12 +574,16 @@ impl Store {
         rows.collect()
     }
 
-    pub fn all_label_candidates(&self) -> rusqlite::Result<Vec<LabelCandidateRow>> {
+    pub fn all_label_candidates(
+        &self,
+        taxonomy_version: i64,
+    ) -> rusqlite::Result<Vec<LabelCandidateRow>> {
         let mut stmt = self.conn.prepare(
             "SELECT taxonomy_version, facet, proposed, rationale, observations, last_seen_at
-             FROM label_candidates ORDER BY observations DESC, proposed",
+             FROM label_candidates WHERE taxonomy_version = ?1
+             ORDER BY observations DESC, proposed",
         )?;
-        let rows = stmt.query_map([], |r| {
+        let rows = stmt.query_map(params![taxonomy_version], |r| {
             Ok(LabelCandidateRow {
                 taxonomy_version: r.get(0)?,
                 facet: r.get(1)?,

@@ -251,7 +251,9 @@ pub fn export_analytics(
         write_row(&mut out, &row)?;
     }
 
-    for candidate in store.all_label_candidates().map_err(io_err)? {
+    for candidate in store
+        .all_label_candidates(crate::taxonomy::TAXONOMY_VERSION)
+        .map_err(io_err)? {
         let row = CandidateRow {
             schema: SCHEMA,
             kind: "label_candidate",
