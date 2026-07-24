@@ -43,10 +43,14 @@ menu-bar ring. It fills to a solid dot when a chat is recorded.
 ## Good to know
 
 - **Multiple browsers.** Repeat step 2 in each one you use.
-- **Privacy.** The extension only activates on chatgpt.com, claude.ai, and
-  gemini.google.com. It reads the conversation and sends it to the local app, never
-  to the network. Content is redacted (passwords, keys, emails, card numbers) before
-  it is saved.
+- **Privacy.** The extension activates on two groups of sites: the AI chats
+  (chatgpt.com, claude.ai, gemini.google.com), where it records the conversation;
+  and Google Workspace (mail.google.com, drive.google.com, docs.google.com,
+  sheets.google.com, slides.google.com, calendar.google.com), where it records
+  **which actions you take** (send, archive, delete, …) for agent-vs-human
+  attribution — the action's verb and the control's label only, never your emails,
+  files, or documents. Everything is sent to the local app, never to the network,
+  and is redacted (passwords, keys, emails, card numbers) before it is saved.
 - **Pausing.** Use **Take a break** in the menu. While paused nothing is recorded,
   web chats included.
 - **Updates.** When you get a new app version, replace the **Browser Extension**

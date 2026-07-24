@@ -7,14 +7,26 @@ report a concern see [../SECURITY.md](../SECURITY.md).
 
 ## What is recorded
 
-For each AI turn Houdini captures a single normalized record: the **provider**
-(`anthropic`, `openai`, …), **tool** (`claude-code`, `chatgpt-web`, …),
-**surface** (`cli`/`web`), **model**, a **session id**, a timestamp, the **role**
-(user/assistant), and the **redacted message text**. Nothing that is not a real
-AI message is recorded.
+Houdini keeps two kinds of local record.
 
-Sources: CLI/agent transcripts the user already has on disk (Claude Code, Codex,
-OpenClaw) and, if the extension is loaded, web chats (ChatGPT, Claude, Gemini).
+**AI turns.** For each AI turn: the **provider** (`anthropic`, `openai`, …),
+**tool** (`claude-code`, `chatgpt-web`, …), **surface** (`cli`/`web`), **model**,
+a **session id**, a timestamp, the **role** (user/assistant), and the **redacted
+message text**.
+
+**App actions (agent vs. human).** For each recognized action in a tracked app: the
+**actor** (`agent` or `human`), the **app** (e.g. `mail.google.com`), the
+**action** verb (`send`, `archive`, …), whether it changed state
+(`mutating`/`read_only`), a timestamp, and a **redacted** detail. This is what
+powers agent-vs-human attribution. Agent actions are read from the agent's own
+local transcripts; human actions are reported by the browser extension on the
+tracked sites. Only the action itself is recorded — its verb and the control's
+label — never the emails, files, or documents it acts on.
+
+Sources: CLI/agent transcripts already on disk (Claude Code, Codex,
+OpenClaw/almaclaw) and, if the extension is loaded, web chats (ChatGPT, Claude,
+Gemini) plus Google Workspace app actions (Gmail, Drive, Docs, Sheets, Slides,
+Calendar).
 
 ## What is *not* recorded
 

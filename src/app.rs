@@ -194,7 +194,11 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
     let ingestor = Ingestor::new(home.clone(), now_ms);
     let action_ingestor = ActionIngestor::new(home.clone(), now_ms);
     let transcripts_changed = Arc::new(AtomicBool::new(false));
-    let watcher = start_watcher(&home, transcripts_changed.clone());
+    let watcher = start_watcher(
+        &home,
+        &action_ingestor.watch_dirs(),
+        transcripts_changed.clone(),
+    );
 
     let ids = MenuIds {
         pause_15m: MenuId::new("pause_15m"),
@@ -266,17 +270,36 @@ fn start_web_listener(sock: PathBuf, tx: Sender<Vec<u8>>) {
     });
 }
 
-fn start_watcher(home: &PathBuf, changed: Arc<AtomicBool>) -> Option<RecommendedWatcher> {
+fn start_watcher(
+    home: &Path,
+    extra_dirs: &[PathBuf],
+    changed: Arc<AtomicBool>,
+) -> Option<RecommendedWatcher> {
     let mut watcher = notify::recommended_watcher(move |res: notify::Result<notify::Event>| {
         if res.is_ok() {
             changed.store(true, Ordering::Relaxed);
         }
     })
     .ok()?;
-    let dirs = [".claude/projects", ".codex", ".openclaw"];
+    // Every root any ingestor reads must be watched, or new files there only get
+    // picked up on the slow timer poll instead of via FSEvents. Keep this in sync
+    // with the openclaw chat adapter roots and the action ingestor roots.
+    let mut paths: Vec<PathBuf> = [
+        ".claude/projects",
+        ".codex",
+        ".openclaw",
+        ".openclaw-user",
+        ".openclaw-dev",
+    ]
+    .iter()
+    .map(|d| home.join(d))
+    .collect();
+    paths.extend(extra_dirs.iter().cloned());
+    paths.sort();
+    paths.dedup();
+
     let mut watched = 0;
-    for dir in dirs {
-        let path = home.join(dir);
+    for path in paths {
         if path.exists() && watcher.watch(&path, RecursiveMode::Recursive).is_ok() {
             watched += 1;
         }
