@@ -3,6 +3,11 @@ use std::path::Path;
 
 pub const PAUSE_UNTIL_KEY: &str = "paused_until_ms";
 
+/// Wall-clock mark of the last completed transcript scan. Without it the app
+/// only ever looked at files touched since THIS launch, so a session that
+/// finished while Houdini was closed was never ingested.
+pub const INGEST_SINCE_KEY: &str = "ingest_since_ms";
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     User,

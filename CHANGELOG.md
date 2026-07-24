@@ -5,6 +5,18 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
+## [0.7.2] - 2026-07-25
+
+### Fixed
+- **Quitting the app no longer loses whatever happened while it was closed.**
+  Transcript scanning only ever considered files touched since the current
+  launch, so a session that finished while Houdini was shut down was never
+  ingested: reboot nightly and the last sessions of each day were simply gone.
+  The scan now resumes from a mark left by the previous scan, stamped from
+  before it ran so a file written mid-scan is still caught next time. A first
+  install has no mark and starts at launch, which is what still keeps it from
+  importing years of history.
+
 ## [0.7.1] - 2026-07-24
 
 ### Changed

@@ -89,6 +89,9 @@ cannot lose data.
   updater (GitHub), the browser extension talking to the *local* native host,
   and the usage-analytics labeler (`src/analytics.rs`) calling the configured
   LiteLLM proxy. Capture itself never does.
+- **Scanning resumes, never restarts.** The transcript scan carries a persisted
+  mark so a shutdown gap is covered on the next launch; re-reading a file is
+  safe because turns are keyed `(session_id, seq)` and inserted or ignored.
 - **Migrations only add.** Never drop or rebuild a table on version bump; append a
   step to `MIGRATIONS`.
 - **Identity in the clear, content redacted.** The provider/tool is the research
