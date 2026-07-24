@@ -20,8 +20,8 @@
     if (l.includes("archive")) return "archive";
     if (l.includes("spam")) return "spam";
     if (l.includes("snooze")) return "snooze";
-    if (l.includes("trash") || l.includes("delete") || l.includes("remove")) return "delete";
-    if (l.includes("move")) return "move";
+    if (l.includes("trash") || l.includes("delete")) return "delete";
+    if (/\bmove\b/.test(l)) return "move";
     if (l.includes("share")) return "share";
     if (l.includes("rename")) return "rename";
     if (l.includes("download")) return "download";

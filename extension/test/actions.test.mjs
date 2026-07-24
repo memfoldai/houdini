@@ -42,6 +42,7 @@ test("classifies workspace controls into normalized verbs", () => {
   assert.equal(h.matchVerb("Archive"), "archive");
   assert.equal(h.matchVerb("Report spam"), "spam");
   assert.equal(h.matchVerb("Move to trash"), "delete", "trash beats move");
+  assert.equal(h.matchVerb("Remove star"), null);
   // Drive
   assert.equal(h.matchVerb("Share"), "share");
   assert.equal(h.matchVerb("Move to"), "move");
