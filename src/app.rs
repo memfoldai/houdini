@@ -64,6 +64,8 @@ struct Runtime {
     ingestor: RefCell<Ingestor>,
     action_ingestor: RefCell<ActionIngestor>,
     install_id: String,
+    person: String,
+    device_name: String,
     export_dir: PathBuf,
 
     transcript_poll_ms: i64,
@@ -255,6 +257,8 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         ingestor: RefCell::new(ingestor),
         action_ingestor: RefCell::new(action_ingestor),
         install_id: cfg.install_id.clone(),
+        person: cfg.person.clone(),
+        device_name: cfg.device_name.clone(),
         export_dir: paths.export_dir.clone(),
         transcript_poll_ms: cfg.transcript_poll_ms as i64,
         last_transcript_ms: Cell::new(i64::MIN),
@@ -725,7 +729,12 @@ fn set_pause(rt: &Rc<Runtime>, until: Option<i64>, why: &str) {
 }
 
 fn do_show_data(rt: &Rc<Runtime>) {
-    match export::export_snapshot(&rt.store, &rt.install_id, &rt.export_dir) {
+    let identity = export::ExportIdentity {
+        install_id: &rt.install_id,
+        person: &rt.person,
+        device_name: &rt.device_name,
+    };
+    match export::export_snapshot(&rt.store, &identity, &rt.export_dir) {
         Ok(path) => {
             let _ = Command::new("open").arg("-R").arg(&path).spawn();
         }

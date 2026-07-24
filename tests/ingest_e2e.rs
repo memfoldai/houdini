@@ -34,7 +34,12 @@ fn running_pipeline_ingests_redacts_and_exports() {
     assert_eq!(stats.sessions, 1);
     assert_eq!(stats.new_turns, 2);
 
-    let path = export::export_snapshot(&store, "dev-1", &data_dir).unwrap();
+    let identity = export::ExportIdentity {
+        install_id: "dev-1",
+        person: "tester",
+        device_name: "test-mac",
+    };
+    let path = export::export_snapshot(&store, &identity, &data_dir).unwrap();
     let body = fs::read_to_string(&path).unwrap();
     let rows: Vec<serde_json::Value> = body
         .lines()

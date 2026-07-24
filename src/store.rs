@@ -462,7 +462,7 @@ impl Store {
             "SELECT strftime('%Y-%m-%d', t.ts / 1000, 'unixepoch') AS day,
                     s.tool, s.provider, s.surface, s.model,
                     l.intent, l.domain, l.depth, l.delegation,
-                    COUNT(*)
+                    COUNT(*), COUNT(DISTINCT l.session_id), SUM(LENGTH(t.redacted_text))
              FROM turn_labels l
              JOIN sessions s ON s.id = l.session_id
              JOIN turns t ON t.session_id = l.session_id AND t.seq = l.seq
@@ -483,6 +483,8 @@ impl Store {
                 depth: r.get(7)?,
                 delegation: r.get(8)?,
                 turns: r.get(9)?,
+                sessions: r.get(10)?,
+                chars: r.get(11)?,
             })
         })?;
         rows.collect()
@@ -596,6 +598,8 @@ pub struct LabelCell {
     pub depth: i64,
     pub delegation: String,
     pub turns: i64,
+    pub sessions: i64,
+    pub chars: i64,
 }
 
 #[derive(Debug, Clone)]

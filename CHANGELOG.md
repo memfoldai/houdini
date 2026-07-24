@@ -23,10 +23,11 @@ include behavior changes.
   deliberately never compiled into the binary: releases are public, so a baked
   key would ship to the world. `--analyze-once [n]` labels a batch immediately
   instead of waiting for the hourly tick.
-- Analytics cells carry the tool, provider, surface, model and day, so the
-  export is a star-schema fact table a dashboard can slice directly. `openclaw`
-  presents as **Alma** wherever a human or a dashboard reads it, while the
-  stored id stays stable.
+- Analytics cells carry identity (`person`, `device_name`, install id), the day,
+  and the tool/provider/surface/model dimensions, with `turns`, `sessions` and
+  `chars` as measures. The export is a star-schema fact table, so a leaderboard
+  or an adoption trend is one GROUP BY. `openclaw` presents as **Alma** wherever
+  a human or dashboard reads it, while the stored id stays stable.
 - `data/analytics.jsonl` in the export: aggregate counts per label combination
   with the taxonomy, prompt, and model versions attached. No text.
 - New doc: `docs/analytics.md`.

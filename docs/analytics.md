@@ -59,15 +59,31 @@ personal identifiers as well.
 `data/analytics.jsonl` emits one `analytics_cell` row per unique combination of
 dimensions, with a turn count as the measure. The grain is:
 
-`day` x `tool` / `tool_name` / `provider` / `surface` / `model` x `intent` /
-`domain` / `depth` / `delegation`, plus `device`, `taxonomy_version` and
+**Identity**: `person` (groups one human's machines), `device_name` (the
+machine's friendly name), `device` (a stable install id, the join key).
+**Dimensions**: `day`, `tool` / `tool_name`, `provider`, `surface`, `model`,
+`intent`, `domain`, `depth`, `delegation`, plus `taxonomy_version` and
 `prompt_version`.
+**Measures**: `turns`, `sessions` (distinct), `chars` (redacted volume).
 
-That is a star-schema fact row, so a dashboard can slice by any dimension
-without further processing: usage per tool over time, depth mix per person,
-how much work is delegated from one AI to another, which domains each team
-touches. `tool` is the stable stored id and `tool_name` is the product name to
-display, so a rename never invalidates historical rows.
+That is a star-schema fact row, so a dashboard slices it directly. A leaderboard
+of who used a given tool most is a single grouping:
+
+```sql
+SELECT person, tool_name, SUM(turns) AS turns, SUM(sessions) AS sessions
+FROM analytics_cells
+WHERE day >= '2026-07-01'
+GROUP BY person, tool_name
+ORDER BY turns DESC;
+```
+
+Three measures rather than one because they answer different questions and
+disagree in useful ways: `turns` counts requests, `sessions` counts distinct
+pieces of work, and `chars` weighs how substantial they were. Ranking on turns
+alone rewards whoever types the most one-liners.
+
+`tool` is the stable stored id and `tool_name` is the product name to display,
+so renaming a product never invalidates historical rows.
 
 No text, no rationales, no session content leaves the device.
 
@@ -99,6 +115,13 @@ printf %s 'PASTE_KEY_HERE' | /Applications/Houdini.app/Contents/MacOS/houdini --
 
 Labeling starts on the next hourly tick. Run it again at any time to rotate the
 key. The same line works unchanged as an MDM script.
+
+**Run it through the installed app, not a dev build.** macOS ties a Keychain
+item to the signature of whatever created it, so an item written by a different
+binary makes the app prompt on every read. Both the key and the database key are
+read exactly **once per launch** and held for the process lifetime, so a correct
+setup prompts at most once, ever, and never per analytics job. (This is the same
+single-reader discipline that fixed the per-message password prompts in 0.4.10.)
 
 **Backfill on demand.** Label a batch immediately instead of waiting for the
 hourly tick, which is how you work through a history the first time:

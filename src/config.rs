@@ -32,6 +32,12 @@ pub struct AppConfig {
 
     #[serde(default = "d_analytics_batch_limit")]
     pub analytics_batch_limit: i64,
+
+    #[serde(default = "d_person")]
+    pub person: String,
+
+    #[serde(default = "d_device_name")]
+    pub device_name: String,
 }
 
 fn d_transcript_poll_ms() -> u64 {
@@ -58,6 +64,28 @@ fn d_analytics_batch_limit() -> i64 {
     crate::analytics_job::DEFAULT_BATCH_LIMIT
 }
 
+fn d_person() -> String {
+    std::env::var("USER")
+        .ok()
+        .map(|u| u.trim().to_string())
+        .filter(|u| !u.is_empty())
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn d_device_name() -> String {
+    for (program, args) in [("scutil", ["--get", "ComputerName"].as_slice()), ("hostname", &[])] {
+        if let Ok(out) = std::process::Command::new(program).args(args).output() {
+            if out.status.success() {
+                let name = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !name.is_empty() {
+                    return name;
+                }
+            }
+        }
+    }
+    "unknown".to_string()
+}
+
 impl AppConfig {
     fn fresh(install_id: String) -> Self {
         Self {
@@ -69,6 +97,8 @@ impl AppConfig {
             analytics_model: d_analytics_model(),
             analytics_interval_ms: d_analytics_interval_ms(),
             analytics_batch_limit: d_analytics_batch_limit(),
+            person: d_person(),
+            device_name: d_device_name(),
         }
     }
 }
@@ -187,6 +217,8 @@ mod tests {
             "file upgraded on load"
         );
         assert_eq!(cfg.analytics_model, "gpt-5.5", "analytics defaults fill in");
+        assert!(!cfg.person.is_empty(), "an identity is always resolved");
+        assert!(!cfg.device_name.is_empty(), "a device name is always resolved");
         assert!(
             reread.contains("analytics_base_url"),
             "analytics fields materialize in an older file"

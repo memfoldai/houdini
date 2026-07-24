@@ -71,7 +71,12 @@ fn labels_survive_a_reopen_and_export_as_aggregate_cells() {
     assert_eq!(orchestrated.depth, 4);
     assert_eq!(orchestrated.turns, 1);
 
-    let path = houdini::export::export_analytics(&store, "device-1", &dir).unwrap();
+    let identity = houdini::export::ExportIdentity {
+        install_id: "device-1",
+        person: "rahul",
+        device_name: "Rahul's MacBook",
+    };
+    let path = houdini::export::export_analytics(&store, &identity, &dir).unwrap();
     let body = std::fs::read_to_string(&path).unwrap();
     let rows: Vec<serde_json::Value> = body
         .lines()
@@ -80,7 +85,13 @@ fn labels_survive_a_reopen_and_export_as_aggregate_cells() {
     assert_eq!(rows.len(), 2);
     for row in &rows {
         assert_eq!(row["kind"], "analytics_cell");
+        assert_eq!(row["tool_name"], "Claude Code", "the product name is what a dashboard shows");
+        assert_eq!(row["tool"], "claude-code", "the stable id travels alongside it");
         assert_eq!(row["device"], "device-1");
+        assert_eq!(row["person"], "rahul", "rows say WHO, so several people merge");
+        assert_eq!(row["device_name"], "Rahul's MacBook");
+        assert!(!row["day"].as_str().unwrap().is_empty(), "cells carry a day for trends");
+        assert!(row["turns"].is_i64() && row["sessions"].is_i64() && row["chars"].is_i64());
         assert_eq!(row["taxonomy_version"], TAXONOMY_VERSION);
         assert!(row["prompt_version"].is_i64(), "every cell pins its prompt");
         assert!(row.get("text").is_none(), "no content leaves the device");
