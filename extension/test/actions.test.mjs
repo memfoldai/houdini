@@ -83,6 +83,14 @@ test("two tabs do not mint the same id on a same-millisecond first click", () =>
   }
 });
 
+test("emits read-only kind for non-mutating workspace controls", () => {
+  const h = load("drive.google.com");
+  h.clickLabel("Download");
+  assert.equal(h.posted.length, 1);
+  assert.equal(h.posted[0].actions[0].action, "download");
+  assert.equal(h.posted[0].actions[0].kind, "read_only");
+});
+
 test("ignores clicks on unrecognized controls", () => {
   const h = load("drive.google.com");
   h.clickLabel("Sort direction");

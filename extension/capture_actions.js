@@ -9,6 +9,8 @@
     { app: "slides.google.com" },
     { app: "calendar.google.com" },
   ];
+  const READ_ONLY_VERBS = new Set(["download"]);
+
   function matchVerb(label) {
     const l = (label || "").toLowerCase();
     if (!l) return null;
@@ -60,11 +62,12 @@
 
   function emit(info) {
     counter += 1;
+    const kind = READ_ONLY_VERBS.has(info.action) ? "read_only" : "mutating";
     const action = {
       ext_id: `${site.app}:${PAGE_ID}:${Date.now()}:${counter}`,
       app: site.app,
       action: info.action,
-      kind: "mutating",
+      kind,
       ts_ms: Date.now(),
     };
     try {
