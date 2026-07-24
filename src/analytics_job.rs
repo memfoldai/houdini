@@ -208,7 +208,7 @@ mod tests {
     fn labeled_turns_leave_the_queue_and_re_running_is_idempotent() {
         let store = store_with_turns(2);
         let labeler = FakeLabeler {
-            label: Some(label("debugging_research", None)),
+            label: Some(label("modify_or_debug_code", None)),
         };
         let first = run_once(&store, &labeler, 100, 1_000).unwrap();
         assert_eq!(first.labeled, 2);

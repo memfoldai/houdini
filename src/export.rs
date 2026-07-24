@@ -145,6 +145,7 @@ struct AnalyticsCellRow<'a> {
     person: String,
     device_name: String,
     day: String,
+    hour: i64,
     taxonomy_version: i64,
     prompt_version: i64,
     tool: String,
@@ -161,6 +162,21 @@ struct AnalyticsCellRow<'a> {
     turns: i64,
     sessions: i64,
     chars: i64,
+}
+
+#[derive(serde::Serialize)]
+struct SessionSpanRow<'a> {
+    schema: &'a str,
+    kind: &'a str,
+    device: String,
+    person: String,
+    device_name: String,
+    day: String,
+    tool: String,
+    tool_name: String,
+    sessions: i64,
+    total_minutes: i64,
+    longest_minutes: i64,
 }
 
 #[derive(serde::Serialize)]
@@ -197,6 +213,7 @@ pub fn export_analytics(
             person: identity.person.to_string(),
             device_name: identity.device_name.to_string(),
             day: cell.day,
+            hour: cell.hour,
             taxonomy_version: crate::taxonomy::TAXONOMY_VERSION,
             prompt_version: crate::analytics::PROMPT_VERSION,
             tool_name: crate::attribution::display_tool(&cell.tool).to_string(),
@@ -213,6 +230,23 @@ pub fn export_analytics(
             turns: cell.turns,
             sessions: cell.sessions,
             chars: cell.chars,
+        };
+        write_row(&mut out, &row)?;
+    }
+
+    for span in store.session_spans().map_err(io_err)? {
+        let row = SessionSpanRow {
+            schema: SCHEMA,
+            kind: "session_span",
+            device: device.to_string(),
+            person: identity.person.to_string(),
+            device_name: identity.device_name.to_string(),
+            day: span.day,
+            tool_name: crate::attribution::display_tool(&span.tool).to_string(),
+            tool: span.tool,
+            sessions: span.sessions,
+            total_minutes: span.total_minutes,
+            longest_minutes: span.longest_minutes,
         };
         write_row(&mut out, &row)?;
     }

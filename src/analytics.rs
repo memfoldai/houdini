@@ -422,12 +422,12 @@ mod tests {
     #[test]
     fn a_valid_response_becomes_a_label() {
         let body = response_body(
-            r#"{"intent":"debugging_research","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null,"proposal_rationale":null}"#,
+            r#"{"intent":"modify_or_debug_code","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null,"proposal_rationale":null}"#,
         );
         let label = parse_label(&request(), &body).unwrap();
         assert_eq!(label.session_id, 7);
         assert_eq!(label.seq, 3);
-        assert_eq!(label.intent, "debugging_research");
+        assert_eq!(label.intent, "modify_or_debug_code");
         assert_eq!(label.depth, 2);
         assert!(label.proposed_intent.is_none());
     }
@@ -443,7 +443,7 @@ mod tests {
     #[test]
     fn an_out_of_range_depth_is_refused() {
         let body = response_body(
-            r#"{"intent":"debugging_research","domain":"software_engineering","depth":9,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null,"proposal_rationale":null}"#,
+            r#"{"intent":"modify_or_debug_code","domain":"software_engineering","depth":9,"delegation":"none","delegate_tool":"none","confidence":0.9,"proposed_intent":null,"proposed_domain":null,"proposal_rationale":null}"#,
         );
         assert!(parse_label(&request(), &body).unwrap_err().contains("depth"));
     }
@@ -469,7 +469,7 @@ mod tests {
     #[test]
     fn confidence_is_clamped_into_range() {
         let body = response_body(
-            r#"{"intent":"debugging_research","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":4.2,"proposed_intent":null,"proposed_domain":null,"proposal_rationale":null}"#,
+            r#"{"intent":"modify_or_debug_code","domain":"software_engineering","depth":2,"delegation":"none","delegate_tool":"none","confidence":4.2,"proposed_intent":null,"proposed_domain":null,"proposal_rationale":null}"#,
         );
         assert_eq!(parse_label(&request(), &body).unwrap().confidence, 1.0);
     }

@@ -8,11 +8,16 @@ include behavior changes.
 ## [0.7.1] - 2026-07-24
 
 ### Changed
-- **Categories now follow the published usage studies** rather than a plausible
-  invented list: the activity taxonomy is taken from the AI-research-usage study
-  (NBER w34255, Pew 2026, Anthropic Economic Index, Stack Overflow 2025,
-  WildChat), and every intent resolves to a `shape` of `research` or `artifact`,
-  the split that study is built around.
+- **Categories now follow the published usage studies and cover all use, not one
+  kind.** Coding, writing, learning, admin, health, travel, creative work and
+  casual conversation sit in one flat list drawn from NBER w34255's ChatGPT topic
+  taxonomy, the Anthropic Economic Index, Stack Overflow 2025 and WildChat. Every
+  intent resolves to a `shape` of `asking`, `doing` or `expressing`, NBER's split
+  of real traffic, and a test keeps the taxonomy from drifting back toward any
+  single kind of use.
+- Cells carry the hour of day, and a new `session_span` export row carries
+  sessions, total minutes and longest session per day and tool, so a weekly
+  wrapped can show time spent and peak hours rather than only counts.
 - **Requests are labeled with their conversation context.** A turn now carries up
   to six preceding turns of its own session, matching the published method.
   "Now do the same for the other one" labeled as `other / other` in isolation and

@@ -14,8 +14,8 @@ against a closed set of labels. Four facets are recorded per turn:
 | Facet | Values | Question it answers |
 |---|---|---|
 | `tool` | `Alma`, `Claude Code`, `Codex`, `ChatGPT`, `Claude`, `Gemini` | Which app the request went through |
-| `intent` | 23 ids, `src/taxonomy.rs` | What was the AI asked to do |
-| `shape` | `research`, `artifact` | Finding something out, or producing something. Derived from intent, never asked |
+| `intent` | 28 ids, `src/taxonomy.rs` | What was the AI asked to do |
+| `shape` | `asking`, `doing`, `expressing` | The NBER split of real chat traffic. Derived from intent, never asked |
 | `domain` | 17 ids | What subject the request belongs to |
 | `depth` | 1 to 4 | A single lookup, an iterative dig, a synthesis across sources, or autonomous multi-step work |
 | `delegation` | `none`, `tool_call`, `agent_run` | Whether the person drove this AI directly, had it call a tool, or had it drive **another** AI |
@@ -27,16 +27,22 @@ request itself, so the caller and the callee are both known on one row. Each
 tool still writes its own transcript, so the work also shows up as that tool's
 own usage; the edge is what links them.
 
-## The categories come from published usage studies
+## The categories come from published usage studies, and cover everything
 
-The intent list is not invented. It follows the activity categories in the
-AI-research-usage study, which are drawn from usage-log research rather than
-from surveys of intent: NBER w34255, Pew 2026, the Anthropic Economic Index,
-Stack Overflow 2025 and WildChat. The study's central finding is that
-research-shaped use (finding out or understanding) is the single largest thing
-people bring to AI, distinct from artifact-shaped use (producing something), and
-that the same question type recurs at very different depths. That is exactly the
-`shape` and `depth` axes here.
+The intent list is not invented, and it is deliberately not weighted toward any
+one kind of use. Coding, writing, learning, admin, health, travel, creative work
+and idle conversation all sit in the same flat list, because that is what people
+actually bring to an AI. Categories follow the published usage-log studies
+(NBER w34255's ChatGPT topic taxonomy, the Anthropic Economic Index, Stack
+Overflow 2025, WildChat) rather than a plausible-sounding list.
+
+`shape` is NBER's three-way split of real traffic: **asking** (seeking
+information or guidance, about half of all messages), **doing** (asking the
+model to produce or perform something) and **expressing**. It is derived from
+the intent, so it costs no tokens and can never contradict the label it
+summarises. A test asserts the `doing` categories are at least as numerous as
+the `asking` ones, so the taxonomy cannot quietly drift back toward one kind of
+use.
 
 ## Each request is labeled with what came before it
 
@@ -95,6 +101,12 @@ machine's friendly name), `device` (a stable install id, the join key).
 `intent`, `domain`, `depth`, `delegation`, plus `taxonomy_version` and
 `prompt_version`.
 **Measures**: `turns`, `sessions` (distinct), `chars` (redacted volume).
+
+A second row kind, `session_span`, carries per day and tool: session count,
+total minutes and longest session. Filter on `kind` before aggregating. Between
+the two, a weekly wrapped has everything it needs: time spent, peak hour, top
+tool, the asking/doing/expressing mix, depth profile, and how often one AI drove
+another.
 
 That is a star-schema fact row, so a dashboard slices it directly. A leaderboard
 of who used a given tool most is a single grouping:

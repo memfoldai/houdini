@@ -1,66 +1,73 @@
-pub const TAXONOMY_VERSION: i64 = 3;
+pub const TAXONOMY_VERSION: i64 = 4;
 
 pub const OTHER: &str = "other";
 
-/// Activity categories taken from the usage-log studies in the research-usage
-/// study (NBER w34255, Pew 2026, Anthropic Economic Index, Stack Overflow 2025,
-/// WildChat), not invented. The study's central split is research-shaped use
-/// (finding out or understanding) against artifact-shaped use (producing
-/// something); both appear here because Houdini sees all of it.
+/// What the person asked for. Balanced across everything people bring to an AI,
+/// not weighted toward any one use: coding, writing, learning, admin, personal
+/// and creative work all sit in the same list. Categories follow the published
+/// usage-log studies (NBER w34255's ChatGPT topic taxonomy, the Anthropic
+/// Economic Index, Stack Overflow 2025, WildChat) rather than invented labels.
 pub const INTENTS: &[&str] = &[
-    "facts_or_current_events",
+    "facts_or_lookup",
     "how_to_guidance",
-    "learning_a_topic",
-    "health_and_wellbeing",
+    "learning_or_explanation",
+    "news_or_current_events",
     "product_or_purchase_research",
+    "health_or_wellbeing",
     "decision_support",
-    "document_grounded_research",
     "multi_source_synthesis",
-    "news_monitoring",
-    "search_for_answers",
-    "debugging_research",
-    "codebase_understanding",
-    "library_or_docs_research",
-    "technology_evaluation",
+    "troubleshooting_or_diagnosis",
+    "codebase_or_system_understanding",
+    "library_or_docs_lookup",
     "write_code",
-    "modify_code",
+    "modify_or_debug_code",
     "review_or_critique",
-    "write_or_edit_prose",
-    "automate_or_script",
+    "write_prose",
+    "edit_or_rewrite",
+    "translate_or_localize",
+    "summarize_or_extract",
     "analyze_data",
-    "plan_or_design",
+    "automate_or_script",
     "configure_or_setup",
+    "create_media",
+    "plan_or_organize",
+    "draft_communication",
+    "brainstorm_or_ideate",
+    "personal_or_reflective",
+    "casual_conversation",
     OTHER,
 ];
 
-/// The study's framing: research-shaped use is "trying to find out or
-/// understand something, rather than produce an artifact". Derived from the
-/// intent rather than asked of the model, so it costs nothing and can never
-/// disagree with the label it summarises.
-pub const RESEARCH_INTENTS: &[&str] = &[
-    "facts_or_current_events",
+/// NBER w34255 splits real ChatGPT traffic three ways: Asking (seeking
+/// information or guidance, about half of all messages), Doing (asking the
+/// model to produce or perform something) and Expressing. Derived from the
+/// intent rather than asked of the model, so it costs no tokens and can never
+/// contradict the label it summarises.
+const ASKING: &[&str] = &[
+    "facts_or_lookup",
     "how_to_guidance",
-    "learning_a_topic",
-    "health_and_wellbeing",
+    "learning_or_explanation",
+    "news_or_current_events",
     "product_or_purchase_research",
+    "health_or_wellbeing",
     "decision_support",
-    "document_grounded_research",
     "multi_source_synthesis",
-    "news_monitoring",
-    "search_for_answers",
-    "debugging_research",
-    "codebase_understanding",
-    "library_or_docs_research",
-    "technology_evaluation",
+    "troubleshooting_or_diagnosis",
+    "codebase_or_system_understanding",
+    "library_or_docs_lookup",
 ];
 
+const EXPRESSING: &[&str] = &["personal_or_reflective", "casual_conversation"];
+
 pub fn shape_of(intent: &str) -> &'static str {
-    if RESEARCH_INTENTS.contains(&intent) {
-        "research"
+    if ASKING.contains(&intent) {
+        "asking"
+    } else if EXPRESSING.contains(&intent) {
+        "expressing"
     } else if intent == OTHER {
         OTHER
     } else {
-        "artifact"
+        "doing"
     }
 }
 
@@ -171,19 +178,32 @@ mod tests {
         for intent in INTENTS {
             let shape = shape_of(intent);
             assert!(
-                ["research", "artifact", OTHER].contains(&shape),
+                ["asking", "doing", "expressing", OTHER].contains(&shape),
                 "{intent} resolved to {shape}"
             );
         }
-        assert_eq!(shape_of("multi_source_synthesis"), "research");
-        assert_eq!(shape_of("write_code"), "artifact");
+        assert_eq!(shape_of("multi_source_synthesis"), "asking");
+        assert_eq!(shape_of("write_code"), "doing");
+        assert_eq!(shape_of("casual_conversation"), "expressing");
     }
 
     #[test]
-    fn research_intents_are_a_subset_of_the_intent_set() {
-        for intent in RESEARCH_INTENTS {
+    fn shape_members_are_declared_intents() {
+        for intent in ASKING.iter().chain(EXPRESSING.iter()) {
             assert!(is_intent(intent), "{intent} is not a declared intent");
         }
+    }
+
+    #[test]
+    fn the_taxonomy_is_not_skewed_to_one_kind_of_use() {
+        let doing = INTENTS
+            .iter()
+            .filter(|i| shape_of(i) == "doing")
+            .count();
+        assert!(
+            doing >= ASKING.len(),
+            "producing work must be covered at least as well as asking about it"
+        );
     }
 
     #[test]

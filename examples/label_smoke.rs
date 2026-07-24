@@ -8,13 +8,14 @@ fn main() {
         key,
     );
     let cases = [
-        "Ask Claude Code to have Codex refactor the payment module and run the tests",
-        "what is the capital of Australia",
-        "compare Postgres vs DynamoDB for our event store, check current pricing and recommend one",
-        "please knit me a jumper for my cat named Mochi",
+        "write a birthday message for my mum who loves gardening",
+        "my knee hurts after running, what should I do",
+        "plan a 5 day trip to Vietnam in December on a mid budget",
+        "turn this spreadsheet of sales into a chart and tell me the trend",
+        "fix the failing payment test in the checkout module",
+        "just chatting, how has your day been",
+        "translate this contract clause into plain english",
         "get Alma to run the deploy and have Claude Code review the diff",
-        "research the best commuter bikes under 2 lakh and compare running costs",
-        "look into what changed in the EU AI act this quarter and summarise it with sources",
     ];
     for (i, text) in cases.iter().enumerate() {
         let request = LabelRequest { session_id: 1, seq: i as i64, text: text.to_string(), context: Vec::new() };

@@ -516,6 +516,7 @@ impl Store {
     pub fn label_cells(&self, taxonomy_version: i64) -> rusqlite::Result<Vec<LabelCell>> {
         let mut stmt = self.conn.prepare(
             "SELECT strftime('%Y-%m-%d', t.ts / 1000, 'unixepoch') AS day,
+                    CAST(strftime('%H', t.ts / 1000, 'unixepoch') AS INTEGER) AS hour,
                     s.tool, s.provider, s.surface, s.model,
                     l.intent, l.domain, l.depth, l.delegation, l.delegate_tool,
                     COUNT(*), COUNT(DISTINCT l.session_id), SUM(LENGTH(t.redacted_text))
@@ -523,25 +524,51 @@ impl Store {
              JOIN sessions s ON s.id = l.session_id
              JOIN turns t ON t.session_id = l.session_id AND t.seq = l.seq
              WHERE l.taxonomy_version = ?1
-             GROUP BY day, s.tool, s.provider, s.surface, s.model,
+             GROUP BY day, hour, s.tool, s.provider, s.surface, s.model,
                       l.intent, l.domain, l.depth, l.delegation, l.delegate_tool
              ORDER BY day DESC, COUNT(*) DESC",
         )?;
         let rows = stmt.query_map(params![taxonomy_version], |r| {
             Ok(LabelCell {
                 day: r.get(0)?,
+                hour: r.get(1)?,
+                tool: r.get(2)?,
+                provider: r.get(3)?,
+                surface: r.get(4)?,
+                model: r.get(5)?,
+                intent: r.get(6)?,
+                domain: r.get(7)?,
+                depth: r.get(8)?,
+                delegation: r.get(9)?,
+                delegate_tool: r.get(10)?,
+                turns: r.get(11)?,
+                sessions: r.get(12)?,
+                chars: r.get(13)?,
+            })
+        })?;
+        rows.collect()
+    }
+
+    pub fn session_spans(&self) -> rusqlite::Result<Vec<SessionSpan>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT strftime('%Y-%m-%d', s.started_at / 1000, 'unixepoch') AS day,
+                    s.tool,
+                    COUNT(*),
+                    SUM(CASE WHEN s.ended_at > s.started_at
+                             THEN s.ended_at - s.started_at ELSE 0 END) / 60000,
+                    MAX(CASE WHEN s.ended_at > s.started_at
+                             THEN s.ended_at - s.started_at ELSE 0 END) / 60000
+             FROM sessions s
+             GROUP BY day, s.tool
+             ORDER BY day DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(SessionSpan {
+                day: r.get(0)?,
                 tool: r.get(1)?,
-                provider: r.get(2)?,
-                surface: r.get(3)?,
-                model: r.get(4)?,
-                intent: r.get(5)?,
-                domain: r.get(6)?,
-                depth: r.get(7)?,
-                delegation: r.get(8)?,
-                delegate_tool: r.get(9)?,
-                turns: r.get(10)?,
-                sessions: r.get(11)?,
-                chars: r.get(12)?,
+                sessions: r.get(2)?,
+                total_minutes: r.get(3)?,
+                longest_minutes: r.get(4)?,
             })
         })?;
         rows.collect()
@@ -647,6 +674,7 @@ pub struct LabelCandidate<'a> {
 #[derive(Debug, Clone)]
 pub struct LabelCell {
     pub day: String,
+    pub hour: i64,
     pub tool: String,
     pub provider: String,
     pub surface: String,
@@ -659,6 +687,15 @@ pub struct LabelCell {
     pub turns: i64,
     pub sessions: i64,
     pub chars: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionSpan {
+    pub day: String,
+    pub tool: String,
+    pub sessions: i64,
+    pub total_minutes: i64,
+    pub longest_minutes: i64,
 }
 
 #[derive(Debug, Clone)]
