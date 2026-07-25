@@ -134,10 +134,48 @@ fn swap_from_mount(mount: &Path, bundle: &Path) -> Result<(), String> {
         &[&new_app.to_string_lossy(), &staged.to_string_lossy()],
     )?;
 
+    swap_into_place(&staged, bundle)
+}
+
+/// Puts the staged bundle at the live path in a single filesystem operation.
+///
+/// `renamex_np` with `RENAME_SWAP` exchanges the two paths atomically, so there
+/// is never a moment where nothing exists at the app path: a crash mid-install
+/// leaves either the old or the new bundle in place, never a gap. The two
+/// sequential renames it replaces had exactly that gap. Filesystems without
+/// atomic swap (not APFS, which is the floor on the supported OS) fall back to
+/// the sequential form with a restore on failure.
+fn swap_into_place(staged: &Path, bundle: &Path) -> Result<(), String> {
+    use std::ffi::{c_char, c_int, c_uint, CString};
+    use std::os::unix::ffi::OsStrExt;
+
+    const RENAME_SWAP: c_uint = 0x0000_0002;
+    const ENOTSUP: c_int = 45;
+    const EINVAL: c_int = 22;
+    unsafe extern "C" {
+        fn renamex_np(from: *const c_char, to: *const c_char, flags: c_uint) -> c_int;
+    }
+
+    let from = CString::new(staged.as_os_str().as_bytes())
+        .map_err(|_| "install failed: staged path has an interior null".to_string())?;
+    let to = CString::new(bundle.as_os_str().as_bytes())
+        .map_err(|_| "install failed: app path has an interior null".to_string())?;
+
+    let rc = unsafe { renamex_np(from.as_ptr(), to.as_ptr(), RENAME_SWAP) };
+    if rc == 0 {
+        // `bundle` now holds the new app and `staged` holds the old one.
+        let _ = std::fs::remove_dir_all(staged);
+        return Ok(());
+    }
+    let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+    if errno != ENOTSUP && errno != EINVAL {
+        return Err(format!("install failed: atomic swap errno {errno}"));
+    }
+
     let backup = bundle.with_extension("app.old");
     let _ = std::fs::remove_dir_all(&backup);
     std::fs::rename(bundle, &backup).map_err(|e| format!("replace failed: {e}"))?;
-    if let Err(e) = std::fs::rename(&staged, bundle) {
+    if let Err(e) = std::fs::rename(staged, bundle) {
         let _ = std::fs::rename(&backup, bundle);
         return Err(format!("install failed, restored previous: {e}"));
     }
@@ -198,6 +236,25 @@ fn parse(v: &str) -> (u64, u64, u64) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn atomic_swap_exchanges_two_bundles_leaving_the_new_one_live() {
+        use std::fs;
+        let dir = std::env::temp_dir().join(format!("houdini-swap-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let live = dir.join("App.app");
+        let staged = dir.join("App.app.new");
+        fs::create_dir_all(&live).unwrap();
+        fs::create_dir_all(&staged).unwrap();
+        fs::write(live.join("v"), "old").unwrap();
+        fs::write(staged.join("v"), "new").unwrap();
+
+        super::swap_into_place(&staged, &live).unwrap();
+
+        assert_eq!(fs::read_to_string(live.join("v")).unwrap(), "new");
+        assert!(!staged.exists(), "the old bundle is cleaned up after the swap");
+        fs::remove_dir_all(&dir).ok();
+    }
+
     use super::*;
 
     #[test]
