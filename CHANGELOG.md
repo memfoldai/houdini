@@ -5,9 +5,30 @@ All notable changes to this project are documented here. The format follows
 [Semantic Versioning](https://semver.org/). While pre-1.0, minor versions may
 include behavior changes.
 
-## [0.7.2] - 2026-07-25
+## [0.7.3] - 2026-07-25
+
+### Added
+- **Starts at login** was in 0.7.1; this release also **detects the packaged
+  desktop app.** The Almanac / OpenClaw app keeps its gateway inside its
+  Application Support container, not a home dot-directory, so its sessions were
+  missed entirely. They are ingested now and, like every openclaw source,
+  presented as **Alma**.
 
 ### Fixed
+- **One keychain prompt instead of two.** The database key and the analytics key
+  were separate keychain items, and macOS prompts once per item, so a first
+  launch could ask twice. Both now live in a single item read in one access. The
+  migration copies the existing database key rather than regenerating it (a new
+  key would make the encrypted database unreadable) and leaves the old items in
+  place, so a downgrade still works and nothing is ever at risk.
+- **Self-updates are crash-safe at the swap.** Installing an update replaced the
+  app with two sequential renames, leaving a moment where nothing was at the app
+  path; a crash there stranded the app at `.app.old`. The swap is now a single
+  atomic `renamex_np` exchange, so an interrupted update leaves either the old or
+  the new app, never a gap.
+- **A permanently unlabelable turn is retired.** A turn the model keeps refusing
+  was retried every cycle forever. After five attempts under one prompt version
+  it leaves the queue; a new prompt version gives it a fresh start.
 - **Quitting the app no longer loses whatever happened while it was closed.**
   Transcript scanning only ever considered files touched since the current
   launch, so a session that finished while Houdini was shut down was never
