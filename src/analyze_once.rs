@@ -12,18 +12,18 @@ pub fn run() {
         eprintln!("cannot read config.json");
         std::process::exit(1);
     };
-    let Some(api_key) = crate::keychain::analytics_key() else {
-        eprintln!("no analytics key: copy it, then use the menu item, or pipe it to --set-analytics-key");
-        std::process::exit(1);
-    };
-    let key = match crate::keychain::db_key() {
-        Ok(key) => key,
+    let secrets = match crate::keychain::load() {
+        Ok(secrets) => secrets,
         Err(e) => {
             eprintln!("{e}");
             std::process::exit(1);
         }
     };
-    let store = match Store::open(&paths.db_file, &key) {
+    let Some(api_key) = secrets.analytics_key else {
+        eprintln!("no analytics key: pipe it to --set-analytics-key first");
+        std::process::exit(1);
+    };
+    let store = match Store::open(&paths.db_file, &secrets.db_key) {
         Ok(store) => store,
         Err(e) => {
             eprintln!("cannot open the encrypted store: {e}");
