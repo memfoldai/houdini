@@ -1,5 +1,5 @@
 use crate::analytics::{Label, LabelRequest, Labeler, PROMPT_VERSION};
-use crate::store::{LabelCandidate, Store, TurnLabelRecord};
+use crate::store::{LabelCandidate, Store, TurnLabelRecord, MAX_LABEL_ATTEMPTS};
 use crate::taxonomy::TAXONOMY_VERSION;
 
 pub const DEFAULT_BATCH_LIMIT: i64 = 25;
@@ -52,6 +52,7 @@ pub fn label_batch(labeler: &dyn Labeler, requests: &[LabelRequest]) -> Vec<Resu
 pub fn persist(
     store: &Store,
     model: &str,
+    requests: &[LabelRequest],
     results: &[Result<Label, String>],
     now_ms: i64,
 ) -> rusqlite::Result<JobReport> {
@@ -59,11 +60,27 @@ pub fn persist(
         considered: results.len(),
         ..JobReport::default()
     };
-    for result in results {
+    for (request, result) in requests.iter().zip(results) {
         let label = match result {
             Ok(label) => label,
-            Err(_) => {
+            Err(error) => {
                 report.failed += 1;
+                // Attribute the failure to its turn so a request that keeps
+                // failing is eventually retired instead of retried forever.
+                let attempts = store.record_label_failure(
+                    request.session_id,
+                    request.seq,
+                    PROMPT_VERSION,
+                    error,
+                    now_ms,
+                )?;
+                if attempts >= MAX_LABEL_ATTEMPTS {
+                    log::warn!(
+                        "analytics: giving up on turn {}/{} after {attempts} attempts: {error}",
+                        request.session_id,
+                        request.seq
+                    );
+                }
                 continue;
             }
         };
@@ -82,7 +99,11 @@ pub fn persist(
             analyzed_at_ms: now_ms,
         };
         match store.insert_turn_label(&record) {
-            Ok(_) => report.labeled += 1,
+            Ok(_) => {
+                report.labeled += 1;
+                let _ =
+                    store.clear_label_failure(label.session_id, label.seq, PROMPT_VERSION);
+            }
             Err(e) => {
                 log::warn!("analytics: refused label for turn {}: {e}", label.seq);
                 report.failed += 1;
@@ -121,7 +142,7 @@ pub fn run_once(
         return Ok(JobReport::default());
     }
     let results = label_batch(labeler, &requests);
-    persist(store, labeler.model(), &results, now_ms)
+    persist(store, labeler.model(), &requests, &results, now_ms)
 }
 
 #[cfg(test)]
@@ -243,6 +264,42 @@ mod tests {
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].proposed, "pair_programming");
         assert_eq!(candidates[0].observations, 3);
+    }
+
+    #[test]
+    fn a_turn_that_always_fails_is_retired_after_the_attempt_cap() {
+        use crate::store::MAX_LABEL_ATTEMPTS;
+        let store = store_with_turns(1);
+        let labeler = FakeLabeler { label: None };
+
+        // Each run fails the one turn; it stays queued until the cap.
+        for attempt in 1..=MAX_LABEL_ATTEMPTS {
+            let report = run_once(&store, &labeler, 100, attempt).unwrap();
+            assert_eq!(report.failed, 1, "attempt {attempt} fails");
+        }
+        // Now retired: the queue is empty and no further call is made.
+        assert!(
+            collect(&store, 100).unwrap().is_empty(),
+            "a turn past the attempt cap leaves the queue"
+        );
+        assert!(run_once(&store, &labeler, 100, 99).unwrap().is_idle());
+
+        // A working labeler still cannot pick it up: it is retired for this
+        // prompt version until the version changes.
+        let working = FakeLabeler {
+            label: Some(label("write_code", None)),
+        };
+        assert!(run_once(&store, &working, 100, 99).unwrap().is_idle());
+    }
+
+    #[test]
+    fn a_success_clears_an_earlier_failure_record() {
+        let store = store_with_turns(1);
+        run_once(&store, &FakeLabeler { label: None }, 100, 1).unwrap();
+        let ok = FakeLabeler {
+            label: Some(label("write_code", None)),
+        };
+        assert_eq!(run_once(&store, &ok, 100, 2).unwrap().labeled, 1);
     }
 
     #[test]

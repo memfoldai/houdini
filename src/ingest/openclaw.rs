@@ -8,9 +8,29 @@ use crate::attribution::{provider, provider_for_model, Surface};
 use crate::store::Role;
 use crate::timestamp::parse_rfc3339_ms;
 
-const HOMES: &[&str] = &[".openclaw", ".openclaw-user", ".openclaw-dev"];
+/// Dot-directories under $HOME, where the CLI and dev gateway keep their data.
+const HOME_PROFILES: &[&str] = &[".openclaw", ".openclaw-user", ".openclaw-dev"];
+
+/// The packaged desktop app (Almanac / OpenClaw) ships its gateway inside its
+/// own Application Support container instead of a dot-directory, so its sessions
+/// were being missed entirely. Names are the app bundles seen in the wild; each
+/// holds the same `.openclaw` layout as the CLI.
+const APP_CONTAINERS: &[&str] = &["Almanac Combined", "Almanac", "OpenClaw", "almanac"];
 
 pub struct OpenClaw;
+
+/// Every place an OpenClaw-family gateway keeps its `.openclaw` tree: the home
+/// dot-directories, and the packaged desktop app's Application Support
+/// container. All resolve to the same session layout, so one adapter covers
+/// the CLI, the dev gateway, and the shipped app.
+fn openclaw_roots(home: &Path) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = HOME_PROFILES.iter().map(|p| home.join(p)).collect();
+    let app_support = home.join("Library/Application Support");
+    for container in APP_CONTAINERS {
+        roots.push(app_support.join(container).join(".openclaw"));
+    }
+    roots
+}
 
 impl Adapter for OpenClaw {
     fn tool(&self) -> &'static str {
@@ -18,9 +38,9 @@ impl Adapter for OpenClaw {
     }
 
     fn discover(&self, home: &Path) -> Vec<PathBuf> {
-        HOMES
+        openclaw_roots(home)
             .iter()
-            .flat_map(|h| find_files(&home.join(h), &is_session_file))
+            .flat_map(|root| find_files(root, &is_session_file))
             .collect()
     }
 
@@ -167,6 +187,25 @@ mod tests {
 {"type":"message","id":"a","timestamp":"2026-07-15T13:04:24.380Z","message":{"role":"user","content":"[Wed 2026-07-15] ## Inbound user message\nAdd an image to the slide\n\n## Narrator context\nfoo","timestamp":"2026-07-15T13:04:24.380Z"}}
 {"type":"message","id":"b","timestamp":"2026-07-15T13:04:26.000Z","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-5","content":[{"type":"text","text":"Done, added the image."}],"timestamp":"2026-07-15T13:04:26.000Z"}}
 "#;
+
+    #[test]
+    fn discovers_the_packaged_app_container_not_only_home_dotdirs() {
+        let dir = std::env::temp_dir().join(format!("houdini-oc-app-{}", std::process::id()));
+        let sessions = dir
+            .join("Library/Application Support/Almanac Combined/.openclaw/agents/main/sessions");
+        std::fs::create_dir_all(&sessions).unwrap();
+        std::fs::write(sessions.join("s.jsonl"), "{}\n").unwrap();
+
+        let found = OpenClaw.discover(&dir);
+        assert_eq!(found.len(), 1, "the desktop app's sessions must be discovered");
+        assert!(found[0].to_string_lossy().contains("Almanac Combined"));
+        assert_eq!(
+            crate::attribution::display_tool(OpenClaw.tool()),
+            "Alma",
+            "and it is presented as Alma, the same as every other openclaw source"
+        );
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn parses_openclaw_session_with_envelope_stripped() {

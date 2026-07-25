@@ -163,6 +163,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_transcript_written_while_the_app_was_closed_is_still_ingested() {
+        let dir = std::env::temp_dir().join(format!("houdini-gap-{}", std::process::id()));
+        let projects = dir.join(".claude/projects/p");
+        std::fs::create_dir_all(&projects).unwrap();
+        let file = projects.join("session.jsonl");
+        std::fs::write(
+            &file,
+            "{\"type\":\"user\",\"timestamp\":\"2026-07-01T10:00:00Z\",\"message\":{\"content\":\"hello\"}}\n",
+        )
+        .unwrap();
+
+        let written_ms = fingerprint(&file).unwrap().0;
+
+        // A launch AFTER the file was written skips it entirely, which is the
+        // bug: quitting the app used to lose whatever happened while it was off.
+        let store = Store::open_in_memory().unwrap();
+        let mut missed = Ingestor::new(dir.clone(), written_ms + 60_000);
+        assert_eq!(missed.poll(&store).new_turns, 0);
+
+        // Resuming from the mark left by the previous scan picks it up.
+        let store = Store::open_in_memory().unwrap();
+        let mut resumed = Ingestor::new(dir.clone(), written_ms - 60_000);
+        assert_eq!(
+            resumed.poll(&store).new_turns,
+            1,
+            "a session that ended while the app was closed must still be ingested"
+        );
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
     fn persist_appends_only_new_turns_across_polls() {
         let store = Store::open_in_memory().unwrap();
         let mut sess = IngestedSession {

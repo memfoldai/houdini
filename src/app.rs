@@ -29,7 +29,7 @@ use houdini::config::{self, AppConfig, Paths};
 use houdini::export;
 use houdini::ingest::Ingestor;
 use houdini::ingest_actions::ActionIngestor;
-use houdini::store::{ActivityStats, Store, PAUSE_UNTIL_KEY};
+use houdini::store::{ActivityStats, Store, INGEST_SINCE_KEY, PAUSE_UNTIL_KEY};
 use houdini::webingest;
 
 use houdini::analytics::{Label, LabelRequest, Labeler, ProxyLabeler};
@@ -184,12 +184,12 @@ pub fn run() {
     app.run();
 }
 
-fn resolve_labeler(cfg: &AppConfig) -> Option<Arc<ProxyLabeler>> {
+fn resolve_labeler(cfg: &AppConfig, api_key: Option<String>) -> Option<Arc<ProxyLabeler>> {
     if !cfg.analytics_enabled {
         log::info!("analytics: disabled by config");
         return None;
     }
-    let Some(key) = crate::keychain::analytics_key() else {
+    let Some(key) = api_key else {
         log::info!("analytics: no api key provisioned; labeling stays off");
         return None;
     };
@@ -206,11 +206,13 @@ fn resolve_labeler(cfg: &AppConfig) -> Option<Arc<ProxyLabeler>> {
 }
 
 fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
-    let key = crate::keychain::db_key().unwrap_or_else(|e| {
+    // One keychain read for every secret: macOS prompts per item, so this is
+    // the single prompt a first launch can incur.
+    let secrets = crate::keychain::load().unwrap_or_else(|e| {
         log::error!("{e}");
         std::process::exit(1);
     });
-    let store = Rc::new(Store::open(&paths.db_file, &key).unwrap_or_else(|e| {
+    let store = Rc::new(Store::open(&paths.db_file, &secrets.db_key).unwrap_or_else(|e| {
         log::error!("cannot open the encrypted store: {e}");
         std::process::exit(1);
     }));
@@ -225,7 +227,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
 
     crate::loginitem::ensure_registered(&bundle_path());
 
-    let labeler = resolve_labeler(cfg);
+    let labeler = resolve_labeler(cfg, secrets.analytics_key);
     match store.drop_superseded_labels(
         houdini::taxonomy::TAXONOMY_VERSION,
         houdini::analytics::PROMPT_VERSION,
@@ -246,8 +248,25 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
 
-    let ingestor = Ingestor::new(home.clone(), now_ms);
-    let action_ingestor = ActionIngestor::new(home.clone(), now_ms);
+    // Resume from where the last scan finished so nothing written while the app
+    // was closed is skipped. A first-ever run has no mark and starts at launch,
+    // which is what keeps a fresh install from importing years of history.
+    let ingest_since_ms = store
+        .get_setting(INGEST_SINCE_KEY)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .filter(|mark| *mark > 0 && *mark <= now_ms)
+        .unwrap_or(now_ms);
+    if ingest_since_ms < now_ms {
+        log::info!(
+            "ingest: resuming from the last scan, {} minute(s) ago",
+            (now_ms - ingest_since_ms) / 60_000
+        );
+    }
+
+    let ingestor = Ingestor::new(home.clone(), ingest_since_ms);
+    let action_ingestor = ActionIngestor::new(home.clone(), ingest_since_ms);
     let transcripts_changed = Arc::new(AtomicBool::new(false));
     let watcher = start_watcher(
         &home,
@@ -453,6 +472,7 @@ fn tick(rt: &Rc<Runtime>) {
             clock.mono_ms.saturating_sub(rt.last_transcript_ms.get()) >= rt.transcript_poll_ms;
         if changed || due_poll {
             rt.last_transcript_ms.set(clock.mono_ms);
+            let scan_started_ms = clock.wall_ms;
             let stats = rt.ingestor.borrow_mut().poll(&rt.store);
             if stats.new_turns > 0 {
                 log::info!(
@@ -465,6 +485,11 @@ fn tick(rt: &Rc<Runtime>) {
             if acted > 0 {
                 log::info!("attributed {acted} new agent action(s)");
             }
+            // Stamped from BEFORE the scan: a file written while it ran is then
+            // still newer than the mark and gets picked up next time.
+            let _ = rt
+                .store
+                .set_setting(INGEST_SINCE_KEY, &scan_started_ms.to_string());
         }
         if due(&rt.heartbeat_at, clock.mono_ms, HEARTBEAT_MS) {
             log::info!("heartbeat: watching for new AI messages");
@@ -577,7 +602,7 @@ fn poll_analytics(rt: &Rc<Runtime>, now_mono_ms: i64, now_wall_ms: i64) {
         return;
     };
     *rt.analytics_rx.borrow_mut() = None;
-    rt.analytics_batch.borrow_mut().clear();
+    let batch = std::mem::take(&mut *rt.analytics_batch.borrow_mut());
 
     let model = rt
         .analytics_labeler
@@ -585,7 +610,7 @@ fn poll_analytics(rt: &Rc<Runtime>, now_mono_ms: i64, now_wall_ms: i64) {
         .as_ref()
         .map(|l| l.model().to_string())
         .unwrap_or_default();
-    match analytics_job::persist(&rt.store, &model, &results, now_wall_ms) {
+    match analytics_job::persist(&rt.store, &model, &batch, &results, now_wall_ms) {
         Ok(report) => {
             log::info!(
                 "analytics: labeled {} of {} turn(s), {} failed, {} candidate(s)",
