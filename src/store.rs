@@ -8,6 +8,11 @@ pub const PAUSE_UNTIL_KEY: &str = "paused_until_ms";
 /// finished while Houdini was closed was never ingested.
 pub const INGEST_SINCE_KEY: &str = "ingest_since_ms";
 
+/// A turn that fails to label this many times under one prompt version is
+/// retired from the queue, so a permanently unlabelable request (one the model
+/// keeps refusing) cannot be retried forever. A new prompt version resets it.
+pub const MAX_LABEL_ATTEMPTS: i64 = 5;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     User,
@@ -108,6 +113,16 @@ CREATE TABLE IF NOT EXISTS label_candidates (
 );
 CREATE INDEX IF NOT EXISTS idx_label_candidates_seen ON label_candidates(last_seen_at);
 CREATE INDEX IF NOT EXISTS idx_turn_labels_delegate ON turn_labels(delegate_tool);
+"#, r#"
+CREATE TABLE IF NOT EXISTS label_failures (
+    session_id      INTEGER NOT NULL,
+    seq             INTEGER NOT NULL,
+    prompt_version  INTEGER NOT NULL,
+    attempts        INTEGER NOT NULL DEFAULT 0,
+    last_error      TEXT NOT NULL DEFAULT '',
+    last_attempt_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, seq, prompt_version)
+);
 "#];
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
@@ -401,11 +416,17 @@ impl Store {
                ON l.session_id = t.session_id AND l.seq = t.seq
               AND l.taxonomy_version = ?1 AND l.prompt_version = ?2
              WHERE t.role = 'user' AND l.id IS NULL
+               AND NOT EXISTS (
+                 SELECT 1 FROM label_failures f
+                 WHERE f.session_id = t.session_id AND f.seq = t.seq
+                   AND f.prompt_version = ?2 AND f.attempts >= ?4)
              ORDER BY t.ts DESC
              LIMIT ?3",
         )?;
-        let rows = stmt.query_map(params![taxonomy_version, prompt_version, limit], |r| {
-            Ok(LabelInput {
+        let rows = stmt.query_map(
+            params![taxonomy_version, prompt_version, limit, MAX_LABEL_ATTEMPTS],
+            |r| {
+                Ok(LabelInput {
                 session_id: r.get(0)?,
                 seq: r.get(1)?,
                 redacted_text: r.get(2)?,
@@ -467,8 +488,52 @@ impl Store {
             "DELETE FROM label_candidates WHERE taxonomy_version <> ?1 OR prompt_version <> ?2",
             params![taxonomy_version, prompt_version],
         )?;
+        tx.execute(
+            "DELETE FROM label_failures WHERE prompt_version <> ?1",
+            params![prompt_version],
+        )?;
         tx.commit()?;
         Ok(removed)
+    }
+
+    pub fn record_label_failure(
+        &self,
+        session_id: i64,
+        seq: i64,
+        prompt_version: i64,
+        error: &str,
+        now_ms: i64,
+    ) -> rusqlite::Result<i64> {
+        self.conn.execute(
+            "INSERT INTO label_failures
+                 (session_id, seq, prompt_version, attempts, last_error, last_attempt_at)
+             VALUES (?1, ?2, ?3, 1, ?4, ?5)
+             ON CONFLICT(session_id, seq, prompt_version) DO UPDATE SET
+                 attempts = attempts + 1,
+                 last_error = excluded.last_error,
+                 last_attempt_at = excluded.last_attempt_at",
+            params![session_id, seq, prompt_version, error, now_ms],
+        )?;
+        self.conn.query_row(
+            "SELECT attempts FROM label_failures
+             WHERE session_id = ?1 AND seq = ?2 AND prompt_version = ?3",
+            params![session_id, seq, prompt_version],
+            |r| r.get(0),
+        )
+    }
+
+    pub fn clear_label_failure(
+        &self,
+        session_id: i64,
+        seq: i64,
+        prompt_version: i64,
+    ) -> rusqlite::Result<()> {
+        self.conn.execute(
+            "DELETE FROM label_failures
+             WHERE session_id = ?1 AND seq = ?2 AND prompt_version = ?3",
+            params![session_id, seq, prompt_version],
+        )?;
+        Ok(())
     }
 
     pub fn insert_turn_label(&self, label: &TurnLabelRecord) -> rusqlite::Result<bool> {
