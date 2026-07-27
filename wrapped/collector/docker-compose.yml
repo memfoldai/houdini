@@ -1,0 +1,18 @@
+services:
+  collector:
+    build:
+      context: ..
+      dockerfile: collector/Dockerfile
+    image: houdini-wrapped-collector
+    ports:
+      - "${BIND:-127.0.0.1}:8787:8787"
+    environment:
+      TEAM_NAME: "${TEAM_NAME:-Houdini}"
+      INGEST_TOKEN: "${INGEST_TOKEN:?set INGEST_TOKEN in .env}"
+      ADMIN_TOKEN: "${ADMIN_TOKEN:?set ADMIN_TOKEN in .env}"
+    volumes:
+      - collector-data:/data
+    restart: unless-stopped
+
+volumes:
+  collector-data:

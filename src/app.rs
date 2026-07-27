@@ -50,6 +50,22 @@ const UPDATE_CHECK_MS: i64 = 6 * 60 * 60 * 1000;
 
 const ANALYTICS_RETRY_MS: i64 = 15 * 60 * 1000;
 
+/// Push cadence to the team collector. Short enough that a laptop waking mid-day
+/// catches the collector up promptly; a wake also pushes immediately. Re-sending
+/// the whole export is idempotent, so a frequent tick costs only a small POST.
+const UPLOAD_INTERVAL_MS: i64 = 15 * 60 * 1000;
+
+/// Ticks are half a second apart, so a wall-clock jump this large between two of
+/// them means the machine slept. Waking is exactly when a device should re-reach
+/// the collector, so the gap triggers an immediate upload instead of waiting for
+/// the next interval.
+const WAKE_GAP_MS: i64 = 90 * 1000;
+
+/// A fresh install or an OTA looks back this far so the weekly wrapped has the
+/// most recent full week of history. Bounded on purpose: enough for last week
+/// plus slack, never "import everything".
+const INITIAL_BACKFILL_MS: i64 = 16 * 24 * 60 * 60 * 1000;
+
 /// A full batch means the LIMIT was hit and work remains, so the next batch
 /// follows promptly instead of an hour later. Without this a backlog drains at
 /// batch-per-hour: a week of history took five working days of uptime.
@@ -72,6 +88,9 @@ struct Runtime {
     person: String,
     device_name: String,
     export_dir: PathBuf,
+    upload: Option<houdini::upload::Config>,
+    last_upload: Cell<i64>,
+    last_tick_wall: Cell<i64>,
 
     transcript_poll_ms: i64,
 
@@ -154,6 +173,10 @@ define_class!(
             crate::browserhost::ensure_installed();
             install_tray(&rt);
             install_timer(&rt);
+            // An OTA relaunches the app, so a push at startup is what makes an
+            // updated device send last week's data right away instead of waiting
+            // for the first analytics cycle.
+            export_and_upload(&rt);
             log::info!("houdini started (transcript ingest)");
         }
     }
@@ -249,19 +272,22 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         .unwrap_or(0);
 
     // Resume from where the last scan finished so nothing written while the app
-    // was closed is skipped. A first-ever run has no mark and starts at launch,
-    // which is what keeps a fresh install from importing years of history.
+    // was closed is skipped. A first-ever run has no mark and looks back a
+    // bounded window, so a fresh install and an OTA both pick up the recent
+    // history the weekly wrapped needs, without importing years of it.
+    let backfill_floor_ms = now_ms - INITIAL_BACKFILL_MS;
     let ingest_since_ms = store
         .get_setting(INGEST_SINCE_KEY)
         .ok()
         .flatten()
         .and_then(|v| v.parse::<i64>().ok())
         .filter(|mark| *mark > 0 && *mark <= now_ms)
-        .unwrap_or(now_ms);
+        .map(|mark| mark.min(now_ms))
+        .unwrap_or(backfill_floor_ms);
     if ingest_since_ms < now_ms {
         log::info!(
-            "ingest: resuming from the last scan, {} minute(s) ago",
-            (now_ms - ingest_since_ms) / 60_000
+            "ingest: scanning back {} hour(s) of history",
+            (now_ms - ingest_since_ms) / 3_600_000
         );
     }
 
@@ -298,6 +324,9 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         person: cfg.person.clone(),
         device_name: cfg.device_name.clone(),
         export_dir: paths.export_dir.clone(),
+        upload: houdini::upload::from_config(cfg),
+        last_upload: Cell::new(i64::MIN),
+        last_tick_wall: Cell::new(0),
         transcript_poll_ms: cfg.transcript_poll_ms as i64,
         last_transcript_ms: Cell::new(i64::MIN),
         heartbeat_at: Cell::new(0),
@@ -458,6 +487,12 @@ fn install_timer(rt: &Rc<Runtime>) {
 fn tick(rt: &Rc<Runtime>) {
     let clock = rt.clock();
 
+    let prev_wall = rt.last_tick_wall.replace(clock.wall_ms);
+    if prev_wall > 0 && rt.upload.is_some() && clock.wall_ms - prev_wall > WAKE_GAP_MS {
+        log::info!("upload: {}s gap between ticks — likely wake, pushing now", (clock.wall_ms - prev_wall) / 1000);
+        export_and_upload(rt);
+    }
+
     if let Some(until) = rt.paused_until.get() {
         if clock.mono_ms >= until {
             rt.paused_until.set(None);
@@ -502,6 +537,10 @@ fn tick(rt: &Rc<Runtime>) {
         spawn_analytics(rt);
     }
     poll_analytics(rt, clock.mono_ms, clock.wall_ms);
+
+    if rt.upload.is_some() && due(&rt.last_upload, clock.mono_ms, UPLOAD_INTERVAL_MS) {
+        export_and_upload(rt);
+    }
 
     if due(&rt.last_update_check, clock.mono_ms, UPDATE_CHECK_MS) {
         spawn_update_check(rt, false);
@@ -631,6 +670,7 @@ fn poll_analytics(rt: &Rc<Runtime>, now_mono_ms: i64, now_wall_ms: i64) {
                 rt.last_analytics
                     .set(now_mono_ms.saturating_sub(rt.analytics_interval_ms - next_in_ms));
             }
+            export_and_upload(rt);
         }
         Err(e) => log::warn!("analytics: could not store labels: {e}"),
     }
@@ -835,6 +875,40 @@ fn do_show_data(rt: &Rc<Runtime>) {
                 .spawn();
         }
     }
+}
+
+/// Refreshes the analytics export and, when a collector is configured, pushes it
+/// so the team wrapped stays current. The export reads the store and so runs on
+/// the main thread; the network POST is spawned because curl can block for the
+/// request timeout. Re-sending the whole export is safe — the collector upserts
+/// by row identity — so no client-side watermark is needed.
+fn export_and_upload(rt: &Rc<Runtime>) {
+    let Some(cfg) = rt.upload.clone() else {
+        return;
+    };
+    let identity = export::ExportIdentity {
+        install_id: &rt.install_id,
+        person: &rt.person,
+        device_name: &rt.device_name,
+    };
+    let path = match export::export_analytics(&rt.store, &identity, &rt.export_dir) {
+        Ok(path) => path,
+        Err(e) => {
+            log::warn!("upload: could not refresh the analytics export: {e}");
+            return;
+        }
+    };
+    let body = match std::fs::read_to_string(&path) {
+        Ok(body) => body,
+        Err(e) => {
+            log::warn!("upload: could not read the analytics export: {e}");
+            return;
+        }
+    };
+    thread::spawn(move || match houdini::upload::push(&cfg, &body) {
+        Ok(()) => log::info!("upload: pushed analytics to the team collector"),
+        Err(e) => log::warn!("upload: {e}"),
+    });
 }
 
 fn do_quit() {

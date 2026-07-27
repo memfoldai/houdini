@@ -13,6 +13,14 @@ pub const INGEST_SINCE_KEY: &str = "ingest_since_ms";
 /// keeps refusing) cannot be retried forever. A new prompt version resets it.
 pub const MAX_LABEL_ATTEMPTS: i64 = 5;
 
+/// Idle threshold that separates one work burst from the next. A CLI transcript
+/// is one file the user returns to over days, so its raw span (last turn minus
+/// first) counts sleep, lunch, and whole weekends as "time with AI" — one real
+/// Codex session measured 53 days. A gap longer than this marks a step-away and
+/// contributes nothing; only sub-threshold gaps count, so engaged time is the
+/// summed duration of the bursts themselves.
+const IDLE_CAP_MS: i64 = 30 * 60 * 1000;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Role {
     User,
@@ -620,19 +628,34 @@ impl Store {
     }
 
     pub fn session_spans(&self) -> rusqlite::Result<Vec<SessionSpan>> {
+        // Engaged minutes per session sum only the inter-turn gaps that stay
+        // under IDLE_CAP_MS; a longer gap is a step-away and is dropped, so the
+        // total is the combined duration of the work bursts rather than the
+        // calendar span. A session's minutes land on its start day;
+        // longest_minutes is the busiest single session there.
         let mut stmt = self.conn.prepare(
-            "SELECT strftime('%Y-%m-%d', s.started_at / 1000, 'unixepoch') AS day,
+            "WITH gaps AS (
+                 SELECT session_id,
+                        ts - LAG(ts) OVER (PARTITION BY session_id ORDER BY seq) AS gap
+                 FROM turns
+             ),
+             active AS (
+                 SELECT session_id, SUM(gap) AS active_ms
+                 FROM gaps
+                 WHERE gap > 0 AND gap <= ?1
+                 GROUP BY session_id
+             )
+             SELECT strftime('%Y-%m-%d', s.started_at / 1000, 'unixepoch') AS day,
                     s.tool,
                     COUNT(*),
-                    SUM(CASE WHEN s.ended_at > s.started_at
-                             THEN s.ended_at - s.started_at ELSE 0 END) / 60000,
-                    MAX(CASE WHEN s.ended_at > s.started_at
-                             THEN s.ended_at - s.started_at ELSE 0 END) / 60000
+                    SUM(COALESCE(a.active_ms, 0)) / 60000,
+                    MAX(COALESCE(a.active_ms, 0)) / 60000
              FROM sessions s
+             LEFT JOIN active a ON a.session_id = s.id
              GROUP BY day, s.tool
              ORDER BY day DESC",
         )?;
-        let rows = stmt.query_map([], |r| {
+        let rows = stmt.query_map(params![IDLE_CAP_MS], |r| {
             Ok(SessionSpan {
                 day: r.get(0)?,
                 tool: r.get(1)?,
@@ -859,6 +882,36 @@ mod tests {
 
         s.add_turn(id, 0, Role::User, "hello again", 9999).unwrap();
         assert_eq!(s.session_turns(id).unwrap().len(), 4);
+    }
+
+    #[test]
+    fn session_spans_count_engaged_time_not_calendar_span() {
+        let s = Store::open_in_memory().unwrap();
+        let day0 = 1_752_624_000_000; // 2026-07-16T00:00:00Z, a fixed start day
+        let (id, _) = s
+            .upsert_session(&SessionUpsert {
+                tool: "codex",
+                external_id: "resumed",
+                provider: "openai",
+                surface: "cli",
+                model: None,
+                started_at_ms: day0,
+                ended_at_ms: day0 + 3 * 86_400_000,
+                message_count: 3,
+            })
+            .unwrap();
+        // Two turns five minutes apart, then a resume three days later.
+        s.add_turn(id, 0, Role::User, "start", day0).unwrap();
+        s.add_turn(id, 1, Role::Assistant, "reply", day0 + 5 * 60_000).unwrap();
+        s.add_turn(id, 2, Role::User, "back again", day0 + 3 * 86_400_000).unwrap();
+
+        let spans = s.session_spans().unwrap();
+        let span = spans.iter().find(|sp| sp.tool == "codex").unwrap();
+        assert_eq!(
+            span.total_minutes, 5,
+            "only the 5 min burst counts; the 3-day pause is a step-away, not usage"
+        );
+        assert_eq!(span.longest_minutes, 5);
     }
 
     #[test]

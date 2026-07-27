@@ -12,6 +12,7 @@ pub mod store;
 pub mod summary;
 pub mod taxonomy;
 pub mod timestamp;
+pub mod upload;
 pub mod webingest;
 
 #[cfg(feature = "ner")]

@@ -38,6 +38,20 @@ pub struct AppConfig {
 
     #[serde(default = "d_device_name")]
     pub device_name: String,
+
+    /// Base URL of the team wrapped collector. Baked at release build from
+    /// HOUDINI_UPLOAD_URL and overridable per device. The upload token is never
+    /// stored here; it comes from the environment or the compile-time secret so
+    /// a world-readable config never carries it.
+    #[serde(default = "d_upload_url")]
+    pub upload_url: Option<String>,
+
+    /// A public pointer (e.g. a gist raw URL) holding the collector's current
+    /// address, read at upload time. Lets a laptop behind a rotating quick
+    /// tunnel stay reachable without a fixed hostname. Non-secret; baked from
+    /// HOUDINI_UPLOAD_DISCOVERY. Used only when upload_url is unset.
+    #[serde(default = "d_upload_discovery_url")]
+    pub upload_discovery_url: Option<String>,
 }
 
 fn d_transcript_poll_ms() -> u64 {
@@ -62,6 +76,28 @@ fn d_analytics_interval_ms() -> u64 {
 
 fn d_analytics_batch_limit() -> i64 {
     crate::analytics_job::DEFAULT_BATCH_LIMIT
+}
+
+fn d_upload_url() -> Option<String> {
+    baked("HOUDINI_UPLOAD_URL")
+}
+
+fn d_upload_discovery_url() -> Option<String> {
+    baked("HOUDINI_UPLOAD_DISCOVERY")
+}
+
+fn baked(var: &str) -> Option<String> {
+    // option_env! needs a literal, so each name is spelled out. Resolved from
+    // the compile-time environment: a release build carries the collector
+    // address; a dev build bakes nothing and stays local.
+    match var {
+        "HOUDINI_UPLOAD_URL" => option_env!("HOUDINI_UPLOAD_URL"),
+        "HOUDINI_UPLOAD_DISCOVERY" => option_env!("HOUDINI_UPLOAD_DISCOVERY"),
+        _ => None,
+    }
+    .map(str::trim)
+    .filter(|s| !s.is_empty())
+    .map(str::to_string)
 }
 
 fn d_person() -> String {
@@ -99,6 +135,8 @@ impl AppConfig {
             analytics_batch_limit: d_analytics_batch_limit(),
             person: d_person(),
             device_name: d_device_name(),
+            upload_url: d_upload_url(),
+            upload_discovery_url: d_upload_discovery_url(),
         }
     }
 }

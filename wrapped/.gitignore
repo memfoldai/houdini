@@ -1,0 +1,5 @@
+node_modules/
+.env
+# Generated wrapped output — never commit team analytics HTML.
+*.html
+wrapped-*.html

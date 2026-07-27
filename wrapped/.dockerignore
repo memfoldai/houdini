@@ -1,0 +1,6 @@
+test
+fixtures
+**/*.test.mjs
+node_modules
+.env
+*.html

@@ -18,7 +18,13 @@ pub fn format_action_summary(stats: &[ActionStat]) -> Option<String> {
         if s.kind != "mutating" {
             continue;
         }
-        let app = s.app.as_deref().unwrap_or("other");
+        // An action with no identified app is noise here: "other - 7 agent - 0
+        // you" tells the reader nothing. Only named apps (Gmail, Drive, ...)
+        // are worth a summary line; without one, the menu keeps its plain
+        // session/action count instead.
+        let Some(app) = s.app.as_deref().filter(|a| !a.is_empty() && *a != "other") else {
+            continue;
+        };
         let entry = by_app.entry(app).or_default();
         match s.actor.as_str() {
             "agent" => entry.0 += s.count,
@@ -37,6 +43,29 @@ pub fn format_action_summary(stats: &[ActionStat]) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unattributed_actions_do_not_produce_a_summary() {
+        // Only "other"/empty-app actions: the menu should fall back to its
+        // plain count line rather than showing "other - N agent - 0 you".
+        let stats = vec![
+            stat("other", "agent", "mutating", 7),
+            stat("", "agent", "mutating", 2),
+        ];
+        assert!(format_action_summary(&stats).is_none());
+    }
+
+    #[test]
+    fn a_named_app_still_summarizes() {
+        let stats = vec![
+            stat("mail.google.com", "agent", "mutating", 3),
+            stat("other", "agent", "mutating", 9),
+        ];
+        assert_eq!(
+            format_action_summary(&stats).as_deref(),
+            Some("Gmail — 3 agent · 0 you")
+        );
+    }
 
     fn stat(app: &str, actor: &str, kind: &str, count: i64) -> ActionStat {
         ActionStat {

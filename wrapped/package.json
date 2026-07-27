@@ -1,0 +1,19 @@
+{
+  "name": "houdini-wrapped",
+  "version": "0.8.0",
+  "private": true,
+  "type": "module",
+  "description": "Team AI-usage Wrapped: collector (System 2) + story-reel generator (System 1) for Houdini analytics.",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "bin": {
+    "houdini-wrapped": "./generate.mjs"
+  },
+  "scripts": {
+    "test": "node --test test/wrapped.test.mjs",
+    "smoke": "node test/collector.integration.mjs",
+    "generate": "node generate.mjs",
+    "collector": "node collector/server.mjs"
+  }
+}
