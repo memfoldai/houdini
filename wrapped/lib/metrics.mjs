@@ -81,6 +81,7 @@ function ensurePerson(people, name) {
       almaClaudeCode: 0,
       almaAgentRun: 0,
       almaResearch: 0,
+      almaTurns: 0,
       // Session counts from spans, so a heavy user whose cells are not labeled
       // yet still counts toward the Alma × Claude Code award.
       almaSessions: 0,
@@ -172,6 +173,7 @@ export function compute(cells, spans) {
       p.delegateTurns += w;
     }
 
+    if (c.tool === "openclaw") p.almaTurns += w;
     if (c.tool === "openclaw" && c.delegate_tool === "claude_code") p.almaClaudeCode += w;
     // Alma sessions that spawned an agent — the strongest in-cell signal that
     // Alma actually drove another tool (e.g. Claude Code).

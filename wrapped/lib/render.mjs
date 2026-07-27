@@ -77,7 +77,7 @@ function body(card) {
       const podium =
         card.winner && card.runnersUp && card.runnersUp.length
           ? `<ol class="trophy-runners">${card.runnersUp
-              .map((r, i) => `<li><span class="tr-rank">${i + 2}</span><span class="tr-name">${esc(r.name)}</span></li>`)
+              .map((r, i) => `<li><span class="tr-medal">${["🥈", "🥉"][i] ?? ""}</span><span class="tr-name">${esc(r.name)}</span></li>`)
               .join("")}</ol>`
           : "";
       const win = card.winner
@@ -185,12 +185,13 @@ p,div,span,li,ol,button{overflow-wrap:break-word;word-break:normal;hyphens:none}
 .rk-track i{display:block;height:100%;width:0;border-radius:999px;background:var(--accent);transition:width .9s cubic-bezier(.2,.8,.2,1)}
 .card.active .rk-track i{width:var(--w)}
 /* podium */
-.podium{list-style:none;display:flex;flex-direction:column;gap:2.4cqmin}
-.podium li{display:flex;align-items:center;gap:2.5cqmin;font-weight:800;font-size:6.4cqmin;opacity:0;transform:translateY(8px);transition:opacity .5s ease,transform .5s ease;transition-delay:calc(var(--i) * .08s)}
+.podium{list-style:none;display:flex;flex-direction:column;gap:1.7cqmin}
+.podium li{display:flex;align-items:center;gap:2.2cqmin;font-weight:800;font-size:5.4cqmin;opacity:0;transform:translateY(8px);transition:opacity .45s ease,transform .45s ease;transition-delay:calc(var(--i) * .05s)}
 .card.active .podium li{opacity:1;transform:none}
-.podium .rank{width:1.4em;color:var(--accent);flex:none}
+.podium .rank{width:1.5em;color:var(--accent);flex:none;font-variant-numeric:tabular-nums}
 .podium .who{flex:1;min-width:0;letter-spacing:-.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.podium li:first-child{font-size:8.4cqmin}
+.podium li:first-child{font-size:7cqmin}
+.podium li:nth-child(1) .rank{color:#FFC94D}
 .podium .val{flex:none}
 .podium .val small{font-size:.55em;font-weight:700;margin-left:.15ch;opacity:.72}
 /* person / superlative */
@@ -202,11 +203,10 @@ p,div,span,li,ol,button{overflow-wrap:break-word;word-break:normal;hyphens:none}
 .trophy-win{font-weight:900;font-size:15cqmin;line-height:.94;color:var(--accent);text-wrap:balance}
 .trophy-stat{font-size:5cqmin;font-weight:600;line-height:1.35;text-wrap:pretty}
 .trophy-stat.empty{opacity:.85;font-style:italic}
-.trophy-runners{list-style:none;display:flex;flex-direction:column;gap:2cqmin;margin-top:1.5cqmin;width:100%}
-.trophy-runners li{display:flex;align-items:center;gap:2.4cqmin;font-weight:800;font-size:5cqmin;opacity:.92}
-.tr-rank{color:var(--accent);width:1.3em;flex:none}
+.trophy-runners{list-style:none;display:flex;flex-direction:column;gap:2cqmin;margin-top:1.8cqmin;width:100%}
+.trophy-runners li{display:flex;align-items:center;gap:2cqmin;font-weight:800;font-size:5.2cqmin;opacity:.9}
+.tr-medal{width:1.5em;flex:none;font-size:1.1em}
 .tr-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tr-val{flex:none;opacity:.8;font-variant-numeric:tabular-nums}
 /* summary */
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:3cqmin}
 .cell{background:color-mix(in srgb,var(--ink) 7%,transparent);border:1px solid color-mix(in srgb,var(--ink) 16%,transparent);border-radius:3cqmin;padding:3.4cqmin}
@@ -225,10 +225,27 @@ p,div,span,li,ol,button{overflow-wrap:break-word;word-break:normal;hyphens:none}
 .nav:focus-visible{outline:3px solid #fff;outline-offset:-6px}
 .confetti{position:absolute;inset:0;z-index:7;pointer-events:none}
 .hint{position:absolute;bottom:max(10px,env(safe-area-inset-bottom));left:0;right:0;text-align:center;z-index:5;font-size:.72rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.55);pointer-events:none;mix-blend-mode:difference}
+/* title flourish */
+.card.title{background:radial-gradient(125% 90% at 50% 26%, #2c1150 0%, var(--bg) 62%)}
+.wordmark{text-shadow:0 0 40px color-mix(in srgb,var(--accent) 45%, transparent)}
+.card.title.active .wordmark{animation:rise .7s cubic-bezier(.2,.9,.3,1.25) both}
+.card.title.active .hero{animation:rise .7s .08s cubic-bezier(.2,.9,.3,1.25) both}
+.card.title.active .kicker{animation:rise .6s .18s ease both}
+.card.title.active .sub{animation:rise .6s .26s ease both}
+@keyframes rise{from{opacity:0;transform:translateY(26px) scale(.95)}to{opacity:1;transform:none}}
+/* trophy spotlight */
+.card.trophy{background:radial-gradient(circle at 50% 24%, color-mix(in srgb,var(--accent) 20%, var(--bg)), var(--bg) 58%)}
+.trophy-emoji{filter:drop-shadow(0 8px 26px color-mix(in srgb,var(--accent) 55%, transparent))}
+.trophy-win{text-shadow:0 0 34px color-mix(in srgb,var(--accent) 55%, transparent)}
+/* summary finale */
+.card.summary{background:linear-gradient(155deg,#FBF3EA,#FBE7F1)}
+.summary .cell-val{color:var(--accent)}
+.summary .cell{border-color:color-mix(in srgb,var(--accent) 32%, transparent)}
 @media (prefers-reduced-motion: reduce){
   .card{transition:none}
   .rk-track i,.podium li{transition:none}
   .podium li{opacity:1;transform:none}
+  .card.title.active .wordmark,.card.title.active .hero,.card.title.active .kicker,.card.title.active .sub{animation:none}
 }
 `;
 

@@ -138,17 +138,18 @@ export function buildCards(m, opts = {}) {
     });
   }
 
-  if (m.top5.length > 1) {
+  const board = m.byMinutes.filter((p) => p.minutes > 0);
+  if (board.length > 1) {
     cards.push({
       kind: "podium",
-      kicker: "top 5, by AI hours",
-      rows: m.top5.map((p, i) => ({
+      kicker: "the whole team, by AI hours",
+      rows: board.map((p, i) => ({
         rank: i + 1,
         name: firstName(p.person),
         value: Math.round(p.minutes / 60) || 0,
         unit: "h",
       })),
-      sub: "the top 5. everyone below can finally relax.",
+      sub: "the full leaderboard. no hiding.",
     });
   }
 
@@ -182,7 +183,11 @@ export function buildCards(m, opts = {}) {
       "🔬",
       "The Alma × Research Award",
       m.people,
-      (p) => p.almaResearch,
+      // Research is a labeled property, so project each person's Alma
+      // asking-rate (from their analyzed cells) across their full Alma session
+      // count — a heavy Alma-research user whose cells lag labeling still surfaces.
+      // Needs a few analyzed turns to trust the rate; otherwise falls back to raw.
+      (p) => (p.almaTurns >= 3 ? Math.round((p.almaResearch / p.almaTurns) * p.almaSessions) : p.almaResearch),
       (v) => `leaned on Alma to dig into things ${int(v)} ${plural(v, "time", "times")}. the resident researcher.`,
       "nobody used Alma to research this week. the library's empty.",
     ),
@@ -199,26 +204,18 @@ export function buildCards(m, opts = {}) {
   return cards;
 }
 
-// Picks the winner + top 3 by a jittered weighted sort: each person's real
-// score is scaled by a random factor per render, so the most active tend to win
-// but the pick genuinely shuffles every time the wrapped is regenerated. The
-// numbers shown are the real scores. Everyone with any relevant activity is
-// eligible, so the award is never left empty when the metric is populated.
+// Deterministic winner + top 3: strictly ranked by the data-driven score, so the
+// award reflects the analysis and never changes between renders of the same data.
 function pickTrophy(emoji, title, people, scoreFn, earned, emptyLine) {
-  const pool = people
+  const ranked = people
     .map((p) => ({ name: firstName(p.person), score: scoreFn(p) }))
-    .filter((x) => x.score > 0);
-  if (!pool.length) {
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
+    .slice(0, 3);
+  if (!ranked.length) {
     return { kind: "trophy", emoji, title, winner: null, stat: emptyLine };
   }
-  const ranked = pool
-    .map((x) => ({ ...x, jitter: Math.pow(x.score, 0.3) * (0.4 + Math.random()) }))
-    .sort((a, b) => b.jitter - a.jitter)
-    .slice(0, 3);
   const winner = ranked[0];
-  // Runners-up are names only: the winner is a weighted-random pick, so a strict
-  // 2nd/3rd by number would look wrong when a lighter user wins. Names keep it a
-  // fun "podium" without implying an exact ranking.
   return {
     kind: "trophy",
     emoji,
