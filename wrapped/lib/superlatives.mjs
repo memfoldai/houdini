@@ -15,55 +15,55 @@ const AXES = [
     badge: "Certified Yapper",
     value: (p) => p.askingTurns / Math.max(p.turns, 1),
     gate: (p) => p.askingTurns > 0,
-    line: (p) => `${pct(p.askingTurns / Math.max(p.turns, 1))}% of their prompts were just questions. wanted the footnotes, not the answer.`,
+    line: (p) => `${pct(p.askingTurns / Math.max(p.turns, 1))}% of their prompts were questions. the AI's lawyering up.`,
   },
   {
     badge: "The Builder",
     value: (p) => p.doingTurns / Math.max(p.turns, 1),
     gate: (p) => p.doingTurns > 0,
-    line: (p) => `${pct(p.doingTurns / Math.max(p.turns, 1))}% make-it-happen prompts. came to cook, not to chat.`,
+    line: (p) => `${pct(p.doingTurns / Math.max(p.turns, 1))}% build prompts. here to cook, not to chat.`,
   },
   {
     badge: "The Delegator",
     value: (p) => p.delegateTurns / Math.max(p.turns, 1),
     gate: (p) => p.delegateTurns > 0,
-    line: (p) => `made AI boss other AI ${int(p.delegateTurns)} times. pure management energy.`,
+    line: (p) => `made one AI manage another ${int(p.delegateTurns)} times. never did it themselves.`,
   },
   {
     badge: "Night Owl",
     value: (p) => p.lateTurns / Math.max(p.turns, 1),
     gate: (p) => p.lateTurns > 0,
-    line: () => `most after-hours prompts on the team. the 2am gremlin fr.`,
+    line: () => `most after-hours prompts on the team. a certified 2am gremlin.`,
   },
   {
     badge: "Early Bird",
     value: (p) => p.earlyTurns / Math.max(p.turns, 1),
     gate: (p) => p.earlyTurns > 0,
-    line: () => `first one online. prompting before the coffee even hit.`,
+    line: () => `first one online, every day. prompting before the coffee landed.`,
   },
   {
     badge: "The Marathoner",
     value: (p) => p.longest,
     gate: (p) => p.longest > 0,
-    line: (p) => `longest single session: ${int(p.longest)} min. no breaks. unwell (affectionate).`,
+    line: (p) => `longest single session: ${int(p.longest)} min. no breaks. check the vitals.`,
   },
   {
     badge: "The Explorer",
     value: (p) => p.tools.size,
     gate: (p) => p.tools.size > 1,
-    line: (p) => `used ${int(p.tools.size)} different AIs. not commitment issues, just range. we're calling it range.`,
+    line: (p) => `used ${int(p.tools.size)} different AIs. that's not indecision, that's range.`,
   },
   {
     badge: "The Novelist",
     value: (p) => p.chars / Math.max(p.turns, 1),
     gate: (p) => p.turns > 0,
-    line: (p) => `writes whole essays, not prompts. ${int(p.chars / Math.max(p.turns, 1))} characters a turn on avg.`,
+    line: (p) => `doesn't prompt, publishes. ${int(p.chars / Math.max(p.turns, 1))} characters a turn on average.`,
   },
   {
     badge: "The Machine",
     value: (p) => p.turns,
     gate: (p) => p.turns > 0,
-    line: (p) => `sent ${int(p.turns)} prompts. someone do a wellness check.`,
+    line: (p) => `sent ${int(p.turns)} prompts. someone schedule a wellness check.`,
   },
 ];
 
@@ -109,7 +109,7 @@ export function assignSuperlatives(people) {
   return people.map((p) => {
     const c = byPerson.get(p.person);
     if (c) return { person: p.person, badge: c.badge, line: c.line };
-    return { person: p.person, badge: "The Wildcard", line: "showed up and kept everyone guessing. no two weeks the same." };
+    return { person: p.person, badge: "The Wildcard", line: "showed up and kept everyone guessing. no two weeks alike." };
   });
 }
 

@@ -105,6 +105,7 @@ export function compute(cells, spans) {
   const people = new Map();
   const toolTurns = new Map();
   const toolNames = new Map();
+  const toolDomain = new Map();
   const domains = new Map();
   const days = new Map();
   const hours = new Array(24).fill(0);
@@ -137,7 +138,15 @@ export function compute(cells, spans) {
     totalTurns += w;
     inc(toolTurns, c.tool, w);
     if (!toolNames.has(c.tool)) toolNames.set(c.tool, c.tool_name);
-    if (c.domain !== "other") inc(domains, c.domain, w);
+    if (c.domain !== "other") {
+      inc(domains, c.domain, w);
+      let dm = toolDomain.get(c.tool);
+      if (!dm) {
+        dm = new Map();
+        toolDomain.set(c.tool, dm);
+      }
+      inc(dm, c.domain, w);
+    }
     inc(days, c.day, w);
 
     if (shape[c.shape] === undefined) shape.other += w;
@@ -174,6 +183,21 @@ export function compute(cells, spans) {
     }))
     .sort((a, b) => b.turns - a.turns || a.tool.localeCompare(b.tool));
 
+  // For the top tools, the categories THEY were used for — the per-AI drill-down
+  // (e.g. what ran through Alma, including the Claude Code it drove).
+  const toolCategories = toolShare
+    .slice(0, 2)
+    .map((t) => {
+      const dm = toolDomain.get(t.tool) ?? new Map();
+      const total = [...dm.values()].reduce((a, b) => a + b, 0);
+      const categories = [...dm.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .slice(0, 4)
+        .map(([key, n]) => ({ label: domainTitle(key), pct: total > 0 ? Math.round((n / total) * 100) : 0 }));
+      return { tool: t.tool, name: t.name, categories };
+    })
+    .filter((t) => t.categories.length > 0);
+
   let peakHour = 0;
   for (let h = 1; h < 24; h++) if (hours[h] > hours[peakHour]) peakHour = h;
 
@@ -205,6 +229,7 @@ export function compute(cells, spans) {
     top5: byMinutes.slice(0, 5),
     tools: toolShare,
     toolShare,
+    toolCategories,
     topTool: toolShare[0] ?? null,
     toolCount: toolNames.size,
     shape,
