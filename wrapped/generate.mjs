@@ -27,10 +27,11 @@ function main() {
   }
 
   const window = weekWindow(new Date(), opts.week ?? lastWeekArg());
-  const { cells, spans, skipped } = readFiles(opts.inputs);
+  const { cells, spans, delegations, skipped } = readFiles(opts.inputs);
   const wc = filterToWeek(cells, window);
   const ws = filterToWeek(spans, window);
-  const metrics = compute(wc, ws);
+  const wd = filterToWeek(delegations, window);
+  const metrics = compute(wc, ws, wd);
   const team = opts.team ?? "Houdini";
   const cards = buildCards(metrics, { team, weekLabel: window.label });
   const html = renderHtml(cards, { team, weekLabel: window.label });

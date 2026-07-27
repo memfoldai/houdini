@@ -131,6 +131,13 @@ CREATE TABLE IF NOT EXISTS label_failures (
     last_attempt_at INTEGER NOT NULL,
     PRIMARY KEY (session_id, seq, prompt_version)
 );
+"#, r#"
+CREATE TABLE IF NOT EXISTS session_deleg (
+    session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    driven_tool TEXT NOT NULL,
+    turns       INTEGER NOT NULL,
+    PRIMARY KEY (session_id, driven_tool)
+);
 "#];
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
@@ -667,6 +674,53 @@ impl Store {
         rows.collect()
     }
 
+    /// Replaces a session's detected delegations with the full current set, so a
+    /// re-parse overwrites rather than accumulates — the same idempotency the
+    /// turn upsert relies on, which is what keeps re-ingest and OTA re-scans from
+    /// duplicating.
+    pub fn replace_session_delegations(
+        &self,
+        session_id: i64,
+        delegations: &[(String, i64)],
+    ) -> rusqlite::Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute(
+            "DELETE FROM session_deleg WHERE session_id = ?1",
+            params![session_id],
+        )?;
+        for (tool, turns) in delegations {
+            if *turns <= 0 {
+                continue;
+            }
+            tx.execute(
+                "INSERT OR REPLACE INTO session_deleg (session_id, driven_tool, turns) VALUES (?1, ?2, ?3)",
+                params![session_id, tool, turns],
+            )?;
+        }
+        tx.commit()
+    }
+
+    /// Detected delegations rolled up per day, driving tool, and driven tool —
+    /// the deterministic "Alma drove Claude Code" signal for the export.
+    pub fn delegation_spans(&self) -> rusqlite::Result<Vec<DelegationSpan>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT strftime('%Y-%m-%d', s.started_at / 1000, 'unixepoch') AS day,
+                    s.tool, d.driven_tool, SUM(d.turns)
+             FROM session_deleg d JOIN sessions s ON s.id = d.session_id
+             GROUP BY day, s.tool, d.driven_tool
+             ORDER BY day DESC",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok(DelegationSpan {
+                day: r.get(0)?,
+                tool: r.get(1)?,
+                driven_tool: r.get(2)?,
+                turns: r.get(3)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     pub fn all_label_candidates(
         &self,
         taxonomy_version: i64,
@@ -796,6 +850,14 @@ pub struct SessionSpan {
 }
 
 #[derive(Debug, Clone)]
+pub struct DelegationSpan {
+    pub day: String,
+    pub tool: String,
+    pub driven_tool: String,
+    pub turns: i64,
+}
+
+#[derive(Debug, Clone)]
 pub struct LabelCandidateRow {
     pub taxonomy_version: i64,
     pub facet: String,
@@ -912,6 +974,36 @@ mod tests {
             "only the 5 min burst counts; the 3-day pause is a step-away, not usage"
         );
         assert_eq!(span.longest_minutes, 5);
+    }
+
+    #[test]
+    fn delegations_replace_not_accumulate_and_roll_up_by_day() {
+        let s = Store::open_in_memory().unwrap();
+        let (id, _) = s
+            .upsert_session(&SessionUpsert {
+                tool: "openclaw",
+                external_id: "d1",
+                provider: "openclaw",
+                surface: "cli",
+                model: None,
+                started_at_ms: 1_752_624_000_000,
+                ended_at_ms: 1_752_624_000_000,
+                message_count: 1,
+            })
+            .unwrap();
+        s.replace_session_delegations(id, &[("claude_code".into(), 4), ("codex".into(), 1)])
+            .unwrap();
+        // A re-parse replaces the whole set — no accumulation across re-scans.
+        s.replace_session_delegations(id, &[("claude_code".into(), 7)]).unwrap();
+
+        let spans = s.delegation_spans().unwrap();
+        let cc = spans.iter().find(|d| d.driven_tool == "claude_code").unwrap();
+        assert_eq!(cc.turns, 7, "replaced, not 4+7");
+        assert_eq!(cc.tool, "openclaw");
+        assert!(
+            spans.iter().all(|d| d.driven_tool != "codex"),
+            "the codex row was replaced away on re-parse"
+        );
     }
 
     #[test]

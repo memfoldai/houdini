@@ -121,10 +121,11 @@ function windowRows(window) {
 
 function renderWrapped(weekArg) {
   const window = weekWindow(new Date(), weekArg ?? lastWeekArg());
-  const { cells, spans } = windowRows(window);
+  const { cells, spans, delegations } = windowRows(window);
   const wc = filterToWeek(cells, window);
   const ws = filterToWeek(spans, window);
-  const metrics = compute(wc, ws);
+  const wd = filterToWeek(delegations, window);
+  const metrics = compute(wc, ws, wd);
   const cards = buildCards(metrics, { team: TEAM_NAME, weekLabel: window.label });
   return { window, metrics, html: renderHtml(cards, { team: TEAM_NAME, weekLabel: window.label }) };
 }

@@ -168,14 +168,14 @@ export function buildCards(m, opts = {}) {
       "🏆",
       "The Alma × Claude Code Award",
       m.people,
-      // Alma driving Claude Code: Claude Code TIME by someone who also uses Alma
-      // (so the CC is plausibly Alma-run). Span-based minutes, so a heavy user
-      // whose cells aren't labeled yet still counts. Direct-only CC users with no
-      // Alma (e.g. vinod) score zero — they're not driving it through Alma.
-      (p) => (p.almaSessions > 0 ? p.ccMinutes : 0),
-      (v) => `${int(Math.round(v / 60))}h of Claude Code, all driven through Alma. no notes.`,
-      (v) => `${Math.round(v / 60)}h`,
-      "nobody drove Claude Code through Alma this week. the goal awaits.",
+      // The real thing now: how many times Alma actually invoked Claude Code,
+      // detected deterministically from the transcript's tool calls at ingestion
+      // (works even for devices with no analytics key). Direct-only Claude Code
+      // users score zero — they never drove it through Alma.
+      (p) => p.droveClaudeCode,
+      (v) => `drove Claude Code through Alma ${int(v)} ${plural(v, "time", "times")}. no notes.`,
+      (v) => `${int(v)}×`,
+      "no Claude Code driven through Alma yet this week. the goal awaits.",
     ),
   );
   cards.push(

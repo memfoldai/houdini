@@ -173,10 +173,9 @@ define_class!(
             crate::browserhost::ensure_installed();
             install_tray(&rt);
             install_timer(&rt);
-            // An OTA relaunches the app, so a push at startup is what makes an
-            // updated device send last week's data right away instead of waiting
-            // for the first analytics cycle.
-            export_and_upload(&rt);
+            // The first tick (≈0.5s later) runs the initial upload off the launch
+            // path — exporting on the main thread here delayed the tray appearing
+            // on machines with a lot of history.
             log::info!("houdini started (transcript ingest)");
         }
     }
@@ -271,11 +270,31 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
 
+    let backfill_floor_ms = now_ms - INITIAL_BACKFILL_MS;
+
+    // One-time re-scan after an upgrade that adds transcript-derived signals
+    // (here: Alma→Claude Code delegation). Rewind the watermark once so the last
+    // backfill window is re-parsed and the new signal backfills. Re-parsing is
+    // idempotent (turns upsert, delegations replace), so no duplication. Gated by
+    // a stored level so it runs exactly once per feature bump, never every launch.
+    const REINGEST_LEVEL: i64 = 1;
+    const REINGEST_KEY: &str = "reingest_feature_level";
+    let seen_level = store
+        .get_setting(REINGEST_KEY)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    if seen_level < REINGEST_LEVEL {
+        let _ = store.set_setting(INGEST_SINCE_KEY, &backfill_floor_ms.to_string());
+        let _ = store.set_setting(REINGEST_KEY, &REINGEST_LEVEL.to_string());
+        log::info!("re-scanning the last {} day(s) once to backfill new signals", INITIAL_BACKFILL_MS / 86_400_000);
+    }
+
     // Resume from where the last scan finished so nothing written while the app
     // was closed is skipped. A first-ever run has no mark and looks back a
     // bounded window, so a fresh install and an OTA both pick up the recent
     // history the weekly wrapped needs, without importing years of it.
-    let backfill_floor_ms = now_ms - INITIAL_BACKFILL_MS;
     let ingest_since_ms = store
         .get_setting(INGEST_SINCE_KEY)
         .ok()
@@ -584,17 +603,20 @@ fn bundle_path() -> PathBuf {
 }
 
 fn analytics_progress_text(rt: &Rc<Runtime>) -> String {
+    // Always say something: a blank menu line reads as broken. No labeler means
+    // no analytics key on this device, which is why some machines upload usage
+    // but never get their requests categorized.
     if rt.analytics_labeler.borrow().is_none() {
-        return String::new();
+        return "Analytics: off (no key on this device)".to_string();
     }
     let Ok((total, labeled)) = rt.store.label_progress(
         houdini::taxonomy::TAXONOMY_VERSION,
         houdini::analytics::PROMPT_VERSION,
     ) else {
-        return String::new();
+        return "Analytics: unavailable".to_string();
     };
     if total == 0 {
-        return String::new();
+        return "Analytics: warming up…".to_string();
     }
     if labeled >= total {
         format!("Analytics: all {total} requests analyzed")
@@ -797,14 +819,6 @@ fn refresh_menu(rt: &Rc<Runtime>, glyph: Glyph, now_ms: i64, stats: &ActivitySta
     }
     rt.analytics_item
         .set_text(analytics_progress_text(rt));
-
-    if let Some(summary) = houdini::summary::format_action_summary(
-        &rt.store
-            .action_stats(now_ms - RECENT_WINDOW_MS)
-            .unwrap_or_default(),
-    ) {
-        rt.detail_item.set_text(summary);
-    }
 
     rt.resume_item.set_enabled(rt.is_paused());
 }

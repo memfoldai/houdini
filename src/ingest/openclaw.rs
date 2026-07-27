@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -50,6 +51,7 @@ impl Adapter for OpenClaw {
         let mut turns: Vec<IngestedTurn> = Vec::new();
         let mut session_id: Option<String> = None;
         let mut model: Option<String> = None;
+        let mut deleg: HashMap<&'static str, i64> = HashMap::new();
 
         for line in body.lines() {
             let line = line.trim();
@@ -97,6 +99,7 @@ impl Adapter for OpenClaw {
                             }
                         }
                         Some("assistant") => {
+                            count_delegations(message, &mut deleg);
                             let text = assistant_text(message);
                             if !text.is_empty() {
                                 turns.push(IngestedTurn {
@@ -128,6 +131,7 @@ impl Adapter for OpenClaw {
             .and_then(provider_for_model)
             .unwrap_or(provider::OPENCLAW);
 
+        let delegations = deleg.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
         Some(IngestedSession {
             tool: "openclaw",
             external_id,
@@ -137,7 +141,63 @@ impl Adapter for OpenClaw {
             started_ms: started,
             ended_ms: ended,
             turns,
+            delegations,
         })
+    }
+}
+
+/// Counts the tool calls in one Alma assistant message that hand work to another
+/// AI, grouped by which one. Other tool calls (read, web_search, exec, …) are
+/// Alma working directly and are ignored.
+fn count_delegations(message: &Value, out: &mut HashMap<&'static str, i64>) {
+    let Some(blocks) = message.get("content").and_then(Value::as_array) else {
+        return;
+    };
+    for block in blocks {
+        if block.get("type").and_then(Value::as_str) != Some("toolCall") {
+            continue;
+        }
+        if let Some(tool) = driven_tool(block) {
+            *out.entry(tool).or_insert(0) += 1;
+        }
+    }
+}
+
+/// Maps one Alma tool call to the downstream AI it drives, read from the fields
+/// that NAME the target (capability / agentId / connectorId), never from free
+/// text: e.g. app_runtime `agent.claude.code_run` or sessions_spawn
+/// `agentId: "claude"` → claude_code. None when the call drives nothing.
+fn driven_tool(call: &Value) -> Option<&'static str> {
+    let name = call.get("name").and_then(Value::as_str).unwrap_or("");
+    if !matches!(name, "app_runtime" | "sessions_spawn" | "subagents" | "task" | "agent") {
+        return None;
+    }
+    let args = call.get("arguments").or_else(|| call.get("input"))?;
+    let field = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("");
+    let hay = format!(
+        "{} {} {}",
+        field("capability"),
+        field("agentId"),
+        field("connectorId")
+    )
+    .to_ascii_lowercase();
+    if hay.trim().is_empty() {
+        return None;
+    }
+    // The team drives Claude Code through the almanac-claude connector / an ACP
+    // "claude" agent, so any Claude target counts toward the Claude Code award.
+    if hay.contains("claude") {
+        Some("claude_code")
+    } else if hay.contains("codex") {
+        Some("codex")
+    } else if hay.contains("gemini") {
+        Some("gemini")
+    } else if hay.contains("cursor") {
+        Some("cursor")
+    } else if hay.contains("copilot") {
+        Some("copilot")
+    } else {
+        None
     }
 }
 
@@ -237,6 +297,30 @@ mod tests {
             1,
             "trajectory files are skipped"
         );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn detects_alma_driving_claude_code_from_tool_calls() {
+        // The two real shapes: an app_runtime connector call and an ACP spawn.
+        let sample = r#"
+{"type":"session","id":"drv","timestamp":"2026-07-20T10:00:00.000Z"}
+{"type":"message","message":{"role":"user","content":"[Mon] ## Inbound user message\nReview PR 409","timestamp":"2026-07-20T10:00:01.000Z"}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"app_runtime","arguments":{"action":"execute_connector","connectorId":"almanac-claude","capability":"agent.claude.code_run","query":"Review PR 409"}},{"type":"text","text":"Kicking off Claude Code."}],"timestamp":"2026-07-20T10:00:02.000Z"}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"sessions_spawn","arguments":{"runtime":"acp","agentId":"claude","task":"compare branches"}}],"timestamp":"2026-07-20T10:00:05.000Z"}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"web_search","arguments":{"q":"unrelated"}}],"timestamp":"2026-07-20T10:00:06.000Z"}}
+"#;
+        let dir = std::env::temp_dir().join(format!("oc-drv-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("drv.jsonl");
+        fs::write(&f, sample).unwrap();
+        let sess = OpenClaw.parse_file(&f).unwrap();
+        let cc = sess
+            .delegations
+            .iter()
+            .find(|(t, _)| t == "claude_code")
+            .map(|(_, n)| *n);
+        assert_eq!(cc, Some(2), "two Claude Code drives detected, the web_search ignored");
         fs::remove_dir_all(&dir).ok();
     }
 

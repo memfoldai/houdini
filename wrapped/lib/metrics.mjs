@@ -87,6 +87,9 @@ function ensurePerson(people, name) {
       almaSessions: 0,
       ccSessions: 0,
       ccMinutes: 0,
+      // Deterministic count of times this person's Alma actually drove Claude
+      // Code, detected from the transcript's tool calls (not the LLM label).
+      droveClaudeCode: 0,
     };
     people.set(name, p);
   }
@@ -108,7 +111,7 @@ function hourLabel(h) {
   return `${twelve} ${period}`;
 }
 
-export function compute(cells, spans) {
+export function compute(cells, spans, delegations = []) {
   const people = new Map();
   const toolTurns = new Map();
   const toolNames = new Map();
@@ -183,6 +186,10 @@ export function compute(cells, spans) {
     // Alma actually drove another tool (e.g. Claude Code).
     if (c.tool === "openclaw" && c.delegation === "agent_run") p.almaAgentRun += w;
     if (c.tool === "openclaw" && c.shape === "asking") p.almaResearch += w;
+  }
+
+  for (const d of delegations) {
+    if (d.driven_tool === "claude_code") ensurePerson(people, d.person).droveClaudeCode += d.turns;
   }
 
   const roster = [...people.values()];

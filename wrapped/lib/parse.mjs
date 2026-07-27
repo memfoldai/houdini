@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 // are taxonomy-tuning telemetry and are dropped here.
 export const CELL = "analytics_cell";
 export const SPAN = "session_span";
+export const DELEGATION = "delegation";
 
 // A cell's identity is its full dimension tuple. Re-uploading a device's export
 // as more of its history gets labeled produces the same tuple with larger
@@ -42,7 +43,14 @@ export function rowKey(r) {
   if (!r || typeof r !== "object") return null;
   if (r.kind === CELL) return `${CELL}:${cellKey(r)}`;
   if (r.kind === SPAN) return `${SPAN}:${spanKey(r)}`;
+  if (r.kind === DELEGATION) return `${DELEGATION}:${delegKey(r)}`;
   return null;
+}
+
+// A delegation: how many times a driving tool (Alma) drove a driven tool
+// (Claude Code) on a day. Detected from the transcript, so re-upload replaces.
+function delegKey(r) {
+  return [r.device, r.person, r.day, r.tool, r.driven_tool].join("");
 }
 
 function coerceCell(r) {
@@ -89,6 +97,7 @@ function coerceSpan(r) {
 export function collect(rows) {
   const cells = new Map();
   const spans = new Map();
+  const delegations = new Map();
   let skipped = 0;
   for (const r of rows) {
     if (!r || typeof r !== "object") {
@@ -97,8 +106,24 @@ export function collect(rows) {
     }
     if (r.kind === CELL) cells.set(cellKey(r), coerceCell(r));
     else if (r.kind === SPAN) spans.set(spanKey(r), coerceSpan(r));
+    else if (r.kind === DELEGATION) delegations.set(delegKey(r), coerceDelegation(r));
   }
-  return { cells: [...cells.values()], spans: [...spans.values()], skipped };
+  return {
+    cells: [...cells.values()],
+    spans: [...spans.values()],
+    delegations: [...delegations.values()],
+    skipped,
+  };
+}
+
+function coerceDelegation(r) {
+  return {
+    person: String(r.person ?? "unknown"),
+    day: String(r.day ?? ""),
+    tool: String(r.tool ?? "other"),
+    driven_tool: String(r.driven_tool ?? "other"),
+    turns: Number.isFinite(r.turns) ? r.turns : 0,
+  };
 }
 
 export function parseNdjson(text) {

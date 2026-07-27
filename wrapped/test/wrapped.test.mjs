@@ -63,6 +63,20 @@ test("both Alma awards select the right winner", () => {
   assert.equal(m.almaResearch[0].value, 30);
 });
 
+test("delegation rows drive droveClaudeCode deterministically, ignoring other tools", () => {
+  const rows = [
+    span({ person: "aa", total_minutes: 30 }),
+    span({ person: "bb", total_minutes: 10 }),
+    { kind: "delegation", device: "d", person: "aa", day: "2026-07-21", tool: "openclaw", driven_tool: "claude_code", turns: 10 },
+    { kind: "delegation", device: "d", person: "bb", day: "2026-07-21", tool: "openclaw", driven_tool: "claude_code", turns: 3 },
+    { kind: "delegation", device: "d", person: "aa", day: "2026-07-21", tool: "openclaw", driven_tool: "codex", turns: 99 },
+  ];
+  const { cells, spans, delegations } = collect(rows);
+  const m = compute(cells, spans, delegations);
+  assert.equal(m.people.find((p) => p.person === "aa").droveClaudeCode, 10);
+  assert.equal(m.people.find((p) => p.person === "bb").droveClaudeCode, 3);
+});
+
 test("superlatives: everyone is named, badges unique while the roster fits the axes", () => {
   const people = ["a", "b", "c", "d"].map((p, i) => ({
     person: p, minutes: 10, longest: i * 40, turns: 20, askingTurns: i === 0 ? 20 : 0,

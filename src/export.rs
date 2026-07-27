@@ -180,6 +180,20 @@ struct SessionSpanRow<'a> {
 }
 
 #[derive(serde::Serialize)]
+struct DelegationRow<'a> {
+    schema: &'a str,
+    kind: &'a str,
+    device: String,
+    person: String,
+    device_name: String,
+    day: String,
+    tool: String,
+    tool_name: String,
+    driven_tool: String,
+    turns: i64,
+}
+
+#[derive(serde::Serialize)]
 struct CandidateRow<'a> {
     schema: &'a str,
     kind: &'a str,
@@ -247,6 +261,22 @@ pub fn export_analytics(
             sessions: span.sessions,
             total_minutes: span.total_minutes,
             longest_minutes: span.longest_minutes,
+        };
+        write_row(&mut out, &row)?;
+    }
+
+    for d in store.delegation_spans().map_err(io_err)? {
+        let row = DelegationRow {
+            schema: SCHEMA,
+            kind: "delegation",
+            device: device.to_string(),
+            person: identity.person.to_string(),
+            device_name: identity.device_name.to_string(),
+            day: d.day,
+            tool_name: crate::attribution::display_tool(&d.tool).to_string(),
+            tool: d.tool,
+            driven_tool: d.driven_tool,
+            turns: d.turns,
         };
         write_row(&mut out, &row)?;
     }

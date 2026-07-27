@@ -111,6 +111,7 @@ impl Adapter for Codex {
             started_ms: started,
             ended_ms: ended,
             turns,
+            delegations: Vec::new(),
         })
     }
 }

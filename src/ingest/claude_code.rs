@@ -105,6 +105,7 @@ impl Adapter for ClaudeCode {
             started_ms: started,
             ended_ms: ended,
             turns,
+            delegations: Vec::new(),
         })
     }
 }

@@ -29,6 +29,11 @@ pub struct IngestedSession {
     pub started_ms: i64,
     pub ended_ms: i64,
     pub turns: Vec<IngestedTurn>,
+    /// Downstream tools this session drove, detected deterministically from the
+    /// transcript's tool calls (e.g. Alma invoking Claude Code): `driven_tool` ->
+    /// how many times. Ingestion-time, so it exists even before a turn is
+    /// labeled, and re-parsing overwrites it rather than adding.
+    pub delegations: Vec<(String, i64)>,
 }
 
 pub trait Adapter: Send {
@@ -116,6 +121,9 @@ fn persist(store: &Store, sess: &IngestedSession) -> rusqlite::Result<usize> {
         message_count: sess.turns.len() as i64,
     };
     let (id, existing) = store.upsert_session(&upsert)?;
+    // Store delegations on every parse (not gated by turn dedup) so an OTA
+    // re-scan of an already-ingested session backfills them without duplicating.
+    store.replace_session_delegations(id, &sess.delegations)?;
     let mut added = 0;
     for (i, turn) in sess.turns.iter().enumerate() {
         if (i as i64) < existing {
@@ -217,6 +225,7 @@ mod tests {
                     ts_ms: 1500,
                 },
             ],
+            delegations: Vec::new(),
         };
         assert_eq!(persist(&store, &sess).unwrap(), 2);
 
@@ -251,6 +260,7 @@ mod tests {
                 text: "my key AKIAIOSFODNN7EXAMPLE and mail a@b.com".into(),
                 ts_ms: 0,
             }],
+            delegations: Vec::new(),
         };
         persist(&store, &sess).unwrap();
         let turns = store.session_turns(1).unwrap();
