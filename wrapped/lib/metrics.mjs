@@ -173,6 +173,11 @@ export function compute(cells, spans) {
   const topDomain = topKey(domains);
   const busyDay = topKey(days);
 
+  const domainTotal = [...domains.values()].reduce((a, b) => a + b, 0);
+  const domainRank = [...domains.entries()]
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([key, n]) => ({ key, label: domainTitle(key), pct: domainTotal > 0 ? Math.round((n / domainTotal) * 100) : 0 }));
+
   const askDo = shape.asking + shape.doing;
 
   const award = (key) =>
@@ -203,6 +208,7 @@ export function compute(cells, spans) {
     peakHour,
     peakHourLabel: hourLabel(peakHour),
     topDomain: topDomain ? { key: topDomain, label: domainLabel(topDomain) } : null,
+    domainRank,
     busyDay: busyDay ? { day: busyDay, label: weekday(busyDay) } : null,
     longestSession: longestSession.person ? longestSession : null,
     almaClaudeCode: award("almaClaudeCode"),
@@ -244,6 +250,30 @@ const DOMAIN_LABELS = {
 };
 function domainLabel(key) {
   return DOMAIN_LABELS[key] ?? key.replace(/_/g, " ");
+}
+
+// Proper category names for the ranked breakdown (the cheeky labels above are
+// for the single hero card).
+const DOMAIN_TITLES = {
+  software_engineering: "Software Engineering",
+  data_and_analytics: "Data & Analytics",
+  infrastructure_and_devops: "Infra & DevOps",
+  security: "Security",
+  product_and_design: "Product & Design",
+  research_and_science: "Research",
+  business_and_finance: "Business & Finance",
+  marketing_and_sales: "Marketing & Sales",
+  legal_and_compliance: "Legal & Compliance",
+  people_and_hiring: "People & Hiring",
+  education_and_learning: "Learning",
+  health_and_medicine: "Health",
+  personal_and_lifestyle: "Personal",
+  creative_and_media: "Creative & Media",
+  customer_support: "Customer Support",
+  operations_and_admin: "Ops & Admin",
+};
+function domainTitle(key) {
+  return DOMAIN_TITLES[key] ?? key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
 export const _internal = { mondayOf, addDays, hourLabel };

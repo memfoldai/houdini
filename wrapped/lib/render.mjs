@@ -53,14 +53,14 @@ function body(card) {
   switch (card.kind) {
     case "title":
       return `<div class="wordmark">WRAPPED</div>`;
-    case "split": {
-      const bars = card.blocks
+    case "ranked": {
+      const rows = card.rows
         .map(
-          (b) =>
-            `<div class="bar"><div class="bar-head"><span class="bar-label">${esc(b.label)}</span><span class="bar-pct"><span class="num" data-to="${b.pct}">0</span>%</span></div><div class="track"><i class="fill-${esc(b.tone)}" style="--w:${b.pct}%"></i></div></div>`,
+          (r) =>
+            `<li><div class="rk-head"><span class="rk-label">${esc(r.label)}</span><span class="rk-pct"><span class="num" data-to="${r.pct}">0</span>%</span></div><div class="rk-track"><i style="--w:${r.pct}%"></i></div></li>`,
         )
         .join("");
-      return `<div class="split">${bars}</div>`;
+      return `<ul class="ranked">${rows}</ul>`;
     }
     case "podium": {
       const rows = card.rows
@@ -74,12 +74,14 @@ function body(card) {
     case "person":
       return `<div class="badge">${esc(card.badge)}</div><div class="who-big">${esc(card.personName)}</div>`;
     case "trophy": {
-      const runners =
+      const podium =
         card.winner && card.runnersUp && card.runnersUp.length
-          ? `<div class="runners">also cooking: ${card.runnersUp.map((r) => esc(r.name)).join(", ")}</div>`
+          ? `<ol class="trophy-runners">${card.runnersUp
+              .map((r, i) => `<li><span class="tr-rank">${i + 2}</span><span class="tr-name">${esc(r.name)}</span><span class="tr-val">${esc(r.value)}</span></li>`)
+              .join("")}</ol>`
           : "";
       const win = card.winner
-        ? `<div class="trophy-win reveal-target">${esc(card.winner)}</div><div class="trophy-stat">${esc(card.stat)}</div>${runners}`
+        ? `<div class="trophy-win reveal-target">${esc(card.winner)}</div><div class="trophy-stat">${esc(card.stat)}</div>${podium}`
         : `<div class="trophy-stat empty">${esc(card.stat)}</div>`;
       return `<div class="trophy-emoji">${esc(card.emoji)}</div><div class="trophy-title">${esc(card.title)}</div>${win}`;
     }
@@ -173,16 +175,15 @@ p,div,span,li,ol,button{overflow-wrap:break-word;word-break:normal;hyphens:none}
 .sub{font-size:5cqmin;line-height:1.35;font-weight:600;text-wrap:pretty;opacity:.96}
 .num,.unit,.val,.cell-val,.bar-pct{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
 .wordmark{font-size:9cqmin;font-weight:900;letter-spacing:.32em;color:var(--accent);text-transform:uppercase}
-/* split */
-.split{display:flex;flex-direction:column;gap:4cqmin;margin-top:1cqmin}
-.bar-head{display:flex;align-items:baseline;justify-content:space-between;gap:1ch;font-weight:800}
-.bar-label{font-size:4.4cqmin;letter-spacing:.03em;text-transform:uppercase;opacity:.92}
-.bar-pct{font-size:8cqmin}
-.track{height:4.6cqmin;border-radius:999px;background:color-mix(in srgb,var(--ink) 16%,transparent);overflow:hidden;margin-top:1.4cqmin}
-.track i{display:block;height:100%;width:0;border-radius:999px;transition:width .9s cubic-bezier(.2,.8,.2,1)}
-.card.active .track i{width:var(--w)}
-.fill-a{background:var(--accent)}
-.fill-b{background:var(--ink)}
+/* ranked breakdown (categories) */
+.ranked{list-style:none;display:flex;flex-direction:column;gap:3.2cqmin;margin-top:1cqmin}
+.ranked li{display:flex;flex-direction:column;gap:1.4cqmin}
+.rk-head{display:flex;align-items:baseline;justify-content:space-between;gap:1ch;font-weight:800}
+.rk-label{font-size:4.6cqmin;letter-spacing:.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rk-pct{font-size:5.8cqmin;flex:none}
+.rk-track{height:3.4cqmin;border-radius:999px;background:color-mix(in srgb,var(--ink) 16%,transparent);overflow:hidden}
+.rk-track i{display:block;height:100%;width:0;border-radius:999px;background:var(--accent);transition:width .9s cubic-bezier(.2,.8,.2,1)}
+.card.active .rk-track i{width:var(--w)}
 /* podium */
 .podium{list-style:none;display:flex;flex-direction:column;gap:2.4cqmin}
 .podium li{display:flex;align-items:center;gap:2.5cqmin;font-weight:800;font-size:6.4cqmin;opacity:0;transform:translateY(8px);transition:opacity .5s ease,transform .5s ease;transition-delay:calc(var(--i) * .08s)}
@@ -201,7 +202,11 @@ p,div,span,li,ol,button{overflow-wrap:break-word;word-break:normal;hyphens:none}
 .trophy-win{font-weight:900;font-size:15cqmin;line-height:.94;color:var(--accent);text-wrap:balance}
 .trophy-stat{font-size:5cqmin;font-weight:600;line-height:1.35;text-wrap:pretty}
 .trophy-stat.empty{opacity:.85;font-style:italic}
-.runners{font-size:3.8cqmin;opacity:.7;font-weight:600}
+.trophy-runners{list-style:none;display:flex;flex-direction:column;gap:2cqmin;margin-top:1.5cqmin;width:100%}
+.trophy-runners li{display:flex;align-items:center;gap:2.4cqmin;font-weight:800;font-size:5cqmin;opacity:.92}
+.tr-rank{color:var(--accent);width:1.3em;flex:none}
+.tr-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tr-val{flex:none;opacity:.8;font-variant-numeric:tabular-nums}
 /* summary */
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:3cqmin}
 .cell{background:color-mix(in srgb,var(--ink) 7%,transparent);border:1px solid color-mix(in srgb,var(--ink) 16%,transparent);border-radius:3cqmin;padding:3.4cqmin}
@@ -221,7 +226,7 @@ p,div,span,li,ol,button{overflow-wrap:break-word;word-break:normal;hyphens:none}
 .hint{position:absolute;bottom:max(10px,env(safe-area-inset-bottom));left:0;right:0;text-align:center;z-index:5;font-size:.72rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.55);pointer-events:none;mix-blend-mode:difference}
 @media (prefers-reduced-motion: reduce){
   .card{transition:none}
-  .track i,.podium li{transition:none}
+  .rk-track i,.podium li{transition:none}
   .podium li{opacity:1;transform:none}
 }
 `;

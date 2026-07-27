@@ -78,27 +78,12 @@ export function buildCards(m, opts = {}) {
     });
   }
 
-  if (m.topDomain) {
+  if (m.domainRank.length) {
     cards.push({
-      kind: "stat",
-      kicker: "what y'all were locked in on",
-      heroText: m.topDomain.label,
-      sub: "the team was deep in it this week. no notes.",
-    });
-  }
-
-  if (m.shape.asking + m.shape.doing > 0) {
-    cards.push({
-      kind: "split",
-      kicker: "research vs. doing",
-      blocks: [
-        { label: "Research", pct: m.researchPct, tone: "a" },
-        { label: "Doing", pct: m.doingPct, tone: "b" },
-      ],
-      sub:
-        m.researchPct >= m.doingPct
-          ? "more reading than shipping. the team really said lemme double-check."
-          : "less reading, more shipping. reckless behavior. we stan.",
+      kind: "ranked",
+      kicker: "what the team used AI for",
+      rows: m.domainRank.slice(0, 5).map((d) => ({ label: d.label, pct: d.pct })),
+      sub: "the team's whole personality this week, ranked. no notes.",
     });
   }
 
@@ -212,7 +197,7 @@ function trophy(emoji, title, ranking, earned, emptyLine) {
     title,
     winner: firstName(winner.person),
     stat: earned(winner.value),
-    runnersUp: ranking.slice(1, 4).map((r) => ({ name: firstName(r.person), value: r.value })),
+    runnersUp: ranking.slice(1, 3).map((r) => ({ name: firstName(r.person), value: int(r.value) })),
   };
 }
 
