@@ -47,10 +47,13 @@ write_agent "ai.memfold.houdini.collector" "run-collector.sh"
 write_agent "ai.memfold.houdini.tunnel" "run-tunnel.sh"
 
 echo "==> (Re)loading services"
+# bootout is async, so a bootstrap right after can race with "Input/output
+# error"; tolerate it and rely on kickstart -k to (re)start either way.
 for label in ai.memfold.houdini.collector ai.memfold.houdini.tunnel; do
   launchctl bootout "gui/$(id -u)/$label" 2>/dev/null || true
-  launchctl bootstrap "gui/$(id -u)" "$AGENTS/$label.plist"
-  launchctl kickstart -k "gui/$(id -u)/$label" 2>/dev/null || true
+  sleep 1
+  launchctl bootstrap "gui/$(id -u)" "$AGENTS/$label.plist" 2>/dev/null || true
+  launchctl kickstart -k "gui/$(id -u)/$label"
 done
 
 echo "==> Done. Tail logs with:"
