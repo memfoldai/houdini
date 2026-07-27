@@ -277,10 +277,11 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
     // backfill window is re-parsed and the new signal backfills. Re-parsing is
     // idempotent (turns upsert, delegations replace), so no duplication. Gated by
     // a stored level so it runs exactly once per feature bump, never every launch.
-    // Level 3 re-fires the re-scan after the delegation detector learned to
-    // separate Claude Code runs from chat drives and passive reads/lookups;
+    // Level 4 re-fires the re-scan after the delegation detector learned to
+    // separate Claude Code runs from chat drives and passive reads/lookups,
+    // and to keep prose-free sessions so their stale rows get cleared;
     // replace-on-reparse repopulates every session with the refined counts.
-    const REINGEST_LEVEL: i64 = 3;
+    const REINGEST_LEVEL: i64 = 4;
     const REINGEST_KEY: &str = "reingest_feature_level";
     let seen_level = store
         .get_setting(REINGEST_KEY)

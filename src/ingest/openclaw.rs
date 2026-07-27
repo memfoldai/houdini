@@ -123,9 +123,12 @@ impl Adapter for OpenClaw {
             }
         }
 
-        // Keep a session that either said something or drove another AI. Dropping
-        // delegation-only sessions was silently losing tool-heavy Alma work.
-        if turns.is_empty() && deleg.is_empty() {
+        // Keep any file with at least one timestamped message, even when it
+        // yields no prose turns and no drives: a session that an earlier
+        // detector credited with delegations must still reach persist so
+        // replace_session_delegations can CLEAR those rows; returning None here
+        // would orphan them forever. (Also keeps drive-only tool sessions.)
+        if first_ts.is_none() {
             return None;
         }
         let external_id = session_id.or_else(|| {
@@ -390,6 +393,25 @@ mod tests {
         assert_eq!(sum("claude_code"), 0, "no Claude Code was run");
         assert_eq!(sum("claude_chat"), 1, "the chat-surface run counts as a chat drive");
         assert_eq!(sess.delegations.len(), 1, "read + lookups count as nothing");
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_reads_only_session_still_parses_so_stale_rows_can_be_cleared() {
+        // Mirrors a real file: 2 passive reads, zero prose. Must parse to Some
+        // with NO delegations — persist then clears anything stored before.
+        let sample = r#"
+{"type":"session","id":"ro","timestamp":"2026-07-22T13:00:00.000Z"}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"app_runtime","arguments":{"action":"execute_connector","connectorId":"almanac-claude","capability":"agent.claude.read"}}],"timestamp":"2026-07-22T13:26:05.000Z"}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"app_runtime","arguments":{"action":"execute_connector","connectorId":"almanac-claude","capability":"agent.claude.read"}}],"timestamp":"2026-07-22T13:27:05.000Z"}}
+"#;
+        let dir = std::env::temp_dir().join(format!("oc-ro-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("ro.jsonl");
+        fs::write(&f, sample).unwrap();
+        let sess = OpenClaw.parse_file(&f).expect("kept so persist can clear stale rows");
+        assert!(sess.turns.is_empty());
+        assert!(sess.delegations.is_empty(), "reads are not drives");
         fs::remove_dir_all(&dir).ok();
     }
 

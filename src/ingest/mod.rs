@@ -247,6 +247,34 @@ mod tests {
     }
 
     #[test]
+    fn a_reparse_that_finds_no_drives_clears_previously_stored_delegations() {
+        // 0.9.1 credited passive reads as drives; the refined detector yields
+        // nothing for the same session. The re-parse must still persist so the
+        // stale rows are replaced away, not orphaned.
+        let store = Store::open_in_memory().unwrap();
+        let mut sess = IngestedSession {
+            tool: "openclaw",
+            external_id: "reads-only".into(),
+            provider: crate::attribution::provider::OPENCLAW,
+            surface: Surface::Cli,
+            model: None,
+            started_ms: 1_784_726_765_000,
+            ended_ms: 1_784_726_765_000,
+            turns: Vec::new(),
+            delegations: vec![("claude_code".into(), 1_784_726_765_000, 2)],
+        };
+        persist(&store, &sess).unwrap();
+        assert_eq!(store.delegation_spans().unwrap().len(), 1);
+
+        sess.delegations = Vec::new();
+        persist(&store, &sess).unwrap();
+        assert!(
+            store.delegation_spans().unwrap().is_empty(),
+            "stale delegation rows must be cleared by the drive-less re-parse"
+        );
+    }
+
+    #[test]
     fn redaction_runs_before_storage() {
         let store = Store::open_in_memory().unwrap();
         let sess = IngestedSession {
