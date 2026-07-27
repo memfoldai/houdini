@@ -138,6 +138,21 @@ CREATE TABLE IF NOT EXISTS session_deleg (
     turns       INTEGER NOT NULL,
     PRIMARY KEY (session_id, driven_tool)
 );
+"#, r#"
+-- Delegations are a derived cache (recomputed from transcripts on every
+-- re-scan), so a shape change drops and rebuilds rather than migrating rows.
+-- The first shape keyed only by session, which dated a drive to the session's
+-- start day — wrong for long-running Alma sessions whose drives span days.
+-- Keying by the drive's own timestamp dates it to when it actually happened,
+-- matching how analytics cells are bucketed.
+DROP TABLE IF EXISTS session_deleg;
+CREATE TABLE session_deleg (
+    session_id  INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    driven_tool TEXT NOT NULL,
+    occurred_ms INTEGER NOT NULL,
+    turns       INTEGER NOT NULL,
+    PRIMARY KEY (session_id, driven_tool, occurred_ms)
+);
 "#];
 
 fn migrate(conn: &Connection) -> rusqlite::Result<()> {
@@ -681,20 +696,20 @@ impl Store {
     pub fn replace_session_delegations(
         &self,
         session_id: i64,
-        delegations: &[(String, i64)],
+        delegations: &[(String, i64, i64)],
     ) -> rusqlite::Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         tx.execute(
             "DELETE FROM session_deleg WHERE session_id = ?1",
             params![session_id],
         )?;
-        for (tool, turns) in delegations {
+        for (tool, occurred_ms, turns) in delegations {
             if *turns <= 0 {
                 continue;
             }
             tx.execute(
-                "INSERT OR REPLACE INTO session_deleg (session_id, driven_tool, turns) VALUES (?1, ?2, ?3)",
-                params![session_id, tool, turns],
+                "INSERT OR REPLACE INTO session_deleg (session_id, driven_tool, occurred_ms, turns) VALUES (?1, ?2, ?3, ?4)",
+                params![session_id, tool, occurred_ms, turns],
             )?;
         }
         tx.commit()
@@ -704,7 +719,7 @@ impl Store {
     /// the deterministic "Alma drove Claude Code" signal for the export.
     pub fn delegation_spans(&self) -> rusqlite::Result<Vec<DelegationSpan>> {
         let mut stmt = self.conn.prepare(
-            "SELECT strftime('%Y-%m-%d', s.started_at / 1000, 'unixepoch') AS day,
+            "SELECT strftime('%Y-%m-%d', d.occurred_ms / 1000, 'unixepoch') AS day,
                     s.tool, d.driven_tool, SUM(d.turns)
              FROM session_deleg d JOIN sessions s ON s.id = d.session_id
              GROUP BY day, s.tool, d.driven_tool
@@ -977,8 +992,10 @@ mod tests {
     }
 
     #[test]
-    fn delegations_replace_not_accumulate_and_roll_up_by_day() {
+    fn delegations_dated_by_the_drive_not_the_session_start_and_replace_on_reparse() {
         let s = Store::open_in_memory().unwrap();
+        // Session STARTS on 2026-07-15, but its drives happen a week later — the
+        // long-running-session case that made the first shape misattribute days.
         let (id, _) = s
             .upsert_session(&SessionUpsert {
                 tool: "openclaw",
@@ -986,20 +1003,37 @@ mod tests {
                 provider: "openclaw",
                 surface: "cli",
                 model: None,
-                started_at_ms: 1_752_624_000_000,
-                ended_at_ms: 1_752_624_000_000,
+                started_at_ms: 1_784_106_000_000, // 2026-07-15T09:00:00Z
+                ended_at_ms: 1_784_808_000_000,
                 message_count: 1,
             })
             .unwrap();
-        s.replace_session_delegations(id, &[("claude_code".into(), 4), ("codex".into(), 1)])
+        let d22 = 1_784_721_600_000; // 2026-07-22T12:00:00Z
+        let d23 = 1_784_808_000_000; // 2026-07-23T12:00:00Z
+        s.replace_session_delegations(id, &[("claude_code".into(), d22, 3), ("codex".into(), d22, 1)])
             .unwrap();
         // A re-parse replaces the whole set — no accumulation across re-scans.
-        s.replace_session_delegations(id, &[("claude_code".into(), 7)]).unwrap();
+        s.replace_session_delegations(
+            id,
+            &[("claude_code".into(), d22, 2), ("claude_code".into(), d23, 4)],
+        )
+        .unwrap();
 
         let spans = s.delegation_spans().unwrap();
-        let cc = spans.iter().find(|d| d.driven_tool == "claude_code").unwrap();
-        assert_eq!(cc.turns, 7, "replaced, not 4+7");
-        assert_eq!(cc.tool, "openclaw");
+        let cc22 = spans
+            .iter()
+            .find(|d| d.driven_tool == "claude_code" && d.day == "2026-07-22")
+            .unwrap();
+        let cc23 = spans
+            .iter()
+            .find(|d| d.driven_tool == "claude_code" && d.day == "2026-07-23")
+            .unwrap();
+        assert_eq!(cc22.turns, 2, "replaced (not 3+2), dated to the drive's day");
+        assert_eq!(cc23.turns, 4);
+        assert!(
+            spans.iter().all(|d| d.day != "2026-07-15"),
+            "never bucketed to the session's start day"
+        );
         assert!(
             spans.iter().all(|d| d.driven_tool != "codex"),
             "the codex row was replaced away on re-parse"

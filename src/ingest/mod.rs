@@ -30,10 +30,12 @@ pub struct IngestedSession {
     pub ended_ms: i64,
     pub turns: Vec<IngestedTurn>,
     /// Downstream tools this session drove, detected deterministically from the
-    /// transcript's tool calls (e.g. Alma invoking Claude Code): `driven_tool` ->
-    /// how many times. Ingestion-time, so it exists even before a turn is
-    /// labeled, and re-parsing overwrites it rather than adding.
-    pub delegations: Vec<(String, i64)>,
+    /// transcript's tool calls (e.g. Alma invoking Claude Code):
+    /// `(driven_tool, occurred_ms, count)`. Dated by the drive itself, not the
+    /// session, so a long-running session's drives land on the right day.
+    /// Ingestion-time, so it exists before any turn is labeled, and re-parsing
+    /// overwrites it rather than adding.
+    pub delegations: Vec<(String, i64, i64)>,
 }
 
 pub trait Adapter: Send {

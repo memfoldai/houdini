@@ -51,7 +51,12 @@ impl Adapter for OpenClaw {
         let mut turns: Vec<IngestedTurn> = Vec::new();
         let mut session_id: Option<String> = None;
         let mut model: Option<String> = None;
-        let mut deleg: HashMap<&'static str, i64> = HashMap::new();
+        let mut deleg: HashMap<(&'static str, i64), i64> = HashMap::new();
+        // Span bounds tracked over every timestamped message, not just text
+        // turns: a drive-heavy Alma session can be all tool calls with no prose,
+        // and we must still keep it (and its delegations) with real start/end.
+        let mut first_ts: Option<i64> = None;
+        let mut last_ts: Option<i64> = None;
 
         for line in body.lines() {
             let line = line.trim();
@@ -82,6 +87,8 @@ impl Adapter for OpenClaw {
                     else {
                         continue;
                     };
+                    first_ts = Some(first_ts.map_or(ts, |t: i64| t.min(ts)));
+                    last_ts = Some(last_ts.map_or(ts, |t: i64| t.max(ts)));
                     if model.is_none() {
                         model = message
                             .get("model")
@@ -99,7 +106,7 @@ impl Adapter for OpenClaw {
                             }
                         }
                         Some("assistant") => {
-                            count_delegations(message, &mut deleg);
+                            count_delegations(message, ts, &mut deleg);
                             let text = assistant_text(message);
                             if !text.is_empty() {
                                 turns.push(IngestedTurn {
@@ -116,7 +123,9 @@ impl Adapter for OpenClaw {
             }
         }
 
-        if turns.is_empty() {
+        // Keep a session that either said something or drove another AI. Dropping
+        // delegation-only sessions was silently losing tool-heavy Alma work.
+        if turns.is_empty() && deleg.is_empty() {
             return None;
         }
         let external_id = session_id.or_else(|| {
@@ -124,14 +133,17 @@ impl Adapter for OpenClaw {
                 .and_then(|s| s.to_str())
                 .map(str::to_string)
         })?;
-        let started = turns.iter().map(|t| t.ts_ms).min().unwrap_or(0);
-        let ended = turns.iter().map(|t| t.ts_ms).max().unwrap_or(started);
+        let started = first_ts.unwrap_or(0);
+        let ended = last_ts.unwrap_or(started);
         let resolved = model
             .as_deref()
             .and_then(provider_for_model)
             .unwrap_or(provider::OPENCLAW);
 
-        let delegations = deleg.into_iter().map(|(k, v)| (k.to_string(), v)).collect();
+        let delegations = deleg
+            .into_iter()
+            .map(|((tool, ms), n)| (tool.to_string(), ms, n))
+            .collect();
         Some(IngestedSession {
             tool: "openclaw",
             external_id,
@@ -149,7 +161,7 @@ impl Adapter for OpenClaw {
 /// Counts the tool calls in one Alma assistant message that hand work to another
 /// AI, grouped by which one. Other tool calls (read, web_search, exec, …) are
 /// Alma working directly and are ignored.
-fn count_delegations(message: &Value, out: &mut HashMap<&'static str, i64>) {
+fn count_delegations(message: &Value, ts_ms: i64, out: &mut HashMap<(&'static str, i64), i64>) {
     let Some(blocks) = message.get("content").and_then(Value::as_array) else {
         return;
     };
@@ -158,7 +170,9 @@ fn count_delegations(message: &Value, out: &mut HashMap<&'static str, i64>) {
             continue;
         }
         if let Some(tool) = driven_tool(block) {
-            *out.entry(tool).or_insert(0) += 1;
+            // Keyed by the message's own timestamp so the drive is dated to when
+            // it happened, not the session's start (see IngestedSession).
+            *out.entry((tool, ts_ms)).or_insert(0) += 1;
         }
     }
 }
@@ -315,12 +329,39 @@ mod tests {
         let f = dir.join("drv.jsonl");
         fs::write(&f, sample).unwrap();
         let sess = OpenClaw.parse_file(&f).unwrap();
-        let cc = sess
+        let cc: i64 = sess
             .delegations
             .iter()
-            .find(|(t, _)| t == "claude_code")
-            .map(|(_, n)| *n);
-        assert_eq!(cc, Some(2), "two Claude Code drives detected, the web_search ignored");
+            .filter(|(t, _, _)| t == "claude_code")
+            .map(|(_, _, n)| *n)
+            .sum();
+        assert_eq!(cc, 2, "two Claude Code drives detected, the web_search ignored");
+        // Each drive carries the timestamp of its own assistant message.
+        assert!(
+            sess.delegations.iter().all(|(_, ms, _)| *ms > 0),
+            "delegations are dated by the drive"
+        );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn keeps_a_tool_only_drive_session_that_has_no_prose_turns() {
+        // A drive-heavy Alma turn: pure tool calls, no assistant text and no
+        // parseable user text. This used to parse to zero turns and be dropped,
+        // taking its delegations with it — the main Claude-Code under-count.
+        let sample = r#"
+{"type":"session","id":"drv2","timestamp":"2026-07-22T13:00:00.000Z"}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"app_runtime","arguments":{"connectorId":"almanac-claude","capability":"agent.claude.code_run","query":"go"}}],"timestamp":"2026-07-22T13:26:05.000Z"}}
+"#;
+        let dir = std::env::temp_dir().join(format!("oc-toolonly-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("drv2.jsonl");
+        fs::write(&f, sample).unwrap();
+        let sess = OpenClaw.parse_file(&f).expect("a delegation-only session is kept");
+        assert!(sess.turns.is_empty(), "no prose turns");
+        assert_eq!(sess.delegations, vec![("claude_code".to_string(), 1784726765000, 1)]);
+        assert_eq!(sess.started_ms, 1784726765000, "span from the drive message");
+        assert_eq!(sess.ended_ms, 1784726765000);
         fs::remove_dir_all(&dir).ok();
     }
 
