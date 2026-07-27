@@ -69,7 +69,22 @@ try {
     headers: { authorization: `Bearer ${INGEST}` },
     body: synth,
   });
-  await again.json();
+  const againBody = await again.json();
+  assert.equal(againBody.pruned, 0, "an identical re-push prunes nothing");
+
+  // A push is the device's full snapshot: pushing a REDUCED export for one
+  // device deletes that device's rows the new push no longer contains (a
+  // re-scan re-dated a day, a relabel moved a dimension), and touches nobody else.
+  const synthLines = synth.trim().split("\n");
+  const firstDevice = JSON.parse(synthLines[0]).device;
+  const deviceRows = synthLines.filter((l) => JSON.parse(l).device === firstDevice);
+  const reduced = await fetch(`${base}/v1/ingest`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${INGEST}` },
+    body: deviceRows[0],
+  });
+  const reducedBody = await reduced.json();
+  assert.equal(reducedBody.pruned, deviceRows.length - 1, "superseded rows of that device are pruned");
 
   const exp = await fetch(`${base}/v1/export?week=2026-07-22&key=${ADMIN}`);
   assert.equal(exp.status, 200);

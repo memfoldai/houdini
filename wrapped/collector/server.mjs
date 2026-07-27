@@ -44,6 +44,12 @@ const upsert = db.prepare(`INSERT INTO rows (key, kind, day, person, device, rec
   ON CONFLICT(key) DO UPDATE SET
     day = excluded.day, person = excluded.person, device = excluded.device,
     received_ms = excluded.received_ms, body = excluded.body`);
+// A device push is its FULL current export in one POST (every row of a push
+// shares one received_ms), so a row of that device left at an older
+// received_ms was re-keyed or dropped upstream — a re-scan re-dated a day, a
+// relabel moved a dimension — and keeping it would double-count. Prune per
+// push. A chunked uploader would break this contract; the device sends one body.
+const pruneStale = db.prepare("DELETE FROM rows WHERE device = :device AND received_ms < :received");
 const selectWindow = db.prepare("SELECT body FROM rows WHERE day >= :start AND day <= :end ORDER BY day");
 
 // Length is compared first because timingSafeEqual throws on a mismatch; an
@@ -86,7 +92,9 @@ function json(res, code, obj) {
 function ingest(rows) {
   let stored = 0;
   let skipped = 0;
+  let pruned = 0;
   const now = Date.now();
+  const devices = new Set();
   db.exec("BEGIN");
   try {
     for (const r of rows) {
@@ -95,6 +103,7 @@ function ingest(rows) {
         skipped++;
         continue;
       }
+      if (r.device != null) devices.add(String(r.device));
       upsert.run({
         key,
         kind: r.kind,
@@ -106,12 +115,13 @@ function ingest(rows) {
       });
       stored++;
     }
+    for (const device of devices) pruned += Number(pruneStale.run({ device, received: now }).changes);
     db.exec("COMMIT");
   } catch (e) {
     db.exec("ROLLBACK");
     throw e;
   }
-  return { stored, skipped };
+  return { stored, skipped, pruned };
 }
 
 function windowRows(window) {
@@ -145,8 +155,8 @@ const server = createServer(async (req, res) => {
       if (!authorized(req, INGEST_TOKEN)) return json(res, 401, { error: "unauthorized" });
       const body = await readBody(req);
       const rows = parseNdjson(body).filter(Boolean);
-      const { stored, skipped } = ingest(rows);
-      return json(res, 200, { ok: true, received: rows.length, stored, skipped });
+      const { stored, skipped, pruned } = ingest(rows);
+      return json(res, 200, { ok: true, received: rows.length, stored, skipped, pruned });
     }
 
     if (req.method === "GET" && path === "/v1/export") {

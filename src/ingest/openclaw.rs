@@ -177,31 +177,54 @@ fn count_delegations(message: &Value, ts_ms: i64, out: &mut HashMap<(&'static st
     }
 }
 
-/// Maps one Alma tool call to the downstream AI it drives, read from the fields
-/// that NAME the target (capability / agentId / connectorId), never from free
-/// text: e.g. app_runtime `agent.claude.code_run` or sessions_spawn
-/// `agentId: "claude"` → claude_code. None when the call drives nothing.
+/// Maps one Alma tool call to the downstream AI it DROVE, per the almanac
+/// connector contract (openclaw extensions/app-runtime): capability verbs like
+/// `code_run`/`code_review` run Claude Code; `run`/`ask`/`send`/`resume` drive
+/// plain Claude Desktop chat (a different product — kept separate so the Claude
+/// Code award cannot be inflated by chat use); `read`/`sessions`/`status`/
+/// `desktop_*` merely observe an existing session and count as nothing — a
+/// heavy direct-CLI user whose Alma only polls progress must not score drives.
+/// Spawning an ACP "claude" agent (Claude Code's ACP adapter) is always a
+/// Claude Code drive.
 fn driven_tool(call: &Value) -> Option<&'static str> {
     let name = call.get("name").and_then(Value::as_str).unwrap_or("");
-    if !matches!(name, "app_runtime" | "sessions_spawn" | "subagents" | "task" | "agent") {
-        return None;
-    }
     let args = call.get("arguments").or_else(|| call.get("input"))?;
     let field = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("");
-    let hay = format!(
-        "{} {} {}",
-        field("capability"),
-        field("agentId"),
-        field("connectorId")
-    )
-    .to_ascii_lowercase();
-    if hay.trim().is_empty() {
+
+    if matches!(name, "sessions_spawn" | "subagents" | "task" | "agent") {
+        let agent = field("agentId").to_ascii_lowercase();
+        return match family(&agent)? {
+            "claude" => Some("claude_code"),
+            other => Some(other),
+        };
+    }
+    if name != "app_runtime" {
         return None;
     }
-    // The team drives Claude Code through the almanac-claude connector / an ACP
-    // "claude" agent, so any Claude target counts toward the Claude Code award.
+    // resolve_capability / list_capabilities are routing lookups, not runs. An
+    // absent action is an older payload shape whose only action was execute.
+    let action = field("action");
+    if !action.is_empty() && action != "execute_connector" {
+        return None;
+    }
+    let cap = field("capability").to_ascii_lowercase();
+    let fam = family(&cap)?;
+    let verb = cap.rsplit('.').next().unwrap_or("");
+    let drives = verb.starts_with("code")
+        || matches!(verb, "run" | "review" | "ask" | "send" | "resume");
+    if !drives {
+        return None;
+    }
+    match fam {
+        "claude" if verb.starts_with("code") => Some("claude_code"),
+        "claude" => Some("claude_chat"),
+        other => Some(other),
+    }
+}
+
+fn family(hay: &str) -> Option<&'static str> {
     if hay.contains("claude") {
-        Some("claude_code")
+        Some("claude")
     } else if hay.contains("codex") {
         Some("codex")
     } else if hay.contains("gemini") {
@@ -341,6 +364,32 @@ mod tests {
             sess.delegations.iter().all(|(_, ms, _)| *ms > 0),
             "delegations are dated by the drive"
         );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn chat_runs_reads_and_capability_lookups_never_count_as_claude_code() {
+        // Real shapes from live transcripts: a chat-surface run (drives Claude
+        // Desktop chat, not Claude Code), a passive read, a resolve_capability
+        // routing lookup, and a list_capabilities call with no capability.
+        let sample = r#"
+{"type":"session","id":"mix","timestamp":"2026-07-22T10:00:00.000Z"}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"app_runtime","arguments":{"action":"execute_connector","connectorId":"almanac-claude","capability":"agent.claude.run","query":"Research task"}}],"timestamp":"2026-07-22T10:00:01.000Z"}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"app_runtime","arguments":{"action":"execute_connector","connectorId":"almanac-claude","capability":"agent.claude.read"}}],"timestamp":"2026-07-22T10:00:02.000Z"}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"app_runtime","arguments":{"action":"resolve_capability","capability":"agent.claude.code_run","query":"routing lookup"}}],"timestamp":"2026-07-22T10:00:03.000Z"}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"app_runtime","arguments":{"action":"list_capabilities","connectorId":"almanac-claude","query":"models"}}],"timestamp":"2026-07-22T10:00:04.000Z"}}
+"#;
+        let dir = std::env::temp_dir().join(format!("oc-mix-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let f = dir.join("mix.jsonl");
+        fs::write(&f, sample).unwrap();
+        let sess = OpenClaw.parse_file(&f).unwrap();
+        let sum = |tool: &str| -> i64 {
+            sess.delegations.iter().filter(|(t, _, _)| t == tool).map(|(_, _, n)| *n).sum()
+        };
+        assert_eq!(sum("claude_code"), 0, "no Claude Code was run");
+        assert_eq!(sum("claude_chat"), 1, "the chat-surface run counts as a chat drive");
+        assert_eq!(sess.delegations.len(), 1, "read + lookups count as nothing");
         fs::remove_dir_all(&dir).ok();
     }
 
