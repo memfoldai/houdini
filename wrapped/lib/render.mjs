@@ -77,7 +77,7 @@ function body(card) {
       const podium =
         card.winner && card.runnersUp && card.runnersUp.length
           ? `<ol class="trophy-runners">${card.runnersUp
-              .map((r, i) => `<li><span class="tr-rank">${i + 2}</span><span class="tr-name">${esc(r.name)}</span><span class="tr-val">${esc(r.value)}</span></li>`)
+              .map((r, i) => `<li><span class="tr-rank">${i + 2}</span><span class="tr-name">${esc(r.name)}</span></li>`)
               .join("")}</ol>`
           : "";
       const win = card.winner

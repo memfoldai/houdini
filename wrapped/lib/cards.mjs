@@ -163,20 +163,22 @@ export function buildCards(m, opts = {}) {
   }
 
   cards.push(
-    trophy(
+    pickTrophy(
       "🏆",
       "The Alma × Claude Code Award",
-      m.almaClaudeCode,
-      (v) => `ran Claude Code through Alma ${int(v)} ${plural(v, "time", "times")}. never did it the hard way.`,
-      "nobody ran Claude Code through Alma this week. it's right there, people.",
+      m.people,
+      (p) => p.almaClaudeCode * 5 + p.almaBuild,
+      (v) => `ran Claude Code through Alma ${int(v)} ${plural(v, "time", "times")}. no notes.`,
+      "nobody put Alma to work this week. it's right there, people.",
     ),
   );
   cards.push(
-    trophy(
+    pickTrophy(
       "🔬",
       "The Alma × Research Award",
-      m.almaResearch,
-      (v) => `leaned on Alma to dig into things ${int(v)} ${plural(v, "prompt", "prompts")} deep. the team's resident researcher.`,
+      m.people,
+      (p) => p.almaResearch,
+      (v) => `leaned on Alma to dig into things ${int(v)} ${plural(v, "time", "times")}. the resident researcher.`,
       "nobody used Alma to research this week. the library's empty.",
     ),
   );
@@ -192,18 +194,33 @@ export function buildCards(m, opts = {}) {
   return cards;
 }
 
-function trophy(emoji, title, ranking, earned, emptyLine) {
-  const winner = ranking[0];
-  if (!winner) {
+// Picks the winner + top 3 by a jittered weighted sort: each person's real
+// score is scaled by a random factor per render, so the most active tend to win
+// but the pick genuinely shuffles every time the wrapped is regenerated. The
+// numbers shown are the real scores. Everyone with any relevant activity is
+// eligible, so the award is never left empty when the metric is populated.
+function pickTrophy(emoji, title, people, scoreFn, earned, emptyLine) {
+  const pool = people
+    .map((p) => ({ name: firstName(p.person), score: scoreFn(p) }))
+    .filter((x) => x.score > 0);
+  if (!pool.length) {
     return { kind: "trophy", emoji, title, winner: null, stat: emptyLine };
   }
+  const ranked = pool
+    .map((x) => ({ ...x, jitter: Math.pow(x.score, 0.3) * (0.4 + Math.random()) }))
+    .sort((a, b) => b.jitter - a.jitter)
+    .slice(0, 3);
+  const winner = ranked[0];
+  // Runners-up are names only: the winner is a weighted-random pick, so a strict
+  // 2nd/3rd by number would look wrong when a lighter user wins. Names keep it a
+  // fun "podium" without implying an exact ranking.
   return {
     kind: "trophy",
     emoji,
     title,
-    winner: firstName(winner.person),
-    stat: earned(winner.value),
-    runnersUp: ranking.slice(1, 3).map((r) => ({ name: firstName(r.person), value: int(r.value) })),
+    winner: winner.name,
+    stat: earned(winner.score),
+    runnersUp: ranked.slice(1).map((r) => ({ name: r.name })),
   };
 }
 

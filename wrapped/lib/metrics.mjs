@@ -79,6 +79,7 @@ function ensurePerson(people, name) {
       chars: 0,
       tools: new Set(),
       almaClaudeCode: 0,
+      almaBuild: 0,
       almaResearch: 0,
     };
     people.set(name, p);
@@ -166,6 +167,9 @@ export function compute(cells, spans) {
     }
 
     if (c.tool === "openclaw" && c.delegate_tool === "claude_code") p.almaClaudeCode += w;
+    // Proxy for "ran Claude Code through Alma": the labeler rarely tags the
+    // delegate tool, so real coding/delegation through Alma is the honest signal.
+    if (c.tool === "openclaw" && (c.shape === "doing" || c.delegation !== "none")) p.almaBuild += w;
     if (c.tool === "openclaw" && c.shape === "asking") p.almaResearch += w;
   }
 
