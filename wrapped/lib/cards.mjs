@@ -167,9 +167,14 @@ export function buildCards(m, opts = {}) {
       "🏆",
       "The Alma × Claude Code Award",
       m.people,
-      (p) => p.almaClaudeCode * 5 + p.almaBuild,
+      // Alma driving Claude Code: Claude Code sessions by someone who also uses
+      // Alma (so the CC is plausibly Alma-run), plus a boost for Alma sessions
+      // that actually spawned an agent. Session-based, so a heavy user whose
+      // cells aren't labeled yet still counts. Direct-only CC users (no Alma)
+      // score zero — they're not driving it through Alma.
+      (p) => (p.almaSessions > 0 ? p.ccSessions : 0) + p.almaAgentRun * 3 + p.almaClaudeCode * 3,
       (v) => `ran Claude Code through Alma ${int(v)} ${plural(v, "time", "times")}. no notes.`,
-      "nobody put Alma to work this week. it's right there, people.",
+      "nobody drove Claude Code through Alma this week. the goal awaits.",
     ),
   );
   cards.push(

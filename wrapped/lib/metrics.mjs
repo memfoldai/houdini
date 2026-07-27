@@ -79,8 +79,12 @@ function ensurePerson(people, name) {
       chars: 0,
       tools: new Set(),
       almaClaudeCode: 0,
-      almaBuild: 0,
+      almaAgentRun: 0,
       almaResearch: 0,
+      // Session counts from spans, so a heavy user whose cells are not labeled
+      // yet still counts toward the Alma × Claude Code award.
+      almaSessions: 0,
+      ccSessions: 0,
     };
     people.set(name, p);
   }
@@ -123,6 +127,8 @@ export function compute(cells, spans) {
     p.minutes += s.total_minutes;
     p.longest = Math.max(p.longest, s.longest_minutes);
     p.tools.add(s.tool);
+    if (s.tool === "openclaw") p.almaSessions += s.sessions;
+    if (s.tool === "claude-code") p.ccSessions += s.sessions;
     totalMinutes += s.total_minutes;
     if (!toolNames.has(s.tool)) toolNames.set(s.tool, s.tool_name);
     if (s.longest_minutes > longestSession.minutes) {
@@ -167,9 +173,9 @@ export function compute(cells, spans) {
     }
 
     if (c.tool === "openclaw" && c.delegate_tool === "claude_code") p.almaClaudeCode += w;
-    // Proxy for "ran Claude Code through Alma": the labeler rarely tags the
-    // delegate tool, so real coding/delegation through Alma is the honest signal.
-    if (c.tool === "openclaw" && (c.shape === "doing" || c.delegation !== "none")) p.almaBuild += w;
+    // Alma sessions that spawned an agent — the strongest in-cell signal that
+    // Alma actually drove another tool (e.g. Claude Code).
+    if (c.tool === "openclaw" && c.delegation === "agent_run") p.almaAgentRun += w;
     if (c.tool === "openclaw" && c.shape === "asking") p.almaResearch += w;
   }
 
