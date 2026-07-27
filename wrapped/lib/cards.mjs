@@ -25,7 +25,7 @@ export function buildCards(m, opts = {}) {
     kind: "title",
     kicker: opts.weekLabel ?? "",
     heroText: team,
-    sub: "one week with the robots. here's the damage.",
+    sub: "your team's week with AI. every last prompt of it.",
   });
 
   if (m.peopleCount === 0) {
@@ -34,7 +34,7 @@ export function buildCards(m, opts = {}) {
       kicker: "nothing yet",
       heroNumber: 0,
       heroUnit: "prompts",
-      sub: "quiet week so far. once devices check in, this fills itself in.",
+      sub: "quiet week so far. once everyone's devices check in, this fills up.",
     });
     cards.push({ kind: "summary", kicker: opts.weekLabel ?? "", heroText: team, grid: summaryGrid(m), sub: "check back once everyone's been cooking." });
     return cards;
@@ -45,7 +45,7 @@ export function buildCards(m, opts = {}) {
       kind: "stat",
       kicker: "time spent with AI",
       ...hours(m.totalMinutes),
-      sub: "that's how long you spent talking to robots. they've forgotten already.",
+      sub: "as a team. that's a part-time job nobody's getting paid for.",
     });
   }
 
@@ -55,7 +55,7 @@ export function buildCards(m, opts = {}) {
       kicker: "prompts sent",
       heroNumber: m.totalTurns,
       heroUnit: plural(m.totalTurns, "prompt", "prompts"),
-      sub: "the AIs are tired. they'd never say it, but they are.",
+      sub: "quality was optional this week, apparently.",
     });
   }
 
@@ -64,7 +64,7 @@ export function buildCards(m, opts = {}) {
       kind: "stat",
       kicker: "the team's ride or die",
       heroText: m.topTool.name,
-      sub: "the team's most-used AI. it knows too much about you now.",
+      sub: "the team's go-to. opened more than the fridge.",
     });
   }
 
@@ -73,16 +73,24 @@ export function buildCards(m, opts = {}) {
       kind: "ranked",
       kicker: "which AI got used the most",
       rows: m.toolShare.slice(0, 5).map((t) => ({ label: t.name, pct: t.pct })),
-      sub: "the whole AI roster, by share of the team's prompts.",
+      sub: "how the team's prompts split across every AI.",
     });
   }
 
-  for (const t of m.toolCategories) {
+  if (m.alma.categories.length) {
     cards.push({
       kind: "ranked",
-      kicker: `what they ran ${t.name} for`,
-      rows: t.categories.map((c) => ({ label: c.label, pct: c.pct })),
-      sub: `what the team actually used ${t.name} for this week.`,
+      kicker: "what the team ran Alma for",
+      rows: m.alma.categories.map((c) => ({ label: c.label, pct: c.pct })),
+      sub: `Alma got ${m.alma.share}% of the team's prompts. here's where they went.`,
+    });
+  } else {
+    cards.push({
+      kind: "stat",
+      kicker: "the Alma report",
+      heroNumber: m.alma.share,
+      heroUnit: "% of prompts",
+      sub: "Alma barely got a look this week. it's right there, people.",
     });
   }
 
@@ -91,7 +99,7 @@ export function buildCards(m, opts = {}) {
       kind: "ranked",
       kicker: "what the team used AI for",
       rows: m.domainRank.slice(0, 5).map((d) => ({ label: d.label, pct: d.pct })),
-      sub: "the team's whole personality this week, ranked. it tracks.",
+      sub: "what the team was actually working on. mostly.",
     });
   }
 
@@ -99,7 +107,7 @@ export function buildCards(m, opts = {}) {
     kind: "stat",
     kicker: "the team's rush hour",
     heroText: m.peakHourLabel,
-    sub: "the hour the team went hardest. sleep lost.",
+    sub: "peak grind. focus blocks never stood a chance.",
   });
 
   if (m.busyDay) {
@@ -107,7 +115,7 @@ export function buildCards(m, opts = {}) {
       kind: "stat",
       kicker: "busiest day",
       heroText: m.busyDay.label,
-      sub: "the day the whole team went feral. the servers felt it.",
+      sub: "carried the whole week on its back.",
     });
   }
 
@@ -117,17 +125,7 @@ export function buildCards(m, opts = {}) {
       kicker: "longest single session",
       heroNumber: m.longestSession.minutes,
       heroUnit: plural(m.longestSession.minutes, "minute", "minutes"),
-      sub: `${firstName(m.longestSession.person)} stayed locked in this long. not a session, a situationship.`,
-    });
-  }
-
-  if (m.delegateTurns > 0) {
-    cards.push({
-      kind: "stat",
-      kicker: "AI bossing AI",
-      heroNumber: m.delegateTurns,
-      heroUnit: plural(m.delegateTurns, "handoff", "handoffs"),
-      sub: "times you made an AI manage another AI. middle management, automated.",
+      sub: `${firstName(m.longestSession.person)} went this long without stopping. that's a hostage situation.`,
     });
   }
 
@@ -136,7 +134,7 @@ export function buildCards(m, opts = {}) {
       kind: "reveal",
       kicker: "the one who cooked the most",
       heroText: firstName(m.topPerson.person),
-      sub: "carried the whole team on their back. someone check on them.",
+      sub: "out-prompted the entire team. and it wasn't close.",
     });
   }
 
@@ -150,7 +148,7 @@ export function buildCards(m, opts = {}) {
         value: Math.round(p.minutes / 60) || 0,
         unit: "h",
       })),
-      sub: "everyone else. honestly, the view's better down here.",
+      sub: "the top 5. everyone below can finally relax.",
     });
   }
 
@@ -169,8 +167,8 @@ export function buildCards(m, opts = {}) {
       "🏆",
       "The Alma × Claude Code Award",
       m.almaClaudeCode,
-      (v) => `ran Claude Code through Alma ${int(v)} ${plural(v, "time", "times")}. the fans never stopped.`,
-      "nobody ran Claude Code through Alma this week. trophy stays in the case.",
+      (v) => `ran Claude Code through Alma ${int(v)} ${plural(v, "time", "times")}. never did it the hard way.`,
+      "nobody ran Claude Code through Alma this week. it's right there, people.",
     ),
   );
   cards.push(
@@ -178,8 +176,8 @@ export function buildCards(m, opts = {}) {
       "🔬",
       "The Alma × Research Award",
       m.almaResearch,
-      (v) => `out-researched the whole team on Alma, ${int(v)} ${plural(v, "prompt", "prompts")} deep. footnotes immaculate.`,
-      "zero research prompts through Alma this week. this one's unclaimed.",
+      (v) => `leaned on Alma to dig into things ${int(v)} ${plural(v, "prompt", "prompts")} deep. the team's resident researcher.`,
+      "nobody used Alma to research this week. the library's empty.",
     ),
   );
 
@@ -188,7 +186,7 @@ export function buildCards(m, opts = {}) {
     kicker: opts.weekLabel ?? "",
     heroText: team,
     grid: summaryGrid(m),
-    sub: "your week in one card. screenshot it. gaslight your manager.",
+    sub: "the whole week, one card. screenshot it before someone edits it.",
   });
 
   return cards;

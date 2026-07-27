@@ -10,60 +10,68 @@ const pct = (x) => Math.round(x * 100);
 // Each axis scores a person on one behaviour. `value` is compared across the
 // team; the leader on an axis scores 1.0, which is what lets pass 1 hand each
 // axis to the person who most embodies it.
+const avgChars = (p) => p.chars / Math.max(p.turns, 1);
+
 const AXES = [
   {
-    badge: "Certified Yapper",
+    badge: "The Yapper",
     value: (p) => p.askingTurns / Math.max(p.turns, 1),
     gate: (p) => p.askingTurns > 0,
-    line: (p) => `${pct(p.askingTurns / Math.max(p.turns, 1))}% of their prompts were questions. the AI's lawyering up.`,
+    line: (p) => `asked more than they told. ${pct(p.askingTurns / Math.max(p.turns, 1))}% of their prompts were questions.`,
   },
   {
-    badge: "The Builder",
+    badge: "The Shipper",
     value: (p) => p.doingTurns / Math.max(p.turns, 1),
     gate: (p) => p.doingTurns > 0,
-    line: (p) => `${pct(p.doingTurns / Math.max(p.turns, 1))}% build prompts. here to cook, not to chat.`,
+    line: (p) => `${pct(p.doingTurns / Math.max(p.turns, 1))}% of their prompts were just "build this". zero small talk.`,
   },
   {
-    badge: "The Delegator",
+    badge: "The Puppet Master",
     value: (p) => p.delegateTurns / Math.max(p.turns, 1),
     gate: (p) => p.delegateTurns > 0,
-    line: (p) => `made one AI manage another ${int(p.delegateTurns)} times. never did it themselves.`,
+    line: (p) => `had one AI run another ${int(p.delegateTurns)} times. never lifted a finger.`,
   },
   {
-    badge: "Night Owl",
+    badge: "The Night Owl",
     value: (p) => p.lateTurns / Math.max(p.turns, 1),
     gate: (p) => p.lateTurns > 0,
-    line: () => `most after-hours prompts on the team. a certified 2am gremlin.`,
+    line: () => `the last one online. every single night.`,
   },
   {
-    badge: "Early Bird",
+    badge: "The Early Bird",
     value: (p) => p.earlyTurns / Math.max(p.turns, 1),
     gate: (p) => p.earlyTurns > 0,
-    line: () => `first one online, every day. prompting before the coffee landed.`,
+    line: () => `first one online. beat the coffee, every day.`,
   },
   {
-    badge: "The Marathoner",
+    badge: "The Gremlin",
     value: (p) => p.longest,
     gate: (p) => p.longest > 0,
-    line: (p) => `longest single session: ${int(p.longest)} min. no breaks. check the vitals.`,
+    line: (p) => `${int(p.longest)} minutes in one sitting. someone bring snacks.`,
   },
   {
-    badge: "The Explorer",
+    badge: "The Commitment-phobe",
     value: (p) => p.tools.size,
     gate: (p) => p.tools.size > 1,
-    line: (p) => `used ${int(p.tools.size)} different AIs. that's not indecision, that's range.`,
+    line: (p) => `used ${int(p.tools.size)} different AIs. can't pick a favorite child.`,
   },
   {
-    badge: "The Novelist",
-    value: (p) => p.chars / Math.max(p.turns, 1),
-    gate: (p) => p.turns > 0,
-    line: (p) => `doesn't prompt, publishes. ${int(p.chars / Math.max(p.turns, 1))} characters a turn on average.`,
+    badge: "The Overexplainer",
+    value: avgChars,
+    gate: (p) => p.turns > 2,
+    line: (p) => `${int(avgChars(p))} characters a prompt. wrote a paragraph to say "fix this".`,
+  },
+  {
+    badge: "The Sniper",
+    value: (p) => 1 / (avgChars(p) + 1),
+    gate: (p) => p.turns > 2,
+    line: (p) => `gets it done in ${int(avgChars(p))} characters. not a word wasted.`,
   },
   {
     badge: "The Machine",
     value: (p) => p.turns,
     gate: (p) => p.turns > 0,
-    line: (p) => `sent ${int(p.turns)} prompts. someone schedule a wellness check.`,
+    line: (p) => `${int(p.turns)} prompts this week. genuinely, are they okay?`,
   },
 ];
 
@@ -109,7 +117,7 @@ export function assignSuperlatives(people) {
   return people.map((p) => {
     const c = byPerson.get(p.person);
     if (c) return { person: p.person, badge: c.badge, line: c.line };
-    return { person: p.person, badge: "The Wildcard", line: "showed up and kept everyone guessing. no two weeks alike." };
+    return { person: p.person, badge: "The Wildcard", line: "impossible to label this week. we genuinely tried." };
   });
 }
 

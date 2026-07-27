@@ -183,20 +183,18 @@ export function compute(cells, spans) {
     }))
     .sort((a, b) => b.turns - a.turns || a.tool.localeCompare(b.tool));
 
-  // For the top tools, the categories THEY were used for — the per-AI drill-down
-  // (e.g. what ran through Alma, including the Claude Code it drove).
-  const toolCategories = toolShare
-    .slice(0, 2)
-    .map((t) => {
-      const dm = toolDomain.get(t.tool) ?? new Map();
-      const total = [...dm.values()].reduce((a, b) => a + b, 0);
-      const categories = [...dm.entries()]
-        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-        .slice(0, 4)
-        .map(([key, n]) => ({ label: domainTitle(key), pct: total > 0 ? Math.round((n / total) * 100) : 0 }));
-      return { tool: t.tool, name: t.name, categories };
-    })
-    .filter((t) => t.categories.length > 0);
+  // Alma's own breakdown, surfaced ALWAYS regardless of its rank — the team
+  // steers by Alma adoption, so this card can't depend on Alma being top-2.
+  // Includes the Claude Code that ran through Alma (those cells are tool=openclaw).
+  const almaDm = toolDomain.get("openclaw") ?? new Map();
+  const almaDomTotal = [...almaDm.values()].reduce((a, b) => a + b, 0);
+  const alma = {
+    share: totalTurns > 0 ? Math.round(((toolTurns.get("openclaw") ?? 0) / totalTurns) * 100) : 0,
+    categories: [...almaDm.entries()]
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .slice(0, 5)
+      .map(([key, n]) => ({ label: domainTitle(key), pct: almaDomTotal > 0 ? Math.round((n / almaDomTotal) * 100) : 0 })),
+  };
 
   let peakHour = 0;
   for (let h = 1; h < 24; h++) if (hours[h] > hours[peakHour]) peakHour = h;
@@ -229,7 +227,7 @@ export function compute(cells, spans) {
     top5: byMinutes.slice(0, 5),
     tools: toolShare,
     toolShare,
-    toolCategories,
+    alma,
     topTool: toolShare[0] ?? null,
     toolCount: toolNames.size,
     shape,

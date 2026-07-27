@@ -138,7 +138,7 @@ export function renderHtml(cards, meta = {}) {
 <body>
 <div class="stage" role="group" aria-roledescription="story" aria-label="${esc(team)} Wrapped">
   <div class="progress" aria-hidden="true">${segs}</div>
-  <div class="reel">${sections}</div>
+  <div class="reel">${sections}<canvas class="confetti" aria-hidden="true"></canvas></div>
   <button class="nav prev" type="button" aria-label="Previous card"></button>
   <button class="nav next" type="button" aria-label="Next card"></button>
   <div class="hint" aria-hidden="true">tap · hold to pause · ← →</div>
@@ -223,6 +223,7 @@ p,div,span,li,ol,button{overflow-wrap:break-word;word-break:normal;hyphens:none}
 .nav.prev{left:0}
 .nav.next{right:0;width:68%}
 .nav:focus-visible{outline:3px solid #fff;outline-offset:-6px}
+.confetti{position:absolute;inset:0;z-index:7;pointer-events:none}
 .hint{position:absolute;bottom:max(10px,env(safe-area-inset-bottom));left:0;right:0;text-align:center;z-index:5;font-size:.72rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.55);pointer-events:none;mix-blend-mode:difference}
 @media (prefers-reduced-motion: reduce){
   .card{transition:none}
@@ -240,6 +241,31 @@ const JS = `
   var reduce=matchMedia('(prefers-reduced-motion: reduce)').matches;
   var DUR_BASE=4200, DUR_PER_CHAR=22, MAXDUR=9000;
   var idx=0, paused=false, done=false, start=0, raf=0, holdTimer=0, held=false, pausedAt=0;
+
+  // Confetti on the celebratory cards (title, the reveal, the trophies, the
+  // finale). Canvas is scoped to the reel and pointer-events:none, so it rains
+  // over the content without blocking taps. Skipped under reduced motion.
+  var cfReel=document.querySelector('.reel'), cfc=document.querySelector('.confetti'), cfx=cfc.getContext('2d'), cfp=[], cfraf=0;
+  var CF_COLORS=['#FF2D9B','#D6FF3D','#22E4DB','#FFC94D','#3D5AFE','#FF7A00'];
+  function cfSize(){ var r=cfReel.getBoundingClientRect(); cfc.width=Math.round(r.width)||360; cfc.height=Math.round(r.height)||640; }
+  function burst(){
+    if(reduce) return;
+    cfSize();
+    var W=cfc.width;
+    for(var i=0;i<130;i++) cfp.push({x:Math.random()*W, y:-20-Math.random()*140, vx:(Math.random()-0.5)*3.2, vy:2+Math.random()*3.6, w:5+Math.random()*6, h:3+Math.random()*5, c:CF_COLORS[(Math.random()*CF_COLORS.length)|0], a:1, rot:Math.random()*6.28, vr:(Math.random()-0.5)*0.34});
+    if(!cfraf) cfraf=requestAnimationFrame(cfStep);
+  }
+  function cfStep(){
+    cfx.clearRect(0,0,cfc.width,cfc.height);
+    for(var i=cfp.length-1;i>=0;i--){ var p=cfp[i];
+      p.x+=p.vx; p.y+=p.vy; p.vy+=0.05; p.rot+=p.vr; p.a-=0.005;
+      if(p.y>cfc.height+30||p.a<=0){ cfp.splice(i,1); continue; }
+      cfx.save(); cfx.globalAlpha=Math.max(0,p.a); cfx.translate(p.x,p.y); cfx.rotate(p.rot);
+      cfx.fillStyle=p.c; cfx.fillRect(-p.w/2,-p.h/2,p.w,p.h); cfx.restore();
+    }
+    if(cfp.length) cfraf=requestAnimationFrame(cfStep); else { cfraf=0; cfx.clearRect(0,0,cfc.width,cfc.height); }
+  }
+  function maybeConfetti(card){ if(/(^| )(title|reveal|trophy|summary)( |$)/.test(card.className)) burst(); }
 
   function durationFor(card){
     var txt=(card.textContent||'').trim().length;
@@ -270,7 +296,7 @@ const JS = `
     idx=n; done=false;
     cards[idx].classList.add('active'); cards[idx].setAttribute('aria-hidden','false');
     cards[idx].querySelector('.card-inner').scrollTop=0;
-    paint(); countUp(cards[idx]); start=performance.now();
+    paint(); countUp(cards[idx]); maybeConfetti(cards[idx]); start=performance.now();
   }
   function next(){ if(idx>=cards.length-1){ finish(); } else show(idx+1); }
   function prev(){ show(idx-1); }
@@ -340,5 +366,6 @@ const JS = `
   if(startAt>0 && startAt<cards.length){ cards[0].classList.remove('active'); cards[0].setAttribute('aria-hidden','true');
     idx=startAt; cards[idx].classList.add('active'); cards[idx].setAttribute('aria-hidden','false'); }
   paint(); countUp(cards[idx]); start=performance.now(); requestAnimationFrame(loop);
+  setTimeout(function(){ maybeConfetti(cards[idx]); }, 120);
 })();
 `;
