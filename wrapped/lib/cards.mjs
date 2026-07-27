@@ -68,13 +68,12 @@ export function buildCards(m, opts = {}) {
     });
   }
 
-  if (m.toolCount > 1) {
+  if (m.toolShare.length > 1) {
     cards.push({
-      kind: "stat",
-      kicker: "AI tools touched",
-      heroNumber: m.toolCount,
-      heroUnit: plural(m.toolCount, "tool", "tools"),
-      sub: "commitment issues? nah. we call it keeping options open.",
+      kind: "ranked",
+      kicker: "which AI got used the most",
+      rows: m.toolShare.slice(0, 5).map((t) => ({ label: t.name, pct: t.pct })),
+      sub: "the whole AI lineup, by share of the team's prompts.",
     });
   }
 

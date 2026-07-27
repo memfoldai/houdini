@@ -103,7 +103,7 @@ function hourLabel(h) {
 
 export function compute(cells, spans) {
   const people = new Map();
-  const toolMinutes = new Map();
+  const toolTurns = new Map();
   const toolNames = new Map();
   const domains = new Map();
   const days = new Map();
@@ -122,7 +122,6 @@ export function compute(cells, spans) {
     p.longest = Math.max(p.longest, s.longest_minutes);
     p.tools.add(s.tool);
     totalMinutes += s.total_minutes;
-    inc(toolMinutes, s.tool, s.total_minutes);
     if (!toolNames.has(s.tool)) toolNames.set(s.tool, s.tool_name);
     if (s.longest_minutes > longestSession.minutes) {
       longestSession = { minutes: s.longest_minutes, person: s.person };
@@ -136,6 +135,7 @@ export function compute(cells, spans) {
     p.chars += c.chars;
     p.tools.add(c.tool);
     totalTurns += w;
+    inc(toolTurns, c.tool, w);
     if (!toolNames.has(c.tool)) toolNames.set(c.tool, c.tool_name);
     if (c.domain !== "other") inc(domains, c.domain, w);
     inc(days, c.day, w);
@@ -163,9 +163,16 @@ export function compute(cells, spans) {
   const roster = [...people.values()];
   const byMinutes = [...roster].sort((a, b) => b.minutes - a.minutes || a.person.localeCompare(b.person));
 
-  const toolRank = [...toolMinutes.entries()]
-    .map(([tool, minutes]) => ({ tool, name: toolNames.get(tool) ?? tool, minutes }))
-    .sort((a, b) => b.minutes - a.minutes);
+  // Tools ranked by share of the team's prompts — the adoption measure the team
+  // watches (how much of the week's AI use runs through Alma vs everything else).
+  const toolShare = [...toolTurns.entries()]
+    .map(([tool, turns]) => ({
+      tool,
+      name: toolNames.get(tool) ?? tool,
+      turns,
+      pct: totalTurns > 0 ? Math.round((turns / totalTurns) * 100) : 0,
+    }))
+    .sort((a, b) => b.turns - a.turns || a.tool.localeCompare(b.tool));
 
   let peakHour = 0;
   for (let h = 1; h < 24; h++) if (hours[h] > hours[peakHour]) peakHour = h;
@@ -196,8 +203,9 @@ export function compute(cells, spans) {
     byMinutes,
     topPerson: byMinutes[0] ?? null,
     top5: byMinutes.slice(0, 5),
-    tools: toolRank,
-    topTool: toolRank[0] ?? null,
+    tools: toolShare,
+    toolShare,
+    topTool: toolShare[0] ?? null,
     toolCount: toolNames.size,
     shape,
     researchPct: askDo > 0 ? Math.round((shape.asking / askDo) * 100) : 0,
