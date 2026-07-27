@@ -49,18 +49,24 @@ test("engaged minutes and top person come from spans", () => {
   assert.equal(m.top5[0].person, "ana");
 });
 
-test("both Alma awards select the right winner", () => {
+test("both Alma trophies select the right winner", () => {
+  // Claude Code is the deterministic delegation signal; research is the labeled
+  // asking-shaped Alma cells. Assert the rendered trophies, not internals.
   const rows = [
-    cell({ person: "cc", tool: "openclaw", delegate_tool: "claude_code", shape: "doing", turns: 20 }),
-    cell({ person: "cc", tool: "openclaw", delegate_tool: "claude_code", shape: "doing", turns: 5, hour: 13 }),
-    cell({ person: "rs", tool: "openclaw", delegate_tool: "none", shape: "asking", intent: "multi_source_synthesis", turns: 30 }),
+    span({ person: "cc", tool: "openclaw", sessions: 2, total_minutes: 40 }),
+    span({ person: "rs", tool: "openclaw", sessions: 3, total_minutes: 60 }),
+    cell({ person: "cc", tool: "openclaw", shape: "doing", turns: 20 }),
+    { kind: "delegation", device: "d", person: "cc", day: "2026-07-21", tool: "openclaw", driven_tool: "claude_code", turns: 25 },
+    cell({ person: "rs", tool: "openclaw", shape: "asking", intent: "multi_source_synthesis", turns: 30 }),
   ];
-  const { cells, spans } = collect(rows);
-  const m = compute(cells, spans);
-  assert.equal(m.almaClaudeCode[0].person, "cc");
-  assert.equal(m.almaClaudeCode[0].value, 25);
-  assert.equal(m.almaResearch[0].person, "rs");
-  assert.equal(m.almaResearch[0].value, 30);
+  const { cells, spans, delegations } = collect(rows);
+  const m = compute(cells, spans, delegations);
+  const cards = buildCards(m, { team: "T", weekLabel: "wk" });
+  const cc = cards.find((c) => c.title?.includes("Claude Code"));
+  const research = cards.find((c) => c.title?.includes("Research"));
+  assert.equal(cc.winner, "cc");
+  assert.match(cc.stat, /25 times/);
+  assert.equal(research.winner, "rs");
 });
 
 test("delegation rows drive droveClaudeCode deterministically, ignoring other tools", () => {
@@ -82,7 +88,7 @@ test("superlatives: everyone is named, badges unique while the roster fits the a
     person: p, minutes: 10, longest: i * 40, turns: 20, askingTurns: i === 0 ? 20 : 0,
     doingTurns: i === 1 ? 20 : 0, delegateTurns: i === 2 ? 15 : 0, lateTurns: i === 3 ? 18 : 0,
     earlyTurns: 0, chars: 100 * (i + 1), tools: new Set(["openclaw", i === 0 ? "codex" : "openclaw"]),
-    almaClaudeCode: 0, almaResearch: 0,
+    almaResearch: 0,
   }));
   const badges = assignSuperlatives(people);
   assert.equal(badges.length, 4);

@@ -78,15 +78,11 @@ function ensurePerson(people, name) {
       earlyTurns: 0,
       chars: 0,
       tools: new Set(),
-      almaClaudeCode: 0,
-      almaAgentRun: 0,
       almaResearch: 0,
       almaTurns: 0,
-      // Session/time from spans, so a heavy user whose cells are not labeled
-      // yet still counts toward the Alma × Claude Code award.
+      // Scales the research award so a heavy Alma user whose cells are not all
+      // labeled yet still ranks (see the research trophy in cards.mjs).
       almaSessions: 0,
-      ccSessions: 0,
-      ccMinutes: 0,
       // Deterministic count of times this person's Alma actually drove Claude
       // Code, detected from the transcript's tool calls (not the LLM label).
       droveClaudeCode: 0,
@@ -133,10 +129,6 @@ export function compute(cells, spans, delegations = []) {
     p.longest = Math.max(p.longest, s.longest_minutes);
     p.tools.add(s.tool);
     if (s.tool === "openclaw") p.almaSessions += s.sessions;
-    if (s.tool === "claude-code") {
-      p.ccSessions += s.sessions;
-      p.ccMinutes += s.total_minutes;
-    }
     totalMinutes += s.total_minutes;
     if (!toolNames.has(s.tool)) toolNames.set(s.tool, s.tool_name);
     if (s.longest_minutes > longestSession.minutes) {
@@ -181,10 +173,6 @@ export function compute(cells, spans, delegations = []) {
     }
 
     if (c.tool === "openclaw") p.almaTurns += w;
-    if (c.tool === "openclaw" && c.delegate_tool === "claude_code") p.almaClaudeCode += w;
-    // Alma sessions that spawned an agent — the strongest in-cell signal that
-    // Alma actually drove another tool (e.g. Claude Code).
-    if (c.tool === "openclaw" && c.delegation === "agent_run") p.almaAgentRun += w;
     if (c.tool === "openclaw" && c.shape === "asking") p.almaResearch += w;
   }
 
@@ -232,12 +220,6 @@ export function compute(cells, spans, delegations = []) {
 
   const askDo = shape.asking + shape.doing;
 
-  const award = (key) =>
-    [...roster]
-      .filter((p) => p[key] > 0)
-      .sort((a, b) => b[key] - a[key] || a.person.localeCompare(b.person))
-      .map((p) => ({ person: p.person, value: p[key] }));
-
   return {
     people: roster,
     peopleCount: roster.length,
@@ -265,8 +247,6 @@ export function compute(cells, spans, delegations = []) {
     domainRank,
     busyDay: busyDay ? { day: busyDay, label: weekday(busyDay) } : null,
     longestSession: longestSession.person ? longestSession : null,
-    almaClaudeCode: award("almaClaudeCode"),
-    almaResearch: award("almaResearch"),
   };
 }
 
