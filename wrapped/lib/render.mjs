@@ -77,7 +77,7 @@ function body(card) {
       const podium =
         card.winner && card.runnersUp && card.runnersUp.length
           ? `<ol class="trophy-runners">${card.runnersUp
-              .map((r, i) => `<li><span class="tr-medal">${["🥈", "🥉"][i] ?? ""}</span><span class="tr-name">${esc(r.name)}</span></li>`)
+              .map((r, i) => `<li><span class="tr-medal">${["🥈", "🥉"][i] ?? i + 2}</span><span class="tr-name">${esc(r.name)}</span><span class="tr-val">${esc(r.value)}</span></li>`)
               .join("")}</ol>`
           : "";
       const win = card.winner
@@ -203,10 +203,11 @@ p,div,span,li,ol,button{overflow-wrap:break-word;word-break:normal;hyphens:none}
 .trophy-win{font-weight:900;font-size:15cqmin;line-height:.94;color:var(--accent);text-wrap:balance}
 .trophy-stat{font-size:5cqmin;font-weight:600;line-height:1.35;text-wrap:pretty}
 .trophy-stat.empty{opacity:.85;font-style:italic}
-.trophy-runners{list-style:none;display:flex;flex-direction:column;gap:2cqmin;margin-top:1.8cqmin;width:100%}
-.trophy-runners li{display:flex;align-items:center;gap:2cqmin;font-weight:800;font-size:5.2cqmin;opacity:.9}
-.tr-medal{width:1.5em;flex:none;font-size:1.1em}
+.trophy-runners{list-style:none;display:flex;flex-direction:column;gap:1.7cqmin;margin-top:1.8cqmin;width:100%}
+.trophy-runners li{display:flex;align-items:center;gap:1.8cqmin;font-weight:800;font-size:4.8cqmin;opacity:.9}
+.tr-medal{width:1.6em;flex:none;text-align:center;color:var(--accent);font-variant-numeric:tabular-nums}
 .tr-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tr-val{flex:none;opacity:.75;font-variant-numeric:tabular-nums}
 /* summary */
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:3cqmin}
 .cell{background:color-mix(in srgb,var(--ink) 7%,transparent);border:1px solid color-mix(in srgb,var(--ink) 16%,transparent);border-radius:3cqmin;padding:3.4cqmin}

@@ -168,13 +168,13 @@ export function buildCards(m, opts = {}) {
       "🏆",
       "The Alma × Claude Code Award",
       m.people,
-      // Alma driving Claude Code: Claude Code sessions by someone who also uses
-      // Alma (so the CC is plausibly Alma-run), plus a boost for Alma sessions
-      // that actually spawned an agent. Session-based, so a heavy user whose
-      // cells aren't labeled yet still counts. Direct-only CC users (no Alma)
-      // score zero — they're not driving it through Alma.
-      (p) => (p.almaSessions > 0 ? p.ccSessions : 0) + p.almaAgentRun * 3 + p.almaClaudeCode * 3,
-      (v) => `ran Claude Code through Alma ${int(v)} ${plural(v, "time", "times")}. no notes.`,
+      // Alma driving Claude Code: Claude Code TIME by someone who also uses Alma
+      // (so the CC is plausibly Alma-run). Span-based minutes, so a heavy user
+      // whose cells aren't labeled yet still counts. Direct-only CC users with no
+      // Alma (e.g. vinod) score zero — they're not driving it through Alma.
+      (p) => (p.almaSessions > 0 ? p.ccMinutes : 0),
+      (v) => `${int(Math.round(v / 60))}h of Claude Code, all driven through Alma. no notes.`,
+      (v) => `${Math.round(v / 60)}h`,
       "nobody drove Claude Code through Alma this week. the goal awaits.",
     ),
   );
@@ -189,6 +189,7 @@ export function buildCards(m, opts = {}) {
       // Needs a few analyzed turns to trust the rate; otherwise falls back to raw.
       (p) => (p.almaTurns >= 3 ? Math.round((p.almaResearch / p.almaTurns) * p.almaSessions) : p.almaResearch),
       (v) => `leaned on Alma to dig into things ${int(v)} ${plural(v, "time", "times")}. the resident researcher.`,
+      (v) => `${int(v)}`,
       "nobody used Alma to research this week. the library's empty.",
     ),
   );
@@ -204,14 +205,16 @@ export function buildCards(m, opts = {}) {
   return cards;
 }
 
-// Deterministic winner + top 3: strictly ranked by the data-driven score, so the
+// Deterministic winner + top 5: strictly ranked by the data-driven score, so the
 // award reflects the analysis and never changes between renders of the same data.
-function pickTrophy(emoji, title, people, scoreFn, earned, emptyLine) {
+// Runners-up carry their own metric (fmt) — since the rank is strict, a runner-up
+// never out-scores the winner, so showing numbers is honest.
+function pickTrophy(emoji, title, people, scoreFn, earned, fmt, emptyLine) {
   const ranked = people
     .map((p) => ({ name: firstName(p.person), score: scoreFn(p) }))
     .filter((x) => x.score > 0)
     .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
-    .slice(0, 3);
+    .slice(0, 5);
   if (!ranked.length) {
     return { kind: "trophy", emoji, title, winner: null, stat: emptyLine };
   }
@@ -222,7 +225,7 @@ function pickTrophy(emoji, title, people, scoreFn, earned, emptyLine) {
     title,
     winner: winner.name,
     stat: earned(winner.score),
-    runnersUp: ranked.slice(1).map((r) => ({ name: r.name })),
+    runnersUp: ranked.slice(1).map((r) => ({ name: r.name, value: fmt(r.score) })),
   };
 }
 

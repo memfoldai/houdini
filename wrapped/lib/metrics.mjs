@@ -82,10 +82,11 @@ function ensurePerson(people, name) {
       almaAgentRun: 0,
       almaResearch: 0,
       almaTurns: 0,
-      // Session counts from spans, so a heavy user whose cells are not labeled
+      // Session/time from spans, so a heavy user whose cells are not labeled
       // yet still counts toward the Alma × Claude Code award.
       almaSessions: 0,
       ccSessions: 0,
+      ccMinutes: 0,
     };
     people.set(name, p);
   }
@@ -129,7 +130,10 @@ export function compute(cells, spans) {
     p.longest = Math.max(p.longest, s.longest_minutes);
     p.tools.add(s.tool);
     if (s.tool === "openclaw") p.almaSessions += s.sessions;
-    if (s.tool === "claude-code") p.ccSessions += s.sessions;
+    if (s.tool === "claude-code") {
+      p.ccSessions += s.sessions;
+      p.ccMinutes += s.total_minutes;
+    }
     totalMinutes += s.total_minutes;
     if (!toolNames.has(s.tool)) toolNames.set(s.tool, s.tool_name);
     if (s.longest_minutes > longestSession.minutes) {
