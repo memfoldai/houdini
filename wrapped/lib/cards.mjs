@@ -156,7 +156,6 @@ export function buildCards(m, opts = {}) {
   for (const s of assignSuperlatives(m.people)) {
     cards.push({
       kind: "person",
-      kicker: "certified",
       personName: firstName(s.person),
       badge: s.badge,
       line: s.line,

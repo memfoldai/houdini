@@ -27,10 +27,13 @@ const LOUD = [
   { bg: "#22E4DB", ink: "#07211F", accent: "#FF2D9B" },
   { bg: "#0A0A0A", ink: "#FAF7F0", accent: "#D6FF3D" },
 ];
-const TITLE = { bg: "#12071F", ink: "#FAF7F0", accent: "#FF2D9B" };
+// Title: flat black with the acid accent doing the work as an outlined
+// wordmark — big editorial type, no gradients, no glow. Finale: a paper
+// receipt — the week as a printed ledger you'd screenshot.
+const TITLE = { bg: "#0A0A0A", ink: "#FAF7F0", accent: "#D6FF3D" };
 const DRAMA = { bg: "#0A0A0A", ink: "#FAF7F0", accent: "#FF2D9B" };
 const GOLD = { bg: "#1A0B2E", ink: "#FAF7F0", accent: "#FFC94D" };
-const PAPER = { bg: "#FAF7F0", ink: "#0A0A0A", accent: "#FF2D9B" };
+const PAPER = { bg: "#F7F4EC", ink: "#141414", accent: "#FF2D9B" };
 
 function palette(card, loudCounter) {
   if (card.kind === "title") return TITLE;
@@ -52,7 +55,8 @@ function hero(card) {
 function body(card) {
   switch (card.kind) {
     case "title":
-      return `<div class="wordmark">WRAPPED</div>`;
+      // The masthead IS the design: team name in ink, WRAPPED as an outline.
+      return `<div class="masthead"><span class="mast-line">${esc(card.heroText)}</span><span class="mast-line mast-outline">Wrapped</span></div>`;
     case "ranked": {
       const rows = card.rows
         .map(
@@ -86,10 +90,13 @@ function body(card) {
       return `<div class="trophy-emoji">${esc(card.emoji)}</div><div class="trophy-title">${esc(card.title)}</div>${win}`;
     }
     case "summary": {
-      const cells = card.grid
-        .map((g) => `<div class="cell"><div class="cell-label">${esc(g.label)}</div><div class="cell-val">${esc(g.value)}</div></div>`)
+      const rows = card.grid
+        .map(
+          (g) =>
+            `<div class="row"><span class="row-label">${esc(g.label)}</span><span class="row-dots" aria-hidden="true"></span><span class="row-val">${esc(g.value)}</span></div>`,
+        )
         .join("");
-      return `<div class="grid">${cells}</div><button class="share" type="button" aria-label="Download this card as an image">save the card</button>`;
+      return `<div class="ledger">${rows}</div><button class="share" type="button" aria-label="Download this card as an image">save the card</button>`;
     }
     default:
       return "";
@@ -102,11 +109,14 @@ function section(card, idx, pal) {
   const bodyHtml = body(card);
   const sub = card.sub || card.line ? `<p class="sub">${esc(card.sub ?? card.line)}</p>` : "";
   const style = `--bg:${pal.bg};--ink:${pal.ink};--accent:${pal.accent}`;
-  // Title and trophy read best hero-first; the rest lead with the eyebrow.
+  // Title leads with the dated eyebrow into the masthead; trophy reads
+  // hero-first; the rest lead with the eyebrow.
   const inner =
-    card.kind === "title" || card.kind === "trophy"
-      ? `${bodyHtml}${kicker}${heroHtml}${sub}`
-      : `${kicker}${heroHtml}${bodyHtml}${sub}`;
+    card.kind === "title"
+      ? `${kicker}${bodyHtml}${sub}`
+      : card.kind === "trophy"
+        ? `${bodyHtml}${kicker}${heroHtml}${sub}`
+        : `${kicker}${heroHtml}${bodyHtml}${sub}`;
   return `<section class="card ${esc(card.kind)}${idx === 0 ? " active" : ""}" style="${style}" data-idx="${idx}" aria-hidden="${idx === 0 ? "false" : "true"}">
       <div class="card-inner">${inner}</div>
     </section>`;
@@ -173,8 +183,18 @@ p,div,span,li,ol,button{overflow-wrap:break-word;word-break:normal;hyphens:none}
 .hero .unit{display:block;font-size:6.4cqmin;font-weight:800;letter-spacing:0;opacity:.85;margin-top:.35em}
 .hero-text{font-size:15cqmin;line-height:.98}
 .sub{font-size:5cqmin;line-height:1.35;font-weight:600;text-wrap:pretty;opacity:.96}
-.num,.unit,.val,.cell-val,.bar-pct{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
-.wordmark{font-size:9cqmin;font-weight:900;letter-spacing:.32em;color:var(--accent);text-transform:uppercase}
+.num,.unit,.val,.row-val,.bar-pct{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+/* title masthead: flush-left stacked mega type; WRAPPED is drawn as an
+   outline so the accent works without a glow. Solid accent fallback where
+   text-stroke is unsupported (stroke over transparent fill would vanish). */
+.masthead{display:flex;flex-direction:column}
+.mast-line{font-weight:900;font-size:17.5cqmin;line-height:.92;letter-spacing:-.035em;text-transform:uppercase}
+.mast-outline{color:var(--accent)}
+@supports ((-webkit-text-stroke:1px #000) or (text-stroke:1px #000)){
+  .mast-outline{color:transparent;-webkit-text-stroke:.55cqmin var(--accent)}
+}
+.card.title .kicker{display:flex;align-items:center;gap:2.4cqmin}
+.card.title .kicker::after{content:"";flex:1;height:2px;background:color-mix(in srgb,var(--accent) 55%,transparent)}
 /* ranked breakdown (categories) */
 .ranked{list-style:none;display:flex;flex-direction:column;gap:3.2cqmin;margin-top:1cqmin}
 .ranked li{display:flex;flex-direction:column;gap:1.4cqmin}
@@ -208,12 +228,15 @@ p,div,span,li,ol,button{overflow-wrap:break-word;word-break:normal;hyphens:none}
 .tr-medal{width:1.6em;flex:none;text-align:center;color:var(--accent);font-variant-numeric:tabular-nums}
 .tr-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tr-val{flex:none;opacity:.75;font-variant-numeric:tabular-nums}
-/* summary */
-.grid{display:grid;grid-template-columns:1fr 1fr;gap:3cqmin}
-.cell{background:color-mix(in srgb,var(--ink) 7%,transparent);border:1px solid color-mix(in srgb,var(--ink) 16%,transparent);border-radius:3cqmin;padding:3.4cqmin}
-.cell-label{font-size:3.2cqmin;font-weight:800;letter-spacing:.1em;text-transform:uppercase;opacity:.6}
-.cell-val{font-size:6.4cqmin;font-weight:900;letter-spacing:-.02em;margin-top:.2em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.share{position:relative;z-index:6;margin-top:1cqmin;align-self:start;font:inherit;font-weight:800;font-size:4.4cqmin;padding:.7em 1.3em;border:none;border-radius:999px;background:var(--accent);color:var(--bg);cursor:pointer}
+/* summary: a printed receipt — heavy top rule, dotted leaders, tabular
+   values right-aligned. No cards, no gradients. */
+.ledger{display:flex;flex-direction:column;border-top:1.4cqmin solid var(--ink);margin-top:1cqmin}
+.ledger .row{display:flex;align-items:baseline;gap:2cqmin;padding:2.7cqmin 0;border-bottom:1px solid color-mix(in srgb,var(--ink) 22%,transparent)}
+.row-label{font-size:3.4cqmin;font-weight:800;letter-spacing:.12em;text-transform:uppercase;opacity:.72;flex:none}
+.row-dots{flex:1;border-bottom:.6cqmin dotted color-mix(in srgb,var(--ink) 38%,transparent);transform:translateY(-.9cqmin)}
+.row-val{font-size:6cqmin;font-weight:900;letter-spacing:-.02em;flex:none;max-width:60%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.summary .hero-text{font-size:11cqmin}
+.share{position:relative;z-index:6;margin-top:1cqmin;align-self:start;font:inherit;font-weight:800;font-size:4.4cqmin;padding:.7em 1.3em;border:none;border-radius:999px;background:var(--accent);color:#fff;cursor:pointer}
 .share:focus-visible{outline:3px solid var(--ink);outline-offset:3px}
 /* chrome */
 .progress{position:absolute;top:0;left:0;right:0;z-index:5;display:flex;gap:5px;padding:12px 12px 0}
@@ -226,27 +249,21 @@ p,div,span,li,ol,button{overflow-wrap:break-word;word-break:normal;hyphens:none}
 .nav:focus-visible{outline:3px solid #fff;outline-offset:-6px}
 .confetti{position:absolute;inset:0;z-index:7;pointer-events:none}
 .hint{position:absolute;bottom:max(10px,env(safe-area-inset-bottom));left:0;right:0;text-align:center;z-index:5;font-size:.72rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.55);pointer-events:none;mix-blend-mode:difference}
-/* title flourish */
-.card.title{background:radial-gradient(125% 90% at 50% 26%, #2c1150 0%, var(--bg) 62%)}
-.wordmark{text-shadow:0 0 40px color-mix(in srgb,var(--accent) 45%, transparent)}
-.card.title.active .wordmark{animation:rise .7s cubic-bezier(.2,.9,.3,1.25) both}
-.card.title.active .hero{animation:rise .7s .08s cubic-bezier(.2,.9,.3,1.25) both}
-.card.title.active .kicker{animation:rise .6s .18s ease both}
-.card.title.active .sub{animation:rise .6s .26s ease both}
-@keyframes rise{from{opacity:0;transform:translateY(26px) scale(.95)}to{opacity:1;transform:none}}
+/* title entrance: the masthead lines land one after the other, flat and hard */
+.card.title.active .kicker{animation:rise .5s ease both}
+.card.title.active .mast-line{animation:rise .6s cubic-bezier(.2,.9,.3,1.15) both}
+.card.title.active .mast-line + .mast-line{animation-delay:.1s}
+.card.title.active .sub{animation:rise .5s .22s ease both}
+@keyframes rise{from{opacity:0;transform:translateY(26px)}to{opacity:1;transform:none}}
 /* trophy spotlight */
 .card.trophy{background:radial-gradient(circle at 50% 24%, color-mix(in srgb,var(--accent) 20%, var(--bg)), var(--bg) 58%)}
 .trophy-emoji{filter:drop-shadow(0 8px 26px color-mix(in srgb,var(--accent) 55%, transparent))}
 .trophy-win{text-shadow:0 0 34px color-mix(in srgb,var(--accent) 55%, transparent)}
-/* summary finale */
-.card.summary{background:linear-gradient(155deg,#FBF3EA,#FBE7F1)}
-.summary .cell-val{color:var(--accent)}
-.summary .cell{border-color:color-mix(in srgb,var(--accent) 32%, transparent)}
 @media (prefers-reduced-motion: reduce){
   .card{transition:none}
   .rk-track i,.podium li{transition:none}
   .podium li{opacity:1;transform:none}
-  .card.title.active .wordmark,.card.title.active .hero,.card.title.active .kicker,.card.title.active .sub{animation:none}
+  .card.title.active .mast-line,.card.title.active .kicker,.card.title.active .sub{animation:none}
 }
 `;
 
@@ -350,25 +367,29 @@ const JS = `
 
   function drawShot(){
     var c=document.getElementById('shot'), x=c.getContext('2d'), W=c.width, H=c.height;
-    var g=x.createLinearGradient(0,0,W,H); g.addColorStop(0,'#12071F'); g.addColorStop(1,'#3D1152');
-    x.fillStyle=g; x.fillRect(0,0,W,H);
+    x.fillStyle='#F7F4EC'; x.fillRect(0,0,W,H);
     x.textAlign='left';
-    x.fillStyle='#FF2D9B'; x.font='700 46px "Helvetica Neue",Arial,sans-serif';
-    x.fillText((DATA.week||'').toUpperCase(), 90, 200);
-    x.fillStyle='#FAF7F0'; x.font='900 130px "Helvetica Neue",Arial,sans-serif';
-    wrap(x, DATA.team+' WRAPPED', 90, 340, W-180, 130);
-    var cells=[].slice.call(document.querySelectorAll('.summary .cell'));
-    var y=780, col=0;
-    cells.forEach(function(cell){
-      var lx=90+col*((W-180)/2)+(col?40:0);
-      x.fillStyle='rgba(250,247,240,.55)'; x.font='800 34px "Helvetica Neue",Arial,sans-serif';
-      x.fillText(cell.querySelector('.cell-label').textContent.toUpperCase(), lx, y);
-      x.fillStyle='#FAF7F0'; x.font='900 72px "Helvetica Neue",Arial,sans-serif';
-      x.fillText(cell.querySelector('.cell-val').textContent, lx, y+80);
-      col++; if(col===2){ col=0; y+=200; }
+    x.fillStyle='#FF2D9B'; x.font='800 44px "Helvetica Neue",Arial,sans-serif';
+    x.fillText((DATA.week||'').toUpperCase(), 90, 190);
+    x.fillStyle='#141414'; x.font='900 150px "Helvetica Neue",Arial,sans-serif';
+    wrap(x, (DATA.team||'').toUpperCase(), 90, 350, W-180, 150);
+    x.font='900 150px "Helvetica Neue",Arial,sans-serif';
+    x.strokeStyle='#FF2D9B'; x.lineWidth=5; x.strokeText('WRAPPED', 90, 505);
+    x.fillStyle='#141414'; x.fillRect(90, 585, W-180, 12);
+    var rows=[].slice.call(document.querySelectorAll('.summary .row'));
+    var y=720;
+    rows.forEach(function(row){
+      x.fillStyle='rgba(20,20,20,.72)'; x.textAlign='left'; x.font='800 40px "Helvetica Neue",Arial,sans-serif';
+      x.fillText(row.querySelector('.row-label').textContent.toUpperCase(), 90, y);
+      x.fillStyle='#141414'; x.textAlign='right'; x.font='900 76px "Helvetica Neue",Arial,sans-serif';
+      x.fillText(row.querySelector('.row-val').textContent, W-90, y+8);
+      x.save(); x.strokeStyle='rgba(20,20,20,.35)'; x.lineWidth=4; x.setLineDash([4,14]);
+      x.beginPath(); x.moveTo(90,y+52); x.lineTo(W-90,y+52); x.stroke(); x.restore();
+      y+=170;
     });
-    x.fillStyle='#FFC94D'; x.textAlign='center'; x.font='800 40px "Helvetica Neue",Arial,sans-serif';
-    x.fillText('HOUDINI WRAPPED', W/2, H-140);
+    x.setLineDash([]);
+    x.fillStyle='#FF2D9B'; x.textAlign='center'; x.font='800 38px "Helvetica Neue",Arial,sans-serif';
+    x.fillText('HOUDINI WRAPPED', W/2, H-120);
     var a=document.createElement('a');
     a.href=c.toDataURL('image/png'); a.download=(DATA.team||'houdini').replace(/\\s+/g,'-').toLowerCase()+'-wrapped.png'; a.click();
   }
