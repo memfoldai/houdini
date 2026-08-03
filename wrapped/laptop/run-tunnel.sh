@@ -22,6 +22,17 @@ CFLOG="$DIR/cloudflared.log"
 : > "$CFLOG"
 CURL=/usr/bin/curl
 GH=/opt/homebrew/bin/gh
+# The discovery gist belongs to the rahul-memfold account; the machine's
+# ACTIVE gh account may be a different login, and a wrong-account PATCH 404s.
+# Pin the gist token explicitly, falling back to the default account.
+GIST_TOKEN="$($GH auth token --user rahul-memfold 2>/dev/null || true)"
+publish_gist() {
+  if [ -n "$GIST_TOKEN" ]; then
+    GH_TOKEN="$GIST_TOKEN" $GH api -X PATCH "/gists/$GIST_ID" --input "$DIR/gist-payload.json" >/dev/null 2>&1
+  else
+    $GH api -X PATCH "/gists/$GIST_ID" --input "$DIR/gist-payload.json" >/dev/null 2>&1
+  fi
+}
 
 /opt/homebrew/bin/cloudflared tunnel --url "http://127.0.0.1:$PORT" --no-autoupdate >>"$CFLOG" 2>&1 &
 CF=$!
@@ -41,7 +52,7 @@ while kill -0 "$CF" 2>/dev/null; do
     if [ $((now - last_publish_try)) -ge 300 ]; then
       last_publish_try=$now
       printf '{"files":{"houdini-collector.txt":{"content":"%s"}}}' "$url" > "$DIR/gist-payload.json"
-      if $GH api -X PATCH "/gists/$GIST_ID" --input "$DIR/gist-payload.json" >/dev/null 2>&1; then
+      if publish_gist; then
         published="$url"
         fails=0
         echo "$(date '+%F %T') published $url to gist $GIST_ID"
