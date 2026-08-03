@@ -16,10 +16,10 @@ const almaSecs = (p) => Math.round((p.almaMinutes * 60) / Math.max(p.almaSession
 
 const AXES = [
   {
-    badge: "the grindmaxxer",
+    badge: "the lock-in",
     value: (p) => p.minutes,
     gate: (p) => p.minutes >= 600,
-    line: (p) => `${h(p.minutes)} hours with AI in seven days. grass has filed a missing person report.`,
+    line: (p) => `${h(p.minutes)} hours with AI in seven days. that's ${Math.round(p.minutes / 60 / 40)} full-time jobs. locked all the way in.`,
     chips: (p) => [`${h(p.minutes)}h total`, `${int(p.sessions)} sessions`, `${activeDays(p)}/7 days`],
   },
   {
@@ -31,10 +31,12 @@ const AXES = [
   },
   {
     badge: "the why-is-it-broken",
+    // troubleshootTurns is the labeler's count of diagnostic prompts — say
+    // exactly that; never claim a literal quote count (people fact-check).
     value: (p) => p.troubleshootTurns,
     gate: (p) => p.troubleshootTurns > 30,
-    line: (p) => `asked "why is this broken" ${int(p.troubleshootTurns)} times this week. at some point it's not the code, bestie.`,
-    chips: (p) => [`${int(p.troubleshootTurns)} debugging cries`, `${h(p.minutes)}h total`],
+    line: (p) => `${int(p.troubleshootTurns)} of their prompts were pure debugging. one more "why is this broken" and it's a full crashout.`,
+    chips: (p) => [`${int(p.troubleshootTurns)} debugging prompts`, `${int(p.turns)} total analyzed`],
   },
   {
     badge: "the situationship",
@@ -72,19 +74,21 @@ const AXES = [
     chips: (p) => [`${int(p.draftTurns)} drafted msgs`, `${int(p.turns)} prompts`],
   },
   {
-    badge: "the middle manager",
-    value: (p) => p.drives,
-    gate: (p) => p.drives >= 10,
-    line: (p) => `had one AI boss another AI around ${int(p.drives)} times. hasn't done a task personally in weeks. delegation era.`,
-    chips: (p) => [`${int(p.drives)} handoffs`, `${int(p.sessions)} sessions`],
-  },
-  {
     badge: "the monk mode",
-    // Engaged Claude Code session length — long, silent, locked-in blocks.
+    // Engaged Claude Code session length — long, silent, focused blocks.
     value: (p) => p.ccMinutes / Math.max(p.ccSessions, 1),
     gate: (p) => p.ccSessions >= 5 && p.ccMinutes / Math.max(p.ccSessions, 1) >= 60,
-    line: (p) => `${int(p.ccSessions)} Claude Code sessions averaging ${Math.round(p.ccMinutes / p.ccSessions)} minutes each. locked in. do not perceive them.`,
+    line: (p) => `${int(p.ccSessions)} Claude Code sessions averaging ${Math.round(p.ccMinutes / p.ccSessions)} minutes each. deep work arc. do not perceive them.`,
     chips: (p) => [`~${Math.round(p.ccMinutes / p.ccSessions)}m per session`, `${h(p.ccMinutes)}h in Claude Code`],
+  },
+  {
+    badge: "the middle manager",
+    // Gate high enough that only serious delegators qualify; drives are
+    // deterministic transcript tool-calls, so the count itself is unarguable.
+    value: (p) => p.drives,
+    gate: (p) => p.drives >= 20,
+    line: (p) => `had one AI boss another AI around ${int(p.drives)} times this week. delegation era.`,
+    chips: (p) => [`${int(p.drives)} handoffs`, `${int(p.sessions)} sessions`],
   },
   {
     badge: "the setup arc",

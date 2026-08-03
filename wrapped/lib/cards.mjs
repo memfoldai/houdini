@@ -56,7 +56,7 @@ export function buildCards(m, opts = {}) {
       kicker: "prompts sent",
       heroNumber: m.totalTurns,
       heroUnit: plural(m.totalTurns, "prompt", "prompts"),
-      sub: "the group chat could never.",
+      sub: "all fired at the clankers. the group chat could never.",
     });
   }
 
@@ -108,7 +108,11 @@ export function buildCards(m, opts = {}) {
     kind: "stat",
     kicker: "the team's rush hour",
     heroText: m.peakHourLabel,
-    sub: "the collective lock-in hour. calendars fear it.",
+    // When the peak genuinely lands in the six o'clock hour, the 6-7 meme
+    // writes itself; any other hour gets the plain line.
+    sub: m.peakHourLabel.startsWith("6:30")
+      ? "the six-seven window. we don't make the rules."
+      : "the collective lock-in hour. calendars fear it.",
   });
 
   if (m.busyDay) {
@@ -163,7 +167,6 @@ function summaryGrid(m) {
     { label: "People", value: int(m.peopleCount) },
   ];
   if (m.topTool) grid.push({ label: "Top tool", value: m.topTool.name });
-  if (m.topPerson) grid.push({ label: "MVP", value: firstName(m.topPerson.person) });
   grid.push({ label: "Peak", value: m.peakHourLabel });
   return grid;
 }
