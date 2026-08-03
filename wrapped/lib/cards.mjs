@@ -25,7 +25,7 @@ export function buildCards(m, opts = {}) {
     kind: "title",
     kicker: opts.weekLabel ?? "",
     heroText: team,
-    sub: "your team's week with AI. every last prompt of it.",
+    sub: "your team's week with AI. the receipts are in.",
   });
 
   if (m.peopleCount === 0) {
@@ -41,11 +41,12 @@ export function buildCards(m, opts = {}) {
   }
 
   if (m.totalMinutes > 0) {
+    const jobs = Math.round(m.workWeeks);
     cards.push({
       kind: "stat",
       kicker: "time spent with AI",
       ...hours(m.totalMinutes),
-      sub: "as a team. that's a part-time job nobody's getting paid for.",
+      sub: jobs >= 2 ? `as a team. that's ${int(jobs)} people's entire work week spent talking to robots.` : "as a team. the robots know everything now.",
     });
   }
 
@@ -55,7 +56,7 @@ export function buildCards(m, opts = {}) {
       kicker: "prompts sent",
       heroNumber: m.totalTurns,
       heroUnit: plural(m.totalTurns, "prompt", "prompts"),
-      sub: "quality was optional this week, apparently.",
+      sub: "the group chat could never.",
     });
   }
 
@@ -64,7 +65,7 @@ export function buildCards(m, opts = {}) {
       kind: "stat",
       kicker: "the team's ride or die",
       heroText: m.topTool.name,
-      sub: "the team's go-to. opened more than the fridge.",
+      sub: "opened more than the fridge. and this team opens the fridge a lot.",
     });
   }
 
@@ -107,7 +108,7 @@ export function buildCards(m, opts = {}) {
     kind: "stat",
     kicker: "the team's rush hour",
     heroText: m.peakHourLabel,
-    sub: "peak grind. focus blocks never stood a chance.",
+    sub: "the collective lock-in hour. calendars fear it.",
   });
 
   if (m.busyDay) {
@@ -115,7 +116,7 @@ export function buildCards(m, opts = {}) {
       kind: "stat",
       kicker: "busiest day",
       heroText: m.busyDay.label,
-      sub: "carried the whole week on its back.",
+      sub: "carried the week like a group project with one working member.",
     });
   }
 
@@ -125,7 +126,7 @@ export function buildCards(m, opts = {}) {
       kicker: "longest single session",
       heroNumber: m.longestSession.minutes,
       heroUnit: plural(m.longestSession.minutes, "minute", "minutes"),
-      sub: `${firstName(m.longestSession.person)} went this long without stopping. that's a hostage situation.`,
+      sub: `${firstName(m.longestSession.person)}, in one sitting. blink twice if you need help.`,
     });
   }
 
@@ -134,7 +135,7 @@ export function buildCards(m, opts = {}) {
       kind: "reveal",
       kicker: "the one who cooked the most",
       heroText: firstName(m.topPerson.person),
-      sub: "out-prompted the entire team. and it wasn't close.",
+      sub: "out-prompted the entire team. it wasn't even close. no crumbs left.",
     });
   }
 
@@ -149,7 +150,7 @@ export function buildCards(m, opts = {}) {
         value: Math.round(p.minutes / 60) || 0,
         unit: "h",
       })),
-      sub: "the full leaderboard. no hiding.",
+      sub: "the full leaderboard. no hiding. we all saw it.",
     });
   }
 
@@ -159,73 +160,19 @@ export function buildCards(m, opts = {}) {
       personName: firstName(s.person),
       badge: s.badge,
       line: s.line,
+      chips: s.chips,
     });
   }
-
-  cards.push(
-    pickTrophy(
-      "🏆",
-      "The Alma × Claude Code Award",
-      m.people,
-      // The real thing now: how many times Alma actually invoked Claude Code,
-      // detected deterministically from the transcript's tool calls at ingestion
-      // (works even for devices with no analytics key). Direct-only Claude Code
-      // users score zero — they never drove it through Alma.
-      (p) => p.droveClaudeCode,
-      (v) => `drove Claude Code through Alma ${int(v)} ${plural(v, "time", "times")}. no notes.`,
-      (v) => `${int(v)}×`,
-      "no Claude Code driven through Alma yet this week. the goal awaits.",
-    ),
-  );
-  cards.push(
-    pickTrophy(
-      "🔬",
-      "The Alma × Research Award",
-      m.people,
-      // Research is a labeled property, so project each person's Alma
-      // asking-rate (from their analyzed cells) across their full Alma session
-      // count — a heavy Alma-research user whose cells lag labeling still surfaces.
-      // Needs a few analyzed turns to trust the rate; otherwise falls back to raw.
-      (p) => (p.almaTurns >= 3 ? Math.round((p.almaResearch / p.almaTurns) * p.almaSessions) : p.almaResearch),
-      (v) => `leaned on Alma to dig into things ${int(v)} ${plural(v, "time", "times")}. the resident researcher.`,
-      (v) => `${int(v)}`,
-      "nobody used Alma to research this week. the library's empty.",
-    ),
-  );
 
   cards.push({
     kind: "summary",
     kicker: opts.weekLabel ?? "",
     heroText: team,
     grid: summaryGrid(m),
-    sub: "the whole week, one card. screenshot it before someone edits it.",
+    sub: "the week, itemized. screenshot it before anyone starts denying things.",
   });
 
   return cards;
-}
-
-// Deterministic winner + top 5: strictly ranked by the data-driven score, so the
-// award reflects the analysis and never changes between renders of the same data.
-// Runners-up carry their own metric (fmt) — since the rank is strict, a runner-up
-// never out-scores the winner, so showing numbers is honest.
-function pickTrophy(emoji, title, people, scoreFn, earned, fmt, emptyLine) {
-  const ranked = people
-    .map((p) => ({ name: firstName(p.person), score: scoreFn(p) }))
-    .filter((x) => x.score > 0)
-    .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name))
-    .slice(0, 5);
-  if (!ranked.length) {
-    return { kind: "trophy", emoji, title, winner: null, stat: emptyLine };
-  }
-  const winner = ranked[0];
-  return {
-    kind: "trophy",
-    emoji,
-    title,
-    winner: winner.name,
-    stat: earned(winner.score),
-    runnersUp: ranked.slice(1).map((r) => ({ name: r.name, value: fmt(r.score) })),
-  };
 }
 
 function summaryGrid(m) {

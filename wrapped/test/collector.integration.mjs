@@ -97,7 +97,7 @@ try {
   assert.equal(wrapped.status, 200);
   const html = await wrapped.text();
   assert.ok(html.startsWith("<!doctype html>"));
-  assert.ok(html.includes("Alma × Claude Code"));
+  assert.ok(html.includes("mast-outline"), "title masthead renders");
   assert.ok(html.includes("Integration Team"));
 
   const wrappedNoAuth = await fetch(`${base}/v1/wrapped/2026-07-20`);

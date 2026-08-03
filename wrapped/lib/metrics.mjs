@@ -69,6 +69,7 @@ function ensurePerson(people, name) {
     p = {
       person: name,
       minutes: 0,
+      sessions: 0,
       longest: 0,
       turns: 0,
       askingTurns: 0,
@@ -80,11 +81,22 @@ function ensurePerson(people, name) {
       tools: new Set(),
       almaResearch: 0,
       almaTurns: 0,
-      // Scales the research award so a heavy Alma user whose cells are not all
-      // labeled yet still ranks (see the research trophy in cards.mjs).
       almaSessions: 0,
-      // Deterministic count of times this person's Alma actually drove Claude
-      // Code, detected from the transcript's tool calls (not the LLM label).
+      almaMinutes: 0,
+      weekendMinutes: 0,
+      // Per-day engaged minutes → topDay* below; the persona cards joke about
+      // one-day frontloading and parallel-session days, so keep the raw map.
+      dayMinutes: {},
+      topDayMinutes: 0,
+      topDayName: "",
+      // Intent/domain buckets the persona axes rank on.
+      casualTurns: 0,
+      troubleshootTurns: 0,
+      draftTurns: 0,
+      configTurns: 0,
+      // Deterministic drive counts from the transcript's tool calls (not the
+      // LLM label): all drives, plus the Claude Code subset.
+      drives: 0,
       droveClaudeCode: 0,
     };
     people.set(name, p);
@@ -98,13 +110,17 @@ function weight(cell) {
   return cell.turns > 0 ? cell.turns : Math.max(cell.sessions, 1);
 }
 
-const LATE_HOURS = new Set([22, 23, 0, 1, 2, 3, 4, 5]);
-const EARLY_HOURS = new Set([5, 6, 7, 8, 9]);
+// Cell hours are UTC but the team lives in IST (UTC+5:30), so night/morning
+// buckets and the peak-hour label are shifted +5:30 before they mean anything.
+// UTC 19-23 = 00:30-05:29 IST (after midnight); UTC 1-4 = 06:30-10:29 IST.
+const LATE_HOURS = new Set([19, 20, 21, 22, 23]);
+const EARLY_HOURS = new Set([1, 2, 3, 4]);
 
-function hourLabel(h) {
+function hourLabel(utcHour) {
+  const h = (utcHour + 5) % 24;
   const period = h < 12 ? "AM" : "PM";
   const twelve = h % 12 === 0 ? 12 : h % 12;
-  return `${twelve} ${period}`;
+  return `${twelve}:30 ${period}`;
 }
 
 export function compute(cells, spans, delegations = []) {
@@ -126,9 +142,15 @@ export function compute(cells, spans, delegations = []) {
   for (const s of spans) {
     const p = ensurePerson(people, s.person);
     p.minutes += s.total_minutes;
+    p.sessions += s.sessions;
     p.longest = Math.max(p.longest, s.longest_minutes);
     p.tools.add(s.tool);
-    if (s.tool === "openclaw") p.almaSessions += s.sessions;
+    p.dayMinutes[s.day] = (p.dayMinutes[s.day] ?? 0) + s.total_minutes;
+    if ([0, 6].includes(atUtc(s.day).getUTCDay())) p.weekendMinutes += s.total_minutes;
+    if (s.tool === "openclaw") {
+      p.almaSessions += s.sessions;
+      p.almaMinutes += s.total_minutes;
+    }
     totalMinutes += s.total_minutes;
     if (!toolNames.has(s.tool)) toolNames.set(s.tool, s.tool_name);
     if (s.longest_minutes > longestSession.minutes) {
@@ -174,10 +196,26 @@ export function compute(cells, spans, delegations = []) {
 
     if (c.tool === "openclaw") p.almaTurns += w;
     if (c.tool === "openclaw" && c.shape === "asking") p.almaResearch += w;
+
+    if (c.intent === "casual_conversation") p.casualTurns += w;
+    else if (c.intent === "troubleshooting_or_diagnosis") p.troubleshootTurns += w;
+    else if (c.intent === "draft_communication") p.draftTurns += w;
+    else if (c.intent === "configure_or_setup") p.configTurns += w;
   }
 
   for (const d of delegations) {
-    if (d.driven_tool === "claude_code") ensurePerson(people, d.person).droveClaudeCode += d.turns;
+    const p = ensurePerson(people, d.person);
+    p.drives += d.turns;
+    if (d.driven_tool === "claude_code") p.droveClaudeCode += d.turns;
+  }
+
+  for (const p of people.values()) {
+    for (const [day, min] of Object.entries(p.dayMinutes)) {
+      if (min > p.topDayMinutes) {
+        p.topDayMinutes = min;
+        p.topDayName = weekday(day);
+      }
+    }
   }
 
   const roster = [...people.values()];

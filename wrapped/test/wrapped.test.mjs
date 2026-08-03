@@ -49,24 +49,22 @@ test("engaged minutes and top person come from spans", () => {
   assert.equal(m.top5[0].person, "ana");
 });
 
-test("both Alma trophies select the right winner", () => {
-  // Claude Code is the deterministic delegation signal; research is the labeled
-  // asking-shaped Alma cells. Assert the rendered trophies, not internals.
+test("persona cards carry each person's own receipts, no award cards remain", () => {
   const rows = [
-    span({ person: "cc", tool: "openclaw", sessions: 2, total_minutes: 40 }),
-    span({ person: "rs", tool: "openclaw", sessions: 3, total_minutes: 60 }),
-    cell({ person: "cc", tool: "openclaw", shape: "doing", turns: 20 }),
-    { kind: "delegation", device: "d", person: "cc", day: "2026-07-21", tool: "openclaw", driven_tool: "claude_code", turns: 25 },
-    cell({ person: "rs", tool: "openclaw", shape: "asking", intent: "multi_source_synthesis", turns: 30 }),
+    span({ person: "grinder", tool: "openclaw", sessions: 30, total_minutes: 2000 }),
+    cell({ person: "grinder", tool: "openclaw", turns: 20, chars: 200, hour: 12 }),
+    span({ person: "casual", tool: "claude-code", tool_name: "Claude Code", sessions: 5, total_minutes: 200 }),
+    cell({ person: "casual", tool: "openclaw", shape: "expressing", intent: "casual_conversation", turns: 40, chars: 8000 }),
   ];
   const { cells, spans, delegations } = collect(rows);
   const m = compute(cells, spans, delegations);
   const cards = buildCards(m, { team: "T", weekLabel: "wk" });
-  const cc = cards.find((c) => c.title?.includes("Claude Code"));
-  const research = cards.find((c) => c.title?.includes("Research"));
-  assert.equal(cc.winner, "cc");
-  assert.match(cc.stat, /25 times/);
-  assert.equal(research.winner, "rs");
+  assert.equal(cards.filter((c) => c.kind === "trophy").length, 0, "awards removed");
+  const personas = cards.filter((c) => c.kind === "person");
+  assert.equal(personas.length, 2, "everyone gets a persona");
+  for (const p of personas) assert.ok(Array.isArray(p.chips), "personas carry stat chips");
+  const yap = personas.find((p) => p.personName === "casual");
+  assert.match(yap.line, /40/, "the joke is their own number");
 });
 
 test("delegation rows drive droveClaudeCode deterministically, ignoring other tools", () => {
@@ -84,26 +82,36 @@ test("delegation rows drive droveClaudeCode deterministically, ignoring other to
 });
 
 test("superlatives: everyone is named, badges unique while the roster fits the axes", () => {
-  const people = ["a", "b", "c", "d"].map((p, i) => ({
-    person: p, minutes: 10, longest: i * 40, turns: 20, askingTurns: i === 0 ? 20 : 0,
-    doingTurns: i === 1 ? 20 : 0, delegateTurns: i === 2 ? 15 : 0, lateTurns: i === 3 ? 18 : 0,
-    earlyTurns: 0, chars: 100 * (i + 1), tools: new Set(["openclaw", i === 0 ? "codex" : "openclaw"]),
-    almaResearch: 0,
-  }));
+  const mk = (person, over) => ({
+    person, minutes: 200, sessions: 10, longest: 30, turns: 20, askingTurns: 0, doingTurns: 0,
+    delegateTurns: 0, lateTurns: 0, earlyTurns: 0, chars: 4000, tools: new Set(["openclaw"]),
+    almaResearch: 0, almaTurns: 0, almaSessions: 0, almaMinutes: 0, weekendMinutes: 0,
+    dayMinutes: { "2026-07-21": 100 }, topDayMinutes: 100, topDayName: "Tuesday",
+    casualTurns: 0, troubleshootTurns: 0, draftTurns: 0, configTurns: 0, drives: 0, droveClaudeCode: 0,
+    ...over,
+  });
+  const people = [
+    mk("a", { minutes: 3000 }),
+    mk("b", { casualTurns: 50 }),
+    mk("c", { chars: 50000 }),
+    mk("d", { troubleshootTurns: 80 }),
+  ];
   const badges = assignSuperlatives(people);
   assert.equal(badges.length, 4);
   assert.equal(new Set(badges.map((b) => b.person)).size, 4);
   assert.equal(new Set(badges.map((b) => b.badge)).size, 4, "distinct badges for a small roster");
+  for (const b of badges) assert.ok(b.chips.length >= 1, "every persona carries receipts");
 });
 
-test("cards: full arc includes both trophies and a summary", () => {
-  const { cells, spans } = collect([span({ person: "p", total_minutes: 60 }), cell({ person: "p", tool: "openclaw", delegate_tool: "claude_code" })]);
+test("cards: the arc runs title → stats → personas → summary", () => {
+  const { cells, spans } = collect([span({ person: "p", total_minutes: 60 }), cell({ person: "p", tool: "openclaw" })]);
   const m = compute(cells, spans);
   const cards = buildCards(m, { team: "T", weekLabel: "wk" });
   const kinds = cards.map((c) => c.kind);
   assert.equal(kinds[0], "title");
   assert.equal(kinds.at(-1), "summary");
-  assert.equal(cards.filter((c) => c.kind === "trophy").length, 2);
+  assert.ok(kinds.includes("person"));
+  assert.ok(!kinds.includes("trophy"));
 });
 
 test("cards: an empty week degrades to a friendly non-crashing reel", () => {

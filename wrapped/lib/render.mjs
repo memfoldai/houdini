@@ -32,13 +32,11 @@ const LOUD = [
 // receipt — the week as a printed ledger you'd screenshot.
 const TITLE = { bg: "#0A0A0A", ink: "#FAF7F0", accent: "#D6FF3D" };
 const DRAMA = { bg: "#0A0A0A", ink: "#FAF7F0", accent: "#FF2D9B" };
-const GOLD = { bg: "#1A0B2E", ink: "#FAF7F0", accent: "#FFC94D" };
 const PAPER = { bg: "#F7F4EC", ink: "#141414", accent: "#FF2D9B" };
 
 function palette(card, loudCounter) {
   if (card.kind === "title") return TITLE;
   if (card.kind === "reveal") return DRAMA;
-  if (card.kind === "trophy") return GOLD;
   if (card.kind === "summary") return PAPER;
   return LOUD[loudCounter % LOUD.length];
 }
@@ -75,19 +73,11 @@ function body(card) {
         .join("");
       return `<ol class="podium">${rows}</ol>`;
     }
-    case "person":
-      return `<div class="badge">${esc(card.badge)}</div><div class="who-big">${esc(card.personName)}</div>`;
-    case "trophy": {
-      const podium =
-        card.winner && card.runnersUp && card.runnersUp.length
-          ? `<ol class="trophy-runners">${card.runnersUp
-              .map((r, i) => `<li><span class="tr-medal">${["🥈", "🥉"][i] ?? i + 2}</span><span class="tr-name">${esc(r.name)}</span><span class="tr-val">${esc(r.value)}</span></li>`)
-              .join("")}</ol>`
-          : "";
-      const win = card.winner
-        ? `<div class="trophy-win reveal-target">${esc(card.winner)}</div><div class="trophy-stat">${esc(card.stat)}</div>${podium}`
-        : `<div class="trophy-stat empty">${esc(card.stat)}</div>`;
-      return `<div class="trophy-emoji">${esc(card.emoji)}</div><div class="trophy-title">${esc(card.title)}</div>${win}`;
+    case "person": {
+      const chips = card.chips?.length
+        ? `<div class="chips">${card.chips.map((c) => `<span class="chip">${esc(c)}</span>`).join("")}</div>`
+        : "";
+      return `<div class="badge">${esc(card.badge)}</div><div class="who-big">${esc(card.personName)}</div>${chips}`;
     }
     case "summary": {
       const rows = card.grid
@@ -109,14 +99,10 @@ function section(card, idx, pal) {
   const bodyHtml = body(card);
   const sub = card.sub || card.line ? `<p class="sub">${esc(card.sub ?? card.line)}</p>` : "";
   const style = `--bg:${pal.bg};--ink:${pal.ink};--accent:${pal.accent}`;
-  // Title leads with the dated eyebrow into the masthead; trophy reads
-  // hero-first; the rest lead with the eyebrow.
+  // Title leads with the dated eyebrow into the masthead; the rest lead with
+  // the eyebrow into the hero.
   const inner =
-    card.kind === "title"
-      ? `${kicker}${bodyHtml}${sub}`
-      : card.kind === "trophy"
-        ? `${bodyHtml}${kicker}${heroHtml}${sub}`
-        : `${kicker}${heroHtml}${bodyHtml}${sub}`;
+    card.kind === "title" ? `${kicker}${bodyHtml}${sub}` : `${kicker}${heroHtml}${bodyHtml}${sub}`;
   return `<section class="card ${esc(card.kind)}${idx === 0 ? " active" : ""}" style="${style}" data-idx="${idx}" aria-hidden="${idx === 0 ? "false" : "true"}">
       <div class="card-inner">${inner}</div>
     </section>`;
@@ -129,7 +115,7 @@ export function renderHtml(cards, meta = {}) {
   const sections = cards
     .map((c, i) => {
       const pal = palette(c, loud);
-      if (!["title", "reveal", "trophy", "summary"].includes(c.kind)) loud++;
+      if (!["title", "reveal", "summary"].includes(c.kind)) loud++;
       return section(c, i, pal);
     })
     .join("\n");
@@ -214,20 +200,12 @@ p,div,span,li,ol,button{overflow-wrap:break-word;word-break:normal;hyphens:none}
 .podium li:nth-child(1) .rank{color:#FFC94D}
 .podium .val{flex:none}
 .podium .val small{font-size:.55em;font-weight:700;margin-left:.15ch;opacity:.72}
-/* person / superlative */
-.badge{font-weight:900;font-size:14cqmin;line-height:.96;letter-spacing:-.02em;color:var(--accent);text-wrap:balance}
-.who-big{font-weight:800;font-size:6.4cqmin;opacity:.95}
-/* trophy */
-.trophy-emoji{font-size:16cqmin;line-height:1}
-.trophy-title{font-weight:900;font-size:8cqmin;line-height:1.02;letter-spacing:-.02em;text-wrap:balance}
-.trophy-win{font-weight:900;font-size:15cqmin;line-height:.94;color:var(--accent);text-wrap:balance}
-.trophy-stat{font-size:5cqmin;font-weight:600;line-height:1.35;text-wrap:pretty}
-.trophy-stat.empty{opacity:.85;font-style:italic}
-.trophy-runners{list-style:none;display:flex;flex-direction:column;gap:1.7cqmin;margin-top:1.8cqmin;width:100%}
-.trophy-runners li{display:flex;align-items:center;gap:1.8cqmin;font-weight:800;font-size:4.8cqmin;opacity:.9}
-.tr-medal{width:1.6em;flex:none;text-align:center;color:var(--accent);font-variant-numeric:tabular-nums}
-.tr-name{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.tr-val{flex:none;opacity:.75;font-variant-numeric:tabular-nums}
+/* person / persona: archetype huge, the human under it, their receipts as
+   chips — the personalization IS the numbers. */
+.badge{font-weight:900;font-size:13cqmin;line-height:.96;letter-spacing:-.02em;color:var(--accent);text-wrap:balance}
+.who-big{font-weight:800;font-size:7cqmin;opacity:.95}
+.chips{display:flex;flex-wrap:wrap;gap:1.8cqmin}
+.chip{font-weight:800;font-size:3.5cqmin;letter-spacing:.02em;padding:.5em 1em;border:2px solid color-mix(in srgb,var(--ink) 45%,transparent);border-radius:999px;font-variant-numeric:tabular-nums;white-space:nowrap}
 /* summary: a printed receipt — heavy top rule, dotted leaders, tabular
    values right-aligned. No cards, no gradients. */
 .ledger{display:flex;flex-direction:column;border-top:1.4cqmin solid var(--ink);margin-top:1cqmin}
@@ -255,10 +233,6 @@ p,div,span,li,ol,button{overflow-wrap:break-word;word-break:normal;hyphens:none}
 .card.title.active .mast-line + .mast-line{animation-delay:.1s}
 .card.title.active .sub{animation:rise .5s .22s ease both}
 @keyframes rise{from{opacity:0;transform:translateY(26px)}to{opacity:1;transform:none}}
-/* trophy spotlight */
-.card.trophy{background:radial-gradient(circle at 50% 24%, color-mix(in srgb,var(--accent) 20%, var(--bg)), var(--bg) 58%)}
-.trophy-emoji{filter:drop-shadow(0 8px 26px color-mix(in srgb,var(--accent) 55%, transparent))}
-.trophy-win{text-shadow:0 0 34px color-mix(in srgb,var(--accent) 55%, transparent)}
 @media (prefers-reduced-motion: reduce){
   .card{transition:none}
   .rk-track i,.podium li{transition:none}
@@ -300,7 +274,7 @@ const JS = `
     }
     if(cfp.length) cfraf=requestAnimationFrame(cfStep); else { cfraf=0; cfx.clearRect(0,0,cfc.width,cfc.height); }
   }
-  function maybeConfetti(card){ if(/(^| )(title|reveal|trophy|summary)( |$)/.test(card.className)) burst(); }
+  function maybeConfetti(card){ if(/(^| )(title|reveal|summary)( |$)/.test(card.className)) burst(); }
 
   function durationFor(card){
     var txt=(card.textContent||'').trim().length;
