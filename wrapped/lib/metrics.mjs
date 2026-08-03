@@ -83,13 +83,13 @@ function ensurePerson(people, name) {
       almaTurns: 0,
       almaSessions: 0,
       almaMinutes: 0,
-      weekendMinutes: 0,
-      // Per-day engaged minutes → topDay* below; the persona cards joke about
-      // one-day frontloading and parallel-session days, so keep the raw map.
+      ccSessions: 0,
+      ccMinutes: 0,
+      // Days a session STARTED on — safe for "active days", but never for
+      // weekend/one-day claims: span minutes land on the start day, so a
+      // Friday-night session swallows the Saturday that followed it.
       dayMinutes: {},
-      topDayMinutes: 0,
-      topDayName: "",
-      // Intent/domain buckets the persona axes rank on.
+      // Intent buckets the persona axes rank on.
       casualTurns: 0,
       troubleshootTurns: 0,
       draftTurns: 0,
@@ -146,10 +146,12 @@ export function compute(cells, spans, delegations = []) {
     p.longest = Math.max(p.longest, s.longest_minutes);
     p.tools.add(s.tool);
     p.dayMinutes[s.day] = (p.dayMinutes[s.day] ?? 0) + s.total_minutes;
-    if ([0, 6].includes(atUtc(s.day).getUTCDay())) p.weekendMinutes += s.total_minutes;
     if (s.tool === "openclaw") {
       p.almaSessions += s.sessions;
       p.almaMinutes += s.total_minutes;
+    } else if (s.tool === "claude-code") {
+      p.ccSessions += s.sessions;
+      p.ccMinutes += s.total_minutes;
     }
     totalMinutes += s.total_minutes;
     if (!toolNames.has(s.tool)) toolNames.set(s.tool, s.tool_name);
@@ -207,15 +209,6 @@ export function compute(cells, spans, delegations = []) {
     const p = ensurePerson(people, d.person);
     p.drives += d.turns;
     if (d.driven_tool === "claude_code") p.droveClaudeCode += d.turns;
-  }
-
-  for (const p of people.values()) {
-    for (const [day, min] of Object.entries(p.dayMinutes)) {
-      if (min > p.topDayMinutes) {
-        p.topDayMinutes = min;
-        p.topDayName = weekday(day);
-      }
-    }
   }
 
   const roster = [...people.values()];

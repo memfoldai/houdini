@@ -46,7 +46,7 @@ export function buildCards(m, opts = {}) {
       kind: "stat",
       kicker: "time spent with AI",
       ...hours(m.totalMinutes),
-      sub: jobs >= 2 ? `as a team. that's ${int(jobs)} people's entire work week spent talking to robots.` : "as a team. the robots know everything now.",
+      sub: jobs >= 2 ? `as a team. that's ${int(jobs)} entire work weeks. in seven days.` : "as a team. respectable. suspicious, but respectable.",
     });
   }
 
@@ -117,25 +117,6 @@ export function buildCards(m, opts = {}) {
       kicker: "busiest day",
       heroText: m.busyDay.label,
       sub: "carried the week like a group project with one working member.",
-    });
-  }
-
-  if (m.longestSession && m.longestSession.minutes > 0) {
-    cards.push({
-      kind: "stat",
-      kicker: "longest single session",
-      heroNumber: m.longestSession.minutes,
-      heroUnit: plural(m.longestSession.minutes, "minute", "minutes"),
-      sub: `${firstName(m.longestSession.person)}, in one sitting. blink twice if you need help.`,
-    });
-  }
-
-  if (m.topPerson && m.topPerson.minutes > 0) {
-    cards.push({
-      kind: "reveal",
-      kicker: "the one who cooked the most",
-      heroText: firstName(m.topPerson.person),
-      sub: "out-prompted the entire team. it wasn't even close. no crumbs left.",
     });
   }
 
