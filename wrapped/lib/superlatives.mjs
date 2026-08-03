@@ -19,14 +19,14 @@ const AXES = [
     badge: "cooked",
     value: (p) => p.minutes,
     gate: (p) => p.minutes >= 600,
-    line: (p) => `${h(p.minutes)} hours with AI in seven days. that's ${Math.round(p.minutes / 60 / 40)} full-time jobs. the sleep schedule is chopped.`,
+    line: (p) => `${h(p.minutes)} hours in seven days. not using AI anymore — cohabiting with it.`,
     chips: (p) => [`${h(p.minutes)}h total`, `${int(p.sessions)} sessions`, `${activeDays(p)}/7 days`],
   },
   {
     badge: "the lore dropper",
     value: avgChars,
     gate: (p) => p.turns > 10 && avgChars(p) > 600,
-    line: (p) => `${int(avgChars(p))} characters per prompt. that's not a prompt, that's lore. the AI needs a recap episode.`,
+    line: (p) => `${int(avgChars(p))} characters per prompt. every message opens with a previously-on segment.`,
     chips: (p) => [`${int(avgChars(p))} chars/prompt`, `${int(p.turns)} prompts`],
   },
   {
@@ -35,35 +35,35 @@ const AXES = [
     // exactly that; never claim a literal quote count (people fact-check).
     value: (p) => p.troubleshootTurns,
     gate: (p) => p.troubleshootTurns > 30,
-    line: (p) => `${int(p.troubleshootTurns)} of their prompts were pure debugging. the bugs are living in there rent free.`,
+    line: (p) => `${int(p.troubleshootTurns)} debugging prompts. the bugs have started a group chat about them.`,
     chips: (p) => [`${int(p.troubleshootTurns)} debugging prompts`, `${int(p.turns)} total analyzed`],
   },
   {
     badge: "the situationship",
     value: (p) => p.casualTurns,
     gate: (p) => p.casualTurns > 20,
-    line: (p) => `${int(p.casualTurns)} casual convos with the AI this week. that's not a tool anymore. hard launch when?`,
+    line: (p) => `${int(p.casualTurns)} casual convos. no task, no agenda, just vibes. hard launch when?`,
     chips: (p) => [`${int(p.casualTurns)} just chatting`, `${int(p.sessions)} sessions`],
   },
   {
     badge: "the hit and run",
     value: (p) => p.almaSessions / (p.almaMinutes + 1),
     gate: (p) => p.almaSessions >= 60 && almaSecs(p) < 120,
-    line: (p) => `${int(p.almaSessions)} Alma sessions, ${almaSecs(p)} seconds each on average. in and out like it owes them money.`,
+    line: (p) => `${almaSecs(p)} seconds per Alma session. no hi, no bye, no witnesses.`,
     chips: (p) => [`${int(p.almaSessions)} sessions`, `~${almaSecs(p)}s each`],
   },
   {
     badge: "alma's day one",
     value: (p) => p.almaMinutes / Math.max(p.minutes, 1),
     gate: (p) => p.almaMinutes > 120 && p.almaMinutes / Math.max(p.minutes, 1) > 0.5,
-    line: (p) => `${pct(p.almaMinutes / p.minutes)}% of their AI time was Alma. no side quests. main quest only.`,
+    line: (p) => `${pct(p.almaMinutes / p.minutes)}% of their AI time is Alma. day one behavior. everyone else is a tourist.`,
     chips: (p) => [`${pct(p.almaMinutes / p.minutes)}% Alma`, `${h(p.almaMinutes)}h with Alma`],
   },
   {
     badge: "3am coded",
     value: (p) => p.lateTurns,
     gate: (p) => p.lateTurns > 10,
-    line: (p) => `${int(p.lateTurns)} prompts past midnight. sleep schedule in shambles. the thoughts win every night.`,
+    line: (p) => `${int(p.lateTurns)} prompts past midnight. the thoughts text "you up?" and the answer is always yes.`,
     chips: (p) => [`${int(p.lateTurns)} midnight prompts`, `${int(p.turns)} total`],
   },
   {
@@ -78,7 +78,7 @@ const AXES = [
     // Engaged Claude Code session length — long, silent, focused blocks.
     value: (p) => p.ccMinutes / Math.max(p.ccSessions, 1),
     gate: (p) => p.ccSessions >= 5 && p.ccMinutes / Math.max(p.ccSessions, 1) >= 60,
-    line: (p) => `${int(p.ccSessions)} Claude Code sessions, ${Math.round(p.ccMinutes / p.ccSessions)} minutes each. permanently in the trenches. send rations.`,
+    line: (p) => `${Math.round(p.ccMinutes / p.ccSessions)}-minute Claude Code sittings, back to back. last seen headed underground. send rations.`,
     chips: (p) => [`~${Math.round(p.ccMinutes / p.ccSessions)}m per session`, `${h(p.ccMinutes)}h in Claude Code`],
   },
   {
@@ -87,14 +87,14 @@ const AXES = [
     // deterministic transcript tool-calls, so the count itself is unarguable.
     value: (p) => p.drives,
     gate: (p) => p.drives >= 20,
-    line: (p) => `had one AI boss another AI around ${int(p.drives)} times this week. delegation era.`,
+    line: (p) => `had one AI boss another around ${int(p.drives)} times. doesn't do tasks anymore, does org charts.`,
     chips: (p) => [`${int(p.drives)} handoffs`, `${int(p.sessions)} sessions`],
   },
   {
     badge: "the setup arc",
     value: (p) => p.configTurns,
     gate: (p) => p.configTurns >= 20,
-    line: (p) => `${int(p.configTurns)} prompts just configuring things. still not configured. the journey continues.`,
+    line: (p) => `${int(p.configTurns)} setup prompts. everything is almost configured. the actual work remains theoretical.`,
     chips: (p) => [`${int(p.configTurns)} setup prompts`, `${p.tools.size} AIs`],
   },
   {
@@ -108,7 +108,7 @@ const AXES = [
     badge: "the drive-by",
     value: (p) => p.sessions / (p.minutes + 1),
     gate: (p) => p.minutes > 0 && p.minutes < 180 && p.sessions >= 10,
-    line: (p) => `${int(p.sessions)} visits, about ${Math.max(1, Math.round(p.minutes / p.sessions))} minute${Math.round(p.minutes / p.sessions) === 1 ? "" : "s"} each. gets the answer and dips.`,
+    line: (p) => `${Math.max(1, Math.round(p.minutes / p.sessions))}-minute visits. gets the answer, dips, leaves the AI on delivered.`,
     chips: (p) => [`${int(p.sessions)} visits`, `~${Math.max(1, Math.round(p.minutes / p.sessions))}m each`],
   },
   {
