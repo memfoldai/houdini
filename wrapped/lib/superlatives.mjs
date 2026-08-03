@@ -19,14 +19,14 @@ const AXES = [
     badge: "cooked",
     value: (p) => p.minutes,
     gate: (p) => p.minutes >= 600,
-    line: (p) => `${h(p.minutes)} hours in seven days. not using AI anymore — cohabiting with it.`,
+    line: (p) => `${h(p.minutes)} hours in one week is crazy work. somebody go check on them fr.`,
     chips: (p) => [`${h(p.minutes)}h total`, `${int(p.sessions)} sessions`, `${activeDays(p)}/7 days`],
   },
   {
     badge: "the lore dropper",
     value: avgChars,
     gate: (p) => p.turns > 10 && avgChars(p) > 600,
-    line: (p) => `${int(avgChars(p))} characters per prompt. every message opens with a previously-on segment.`,
+    line: (p) => `${int(avgChars(p))} characters per prompt. this needs to be studied fr.`,
     chips: (p) => [`${int(avgChars(p))} chars/prompt`, `${int(p.turns)} prompts`],
   },
   {
@@ -35,7 +35,7 @@ const AXES = [
     // exactly that; never claim a literal quote count (people fact-check).
     value: (p) => p.troubleshootTurns,
     gate: (p) => p.troubleshootTurns > 30,
-    line: (p) => `${int(p.troubleshootTurns)} debugging prompts. the bugs have started a group chat about them.`,
+    line: (p) => `${int(p.troubleshootTurns)} debugging prompts and the bug is still undefeated.`,
     chips: (p) => [`${int(p.troubleshootTurns)} debugging prompts`, `${int(p.turns)} total analyzed`],
   },
   {
@@ -63,7 +63,7 @@ const AXES = [
     badge: "3am coded",
     value: (p) => p.lateTurns,
     gate: (p) => p.lateTurns > 10,
-    line: (p) => `${int(p.lateTurns)} prompts past midnight. the thoughts text "you up?" and the answer is always yes.`,
+    line: (p) => `${int(p.lateTurns)} prompts past midnight. sleep is losing the 1v1.`,
     chips: (p) => [`${int(p.lateTurns)} midnight prompts`, `${int(p.turns)} total`],
   },
   {
@@ -78,7 +78,7 @@ const AXES = [
     // Engaged Claude Code session length — long, silent, focused blocks.
     value: (p) => p.ccMinutes / Math.max(p.ccSessions, 1),
     gate: (p) => p.ccSessions >= 5 && p.ccMinutes / Math.max(p.ccSessions, 1) >= 60,
-    line: (p) => `${Math.round(p.ccMinutes / p.ccSessions)}-minute Claude Code sittings, back to back. last seen headed underground. send rations.`,
+    line: (p) => `${Math.round(p.ccMinutes / p.ccSessions)}-minute Claude Code sessions, no breaks. dawg is not leaving the trenches.`,
     chips: (p) => [`~${Math.round(p.ccMinutes / p.ccSessions)}m per session`, `${h(p.ccMinutes)}h in Claude Code`],
   },
   {
@@ -94,7 +94,7 @@ const AXES = [
     badge: "the setup arc",
     value: (p) => p.configTurns,
     gate: (p) => p.configTurns >= 20,
-    line: (p) => `${int(p.configTurns)} setup prompts. everything is almost configured. the actual work remains theoretical.`,
+    line: (p) => `${int(p.configTurns)} setup prompts. everything is almost ready. the work starts tomorrow, allegedly.`,
     chips: (p) => [`${int(p.configTurns)} setup prompts`, `${p.tools.size} AIs`],
   },
   {
