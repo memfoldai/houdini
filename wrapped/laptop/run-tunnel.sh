@@ -31,21 +31,31 @@ online() { $CURL -sf --max-time 6 -o /dev/null https://api.github.com/zen; }
 
 published=""
 fails=0
+last_publish_try=0
 while kill -0 "$CF" 2>/dev/null; do
   url="$(grep -oE 'https://[a-z0-9.-]+\.trycloudflare\.com' "$CFLOG" | tail -1 || true)"
   if [ -n "$url" ] && [ "$url" != "$published" ]; then
-    printf '{"files":{"houdini-collector.txt":{"content":"%s"}}}' "$url" > "$DIR/gist-payload.json"
-    if $GH api -X PATCH "/gists/$GIST_ID" --input "$DIR/gist-payload.json" >/dev/null 2>&1; then
-      published="$url"
-      fails=0
-      echo "$(date '+%F %T') published $url to gist $GIST_ID"
-    else
-      echo "$(date '+%F %T') gist update failed (will retry) for $url"
+    # Publish retries are spaced 5 minutes apart: a 20s retry loop once tripped
+    # GitHub's rate limit and then kept itself limited for a day and a half.
+    now=$(date +%s)
+    if [ $((now - last_publish_try)) -ge 300 ]; then
+      last_publish_try=$now
+      printf '{"files":{"houdini-collector.txt":{"content":"%s"}}}' "$url" > "$DIR/gist-payload.json"
+      if $GH api -X PATCH "/gists/$GIST_ID" --input "$DIR/gist-payload.json" >/dev/null 2>&1; then
+        published="$url"
+        fails=0
+        echo "$(date '+%F %T') published $url to gist $GIST_ID"
+      else
+        echo "$(date '+%F %T') gist update failed (retry in 5m) for $url"
+      fi
     fi
   fi
 
-  if [ -n "$published" ]; then
-    if $CURL -s --max-time 8 "$published/health" | grep -q ok; then
+  # Health-check the tunnel's OWN url, published or not: an unpublished wedged
+  # tunnel must still be detected and restarted, or the publish loop above
+  # retries a dead hostname forever.
+  if [ -n "$url" ]; then
+    if $CURL -s --max-time 8 "$url/health" | grep -q ok; then
       fails=0
     elif online; then
       fails=$((fails + 1))
