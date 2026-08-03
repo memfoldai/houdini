@@ -46,7 +46,7 @@ export function buildCards(m, opts = {}) {
       kind: "stat",
       kicker: "time spent with AI",
       ...hours(m.totalMinutes),
-      sub: jobs >= 2 ? `as a team. that's ${int(jobs)} entire work weeks. in seven days.` : "as a team. respectable. suspicious, but respectable.",
+      sub: jobs >= 2 ? `as a team. that's ${int(jobs)} entire work weeks in seven days. be so fr.` : "as a team. respectable. suspicious, but respectable.",
     });
   }
 
