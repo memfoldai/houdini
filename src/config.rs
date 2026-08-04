@@ -178,7 +178,13 @@ pub fn load_or_init(config_file: &Path) -> std::io::Result<AppConfig> {
     if config_file.exists() {
         let bytes = fs::read(config_file)?;
         match serde_json::from_slice::<AppConfig>(&bytes) {
-            Ok(cfg) => {
+            Ok(mut cfg) => {
+                // Config migration: a stored model the proxy has retired would
+                // 400 on every labeling call, so rewrite it to the current
+                // default before the labeler is built.
+                if crate::analytics::RETIRED_MODELS.contains(&cfg.analytics_model.as_str()) {
+                    cfg.analytics_model = d_analytics_model();
+                }
                 write_config(config_file, &cfg)?;
                 return Ok(cfg);
             }
@@ -254,13 +260,38 @@ mod tests {
             reread.contains("transcript_poll_ms"),
             "file upgraded on load"
         );
-        assert_eq!(cfg.analytics_model, "gpt-5.5", "analytics defaults fill in");
+        assert_eq!(
+            cfg.analytics_model,
+            crate::analytics::DEFAULT_MODEL,
+            "analytics defaults fill in"
+        );
         assert!(!cfg.person.is_empty(), "an identity is always resolved");
         assert!(!cfg.device_name.is_empty(), "a device name is always resolved");
         assert!(
             reread.contains("analytics_base_url"),
             "analytics fields materialize in an older file"
         );
+        fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_retired_analytics_model_is_migrated_on_load() {
+        let dir = std::env::temp_dir().join(format!("houdini-retired-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let cf = dir.join("config.json");
+        fs::write(
+            &cf,
+            r#"{"install_id":"keep-me","analytics_model":"gpt-5.5"}"#,
+        )
+        .unwrap();
+        let cfg = load_or_init(&cf).expect("retired-model config must load");
+        assert_eq!(
+            cfg.analytics_model,
+            crate::analytics::DEFAULT_MODEL,
+            "the proxy retired gpt-5.5; a stored config must migrate or every label call 400s"
+        );
+        let reread = fs::read_to_string(&cf).unwrap();
+        assert!(!reread.contains("\"gpt-5.5\""), "migrated value persisted");
         fs::remove_dir_all(&dir).ok();
     }
 

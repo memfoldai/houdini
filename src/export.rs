@@ -10,6 +10,7 @@ const SCHEMA: &str = "aum/3";
 #[derive(serde::Serialize)]
 struct InteractionRow {
     schema: &'static str,
+    app_version: &'static str,
     kind: &'static str,
     event_id: String,
     device: String,
@@ -64,6 +65,7 @@ pub fn export_snapshot(
             let day = ymd_utc(turn.ts_ms);
             let row = InteractionRow {
                 schema: SCHEMA,
+                app_version: env!("CARGO_PKG_VERSION"),
                 kind: "interaction",
                 event_id: format!("{device}:{}:{}", s.external_id, turn.seq),
                 device: device.to_string(),
@@ -140,6 +142,7 @@ pub struct ExportIdentity<'a> {
 #[derive(serde::Serialize)]
 struct AnalyticsCellRow<'a> {
     schema: &'a str,
+    app_version: &'static str,
     kind: &'a str,
     device: String,
     person: String,
@@ -167,6 +170,7 @@ struct AnalyticsCellRow<'a> {
 #[derive(serde::Serialize)]
 struct SessionSpanRow<'a> {
     schema: &'a str,
+    app_version: &'static str,
     kind: &'a str,
     device: String,
     person: String,
@@ -182,6 +186,7 @@ struct SessionSpanRow<'a> {
 #[derive(serde::Serialize)]
 struct DelegationRow<'a> {
     schema: &'a str,
+    app_version: &'static str,
     kind: &'a str,
     device: String,
     person: String,
@@ -196,6 +201,7 @@ struct DelegationRow<'a> {
 #[derive(serde::Serialize)]
 struct CandidateRow<'a> {
     schema: &'a str,
+    app_version: &'static str,
     kind: &'a str,
     device: String,
     taxonomy_version: i64,
@@ -222,6 +228,7 @@ pub fn export_analytics(
     {
         let row = AnalyticsCellRow {
             schema: SCHEMA,
+            app_version: env!("CARGO_PKG_VERSION"),
             kind: "analytics_cell",
             device: device.to_string(),
             person: identity.person.to_string(),
@@ -251,6 +258,7 @@ pub fn export_analytics(
     for span in store.session_spans().map_err(io_err)? {
         let row = SessionSpanRow {
             schema: SCHEMA,
+            app_version: env!("CARGO_PKG_VERSION"),
             kind: "session_span",
             device: device.to_string(),
             person: identity.person.to_string(),
@@ -268,6 +276,7 @@ pub fn export_analytics(
     for d in store.delegation_spans().map_err(io_err)? {
         let row = DelegationRow {
             schema: SCHEMA,
+            app_version: env!("CARGO_PKG_VERSION"),
             kind: "delegation",
             device: device.to_string(),
             person: identity.person.to_string(),
@@ -286,6 +295,7 @@ pub fn export_analytics(
         .map_err(io_err)? {
         let row = CandidateRow {
             schema: SCHEMA,
+            app_version: env!("CARGO_PKG_VERSION"),
             kind: "label_candidate",
             device: device.to_string(),
             taxonomy_version: candidate.taxonomy_version,
