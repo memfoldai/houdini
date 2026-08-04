@@ -7,6 +7,7 @@ pub mod export;
 pub mod ingest;
 pub mod ingest_actions;
 pub mod ingest_hook_events;
+pub mod ingest_voice_shortcuts;
 pub mod logging;
 pub mod redact;
 pub mod store;

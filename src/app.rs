@@ -30,6 +30,7 @@ use houdini::export;
 use houdini::ingest::Ingestor;
 use houdini::ingest_actions::ActionIngestor;
 use houdini::ingest_hook_events::HookEventIngestor;
+use houdini::ingest_voice_shortcuts::VoiceShortcutIngestor;
 use houdini::store::{ActivityStats, Store, INGEST_SINCE_KEY, PAUSE_UNTIL_KEY};
 use houdini::webingest;
 
@@ -86,6 +87,7 @@ struct Runtime {
     ingestor: RefCell<Ingestor>,
     action_ingestor: RefCell<ActionIngestor>,
     hook_ingestor: HookEventIngestor,
+    voice_ingestor: VoiceShortcutIngestor,
     install_id: String,
     person: String,
     device_name: String,
@@ -324,6 +326,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
     let ingestor = Ingestor::new(home.clone(), ingest_since_ms);
     let action_ingestor = ActionIngestor::new(home.clone(), ingest_since_ms);
     let hook_ingestor = HookEventIngestor::new(home.clone());
+    let voice_ingestor = VoiceShortcutIngestor::new(home.clone());
     let transcripts_changed = Arc::new(AtomicBool::new(false));
     let watcher = start_watcher(
         &home,
@@ -352,6 +355,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         ingestor: RefCell::new(ingestor),
         action_ingestor: RefCell::new(action_ingestor),
         hook_ingestor,
+        voice_ingestor,
         install_id: cfg.install_id.clone(),
         person: cfg.person.clone(),
         device_name: cfg.device_name.clone(),
@@ -548,7 +552,9 @@ fn tick(rt: &Rc<Runtime>) {
                     stats.sessions
                 );
             }
-            let acted = rt.action_ingestor.borrow_mut().poll(&rt.store) + rt.hook_ingestor.poll(&rt.store);
+            let acted = rt.action_ingestor.borrow_mut().poll(&rt.store)
+                + rt.hook_ingestor.poll(&rt.store)
+                + rt.voice_ingestor.poll(&rt.store);
             if acted > 0 {
                 log::info!("attributed {acted} new agent action(s)");
             }
