@@ -322,6 +322,16 @@ impl Store {
             params![since_ms],
             |r| r.get(0),
         )?;
+        let connectors: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM actions WHERE ts >= ?1 AND tool = 'connector'",
+            params![since_ms],
+            |r| r.get(0),
+        )?;
+        let shortcuts: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM actions WHERE ts >= ?1 AND tool = 'shortcut'",
+            params![since_ms],
+            |r| r.get(0),
+        )?;
         let last_session: Option<i64> =
             self.conn
                 .query_row("SELECT MAX(ended_at) FROM sessions", [], |r| r.get(0))?;
@@ -331,6 +341,8 @@ impl Store {
         Ok(ActivityStats {
             recent_interactions: interactions,
             recent_actions: actions,
+            recent_connectors: connectors,
+            recent_shortcuts: shortcuts,
             last_activity_ms: last_session.max(last_action),
         })
     }
@@ -807,6 +819,8 @@ pub struct SessionUpsert<'a> {
 pub struct ActivityStats {
     pub recent_interactions: i64,
     pub recent_actions: i64,
+    pub recent_connectors: i64,
+    pub recent_shortcuts: i64,
     pub last_activity_ms: Option<i64>,
 }
 

@@ -824,15 +824,17 @@ fn refresh_menu(rt: &Rc<Runtime>, glyph: Glyph, now_ms: i64, stats: &ActivitySta
         rt.detail_item.set_text("Nothing recorded yet today");
     } else {
         rt.detail_item.set_text(format!(
-            "{} AI session{} · {} action{} today · last {}",
+            "{} AI session{} · {} connector{} · {} shortcut{} today · last {}",
             stats.recent_interactions,
             if stats.recent_interactions == 1 {
                 ""
             } else {
                 "s"
             },
-            stats.recent_actions,
-            if stats.recent_actions == 1 { "" } else { "s" },
+            stats.recent_connectors,
+            if stats.recent_connectors == 1 { "" } else { "s" },
+            stats.recent_shortcuts,
+            if stats.recent_shortcuts == 1 { "" } else { "s" },
             relative_time(stats.last_activity_ms, now_ms)
         ));
     }
