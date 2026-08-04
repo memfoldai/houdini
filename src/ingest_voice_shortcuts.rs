@@ -1,4 +1,6 @@
+use std::collections::HashMap;
 use std::fs;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::PathBuf;
 
 use serde_json::Value;
@@ -14,11 +16,17 @@ const CURSOR_KEY: &str = "voice_shortcut_trace_cursor";
 
 pub struct VoiceShortcutIngestor {
     home: PathBuf,
+    offsets: HashMap<PathBuf, u64>,
+    meta: HashMap<PathBuf, (i64, u64)>,
 }
 
 impl VoiceShortcutIngestor {
     pub fn new(home: PathBuf) -> Self {
-        Self { home }
+        Self {
+            home,
+            offsets: HashMap::new(),
+            meta: HashMap::new(),
+        }
     }
 
     fn trace_paths(&self) -> Vec<PathBuf> {
@@ -29,12 +37,44 @@ impl VoiceShortcutIngestor {
             .collect()
     }
 
-    pub fn poll(&self, store: &Store) -> usize {
+    pub fn poll(&mut self, store: &Store) -> usize {
         let mut added = 0;
         for path in self.trace_paths() {
-            let Ok(body) = fs::read_to_string(&path) else {
+            let Ok(md) = fs::metadata(&path) else { continue };
+            let mtime = md
+                .modified()
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or(0);
+            let size = md.len();
+            if self.meta.get(&path) == Some(&(mtime, size)) {
                 continue;
-            };
+            }
+            let mut start = *self.offsets.get(&path).unwrap_or(&0);
+            if size < start {
+                start = 0;
+            }
+            let Ok(mut f) = fs::File::open(&path) else { continue };
+            if f.seek(SeekFrom::Start(start)).is_err() {
+                continue;
+            }
+            let mut body = String::new();
+            if f.read_to_string(&mut body).is_err() {
+                continue;
+            }
+            let consumed = start + body.len() as u64;
+            let trailing_partial = !body.ends_with('\n');
+            if trailing_partial {
+                if let Some(cut) = body.rfind('\n') {
+                    body.truncate(cut + 1);
+                } else {
+                    body.clear();
+                }
+            }
+            self.offsets.insert(path.clone(), start + body.len() as u64);
+            let _ = consumed;
+            self.meta.insert(path.clone(), (mtime, size));
             let cursor_key = format!("{CURSOR_KEY}:{}", path.display());
             let cursor = store
                 .get_setting(&cursor_key)
@@ -127,7 +167,8 @@ mod tests {
 
     const SAMPLE: &str = r#"{"ts":"2026-08-03T16:34:03.861Z","pid":97933,"proc":"narrator","cat":"action-gate","msg":"executed","sessionKey":"agent:main:main","runId":1,"tool":"visualise","command":"shortcut visualise","status":"ok","execMs":10698}
 {"ts":"2026-08-03T16:33:53.161Z","pid":97933,"proc":"narrator","cat":"action-gate","msg":"acting","sessionKey":"agent:main:main","runId":1,"tool":"visualise","argumentPreview":"visualize how this works"}
-{"ts":"2026-08-03T16:35:00.000Z","pid":97933,"proc":"narrator","cat":"action-gate","msg":"executed","sessionKey":"agent:main:main","runId":2,"tool":"schedule","command":"shortcut schedule tomorrow 4pm","status":"ok","execMs":900}"#;
+{"ts":"2026-08-03T16:35:00.000Z","pid":97933,"proc":"narrator","cat":"action-gate","msg":"executed","sessionKey":"agent:main:main","runId":2,"tool":"schedule","command":"shortcut schedule tomorrow 4pm","status":"ok","execMs":900}
+"#;
 
     #[test]
     fn executed_voice_runs_become_human_shortcut_actions_once() {
@@ -136,9 +177,18 @@ mod tests {
         std::fs::write(dir.join(".almanac/huddle-trace.log"), SAMPLE).unwrap();
 
         let store = Store::open_in_memory().unwrap();
-        let ing = VoiceShortcutIngestor::new(dir.clone());
+        let mut ing = VoiceShortcutIngestor::new(dir.clone());
         assert_eq!(ing.poll(&store), 2, "two executed events; acting is ignored");
-        assert_eq!(ing.poll(&store), 0, "cursor makes re-polls add nothing");
+        assert_eq!(ing.poll(&store), 0, "metadata gate and cursor make re-polls free");
+
+        let mut extra = std::fs::OpenOptions::new()
+            .append(true)
+            .open(dir.join(".almanac/huddle-trace.log"))
+            .unwrap();
+        use std::io::Write;
+        writeln!(extra, r#"{{"ts":"2026-08-03T16:36:00.000Z","pid":97933,"proc":"narrator","cat":"action-gate","msg":"executed","sessionKey":"agent:main:main","runId":3,"tool":"annotate","command":"shortcut annotate","status":"ok","execMs":100}}"#).unwrap();
+        drop(extra);
+        assert_eq!(ing.poll(&store), 1, "only the appended tail is read and added");
 
         let spans = store.shortcut_spans().unwrap();
         let names: Vec<_> = spans.iter().map(|u| u.action.as_str()).collect();

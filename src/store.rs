@@ -744,10 +744,10 @@ impl Store {
     fn usage_spans(&self, tool: &str) -> rusqlite::Result<Vec<UsageSpan>> {
         let mut stmt = self.conn.prepare(
             "SELECT strftime('%Y-%m-%d', ts / 1000, 'unixepoch') AS day,
-                    COALESCE(app, ''), action, COUNT(*)
+                    COALESCE(NULLIF(app, ''), 'unknown'), action, COUNT(*)
              FROM actions
              WHERE tool = ?1
-             GROUP BY day, app, action
+             GROUP BY day, 2, action
              ORDER BY day DESC",
         )?;
         let rows = stmt.query_map(params![tool], |r| {

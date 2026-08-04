@@ -86,8 +86,8 @@ struct Runtime {
     store: Rc<Store>,
     ingestor: RefCell<Ingestor>,
     action_ingestor: RefCell<ActionIngestor>,
-    hook_ingestor: HookEventIngestor,
-    voice_ingestor: VoiceShortcutIngestor,
+    hook_ingestor: RefCell<HookEventIngestor>,
+    voice_ingestor: RefCell<VoiceShortcutIngestor>,
     install_id: String,
     person: String,
     device_name: String,
@@ -354,8 +354,8 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         store,
         ingestor: RefCell::new(ingestor),
         action_ingestor: RefCell::new(action_ingestor),
-        hook_ingestor,
-        voice_ingestor,
+        hook_ingestor: RefCell::new(hook_ingestor),
+        voice_ingestor: RefCell::new(voice_ingestor),
         install_id: cfg.install_id.clone(),
         person: cfg.person.clone(),
         device_name: cfg.device_name.clone(),
@@ -553,8 +553,8 @@ fn tick(rt: &Rc<Runtime>) {
                 );
             }
             let acted = rt.action_ingestor.borrow_mut().poll(&rt.store)
-                + rt.hook_ingestor.poll(&rt.store)
-                + rt.voice_ingestor.poll(&rt.store);
+                + rt.hook_ingestor.borrow_mut().poll(&rt.store)
+                + rt.voice_ingestor.borrow_mut().poll(&rt.store);
             if acted > 0 {
                 log::info!("attributed {acted} new agent action(s)");
             }

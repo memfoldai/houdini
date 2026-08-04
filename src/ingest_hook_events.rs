@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use rusqlite::{Connection, OpenFlags};
@@ -13,11 +14,15 @@ const HOMES: &[&str] = &[".openclaw", ".openclaw-user", ".openclaw-dev"];
 
 pub struct HookEventIngestor {
     home: PathBuf,
+    meta: HashMap<PathBuf, (i64, u64)>,
 }
 
 impl HookEventIngestor {
     pub fn new(home: PathBuf) -> Self {
-        Self { home }
+        Self {
+            home,
+            meta: HashMap::new(),
+        }
     }
 
     fn db_paths(&self) -> Vec<PathBuf> {
@@ -33,9 +38,30 @@ impl HookEventIngestor {
             .collect()
     }
 
-    pub fn poll(&self, store: &Store) -> usize {
+    pub fn poll(&mut self, store: &Store) -> usize {
         let mut added = 0;
         for path in self.db_paths() {
+            let wal = path.with_extension("db-wal");
+            let sig = |p: &PathBuf| -> (i64, u64) {
+                std::fs::metadata(p)
+                    .map(|m| {
+                        let t = m
+                            .modified()
+                            .ok()
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_millis() as i64)
+                            .unwrap_or(0);
+                        (t, m.len())
+                    })
+                    .unwrap_or((0, 0))
+            };
+            let (dt, ds) = sig(&path);
+            let (wt, ws) = sig(&wal);
+            let combined = (dt.max(wt), ds.wrapping_add(ws));
+            if self.meta.get(&path) == Some(&combined) {
+                continue;
+            }
+            self.meta.insert(path.clone(), combined);
             match self.drain(store, &path) {
                 Ok(n) => added += n,
                 Err(e) => log::warn!("hook events: {} unreadable: {e}", path.display()),

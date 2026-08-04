@@ -12,7 +12,8 @@ type Fingerprint = (i64, u64);
 pub struct ActionIngestor {
     home: PathBuf,
     since_ms: i64,
-    seen: HashMap<PathBuf, Fingerprint>,
+    seen: HashMap<PathBuf, (Fingerprint, i64)>,
+    reparse_cooldown_ms: i64,
 }
 
 impl ActionIngestor {
@@ -21,7 +22,13 @@ impl ActionIngestor {
             home,
             since_ms,
             seen: HashMap::new(),
+            reparse_cooldown_ms: crate::ingest::REPARSE_COOLDOWN_MS,
         }
+    }
+
+    pub fn with_reparse_cooldown(mut self, ms: i64) -> Self {
+        self.reparse_cooldown_ms = ms;
+        self
     }
     fn roots(&self) -> Vec<PathBuf> {
         if let Some(dir) = env_nonempty("OPENCLAW_STATE_DIR") {
@@ -36,14 +43,26 @@ impl ActionIngestor {
         self.roots()
     }
     pub fn poll(&mut self, store: &Store) -> usize {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
         let mut added = 0;
         for root in self.roots() {
             for path in find_files(&root, &is_session_file) {
                 let Some(fp) = fingerprint(&path) else {
                     continue;
                 };
-                if fp.0 < self.since_ms || self.seen.get(&path) == Some(&fp) {
+                if fp.0 < self.since_ms {
                     continue;
+                }
+                if let Some((seen_fp, last_parsed)) = self.seen.get(&path) {
+                    if *seen_fp == fp {
+                        continue;
+                    }
+                    if now_ms.saturating_sub(*last_parsed) < self.reparse_cooldown_ms {
+                        continue;
+                    }
                 }
                 if let Ok(body) = fs::read_to_string(&path) {
                     let actions: Vec<_> = agent_actions::parse_session(&body)
@@ -57,7 +76,7 @@ impl ActionIngestor {
                         }
                     }
                 }
-                self.seen.insert(path, fp);
+                self.seen.insert(path, (fp, now_ms));
             }
         }
         added
@@ -107,7 +126,7 @@ mod tests {
         fs::write(&f, SAMPLE).unwrap();
 
         let store = Store::open_in_memory().unwrap();
-        let mut ing = ActionIngestor::new(dir.clone(), 0);
+        let mut ing = ActionIngestor::new(dir.clone(), 0).with_reparse_cooldown(0);
 
         assert_eq!(ing.poll(&store), 2, "both tool calls become actions");
         assert_eq!(ing.poll(&store), 0, "unchanged file is skipped on re-poll");

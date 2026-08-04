@@ -56,12 +56,15 @@ pub fn default_adapters() -> Vec<Box<dyn Adapter>> {
 
 type Fingerprint = (i64, u64);
 
+pub const REPARSE_COOLDOWN_MS: i64 = 30_000;
+
 pub struct Ingestor {
     home: PathBuf,
 
     since_ms: i64,
     adapters: Vec<Box<dyn Adapter>>,
-    seen: HashMap<PathBuf, Fingerprint>,
+    seen: HashMap<PathBuf, (Fingerprint, i64)>,
+    reparse_cooldown_ms: i64,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -80,19 +83,36 @@ impl Ingestor {
             since_ms,
             adapters: default_adapters(),
             seen: HashMap::new(),
+            reparse_cooldown_ms: REPARSE_COOLDOWN_MS,
         }
     }
 
+    pub fn with_reparse_cooldown(mut self, ms: i64) -> Self {
+        self.reparse_cooldown_ms = ms;
+        self
+    }
+
     pub fn poll(&mut self, store: &Store) -> IngestStats {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
         let mut stats = IngestStats::default();
         for adapter in &self.adapters {
             for path in adapter.discover(&self.home) {
                 let Some(fp) = fingerprint(&path) else {
                     continue;
                 };
-
-                if fp.0 < self.since_ms || self.seen.get(&path) == Some(&fp) {
+                if fp.0 < self.since_ms {
                     continue;
+                }
+                if let Some((seen_fp, last_parsed)) = self.seen.get(&path) {
+                    if *seen_fp == fp {
+                        continue;
+                    }
+                    if now_ms.saturating_sub(*last_parsed) < self.reparse_cooldown_ms {
+                        continue;
+                    }
                 }
                 if let Some(sess) = adapter.parse_file(&path) {
                     match persist(store, &sess) {
@@ -104,7 +124,7 @@ impl Ingestor {
                         Err(e) => log::warn!("ingest persist failed for {}: {e}", path.display()),
                     }
                 }
-                self.seen.insert(path, fp);
+                self.seen.insert(path, (fp, now_ms));
             }
         }
         stats

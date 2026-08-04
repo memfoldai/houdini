@@ -28,7 +28,7 @@ fn running_pipeline_ingests_redacts_and_exports() {
 
     let store = Store::open_in_memory().unwrap();
 
-    let mut ingestor = Ingestor::new(home.clone(), 0);
+    let mut ingestor = Ingestor::new(home.clone(), 0).with_reparse_cooldown(0);
 
     let stats = ingestor.poll(&store);
     assert_eq!(stats.sessions, 1);
