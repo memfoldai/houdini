@@ -169,6 +169,13 @@ const server = createServer(async (req, res) => {
       return;
     }
 
+    if (req.method === "GET" && path === "/v1/board") {
+      if (!authorized(req, ADMIN_TOKEN)) return json(res, 401, { error: "unauthorized" });
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      res.end(renderBoard());
+      return;
+    }
+
     if (req.method === "GET" && path.startsWith("/v1/wrapped")) {
       if (!authorized(req, ADMIN_TOKEN)) return json(res, 401, { error: "unauthorized" });
       const fromPath = path.replace(/^\/v1\/wrapped\/?/, "");
@@ -201,6 +208,54 @@ function archive() {
   } catch (e) {
     log(`archive failed: ${e.message}`);
   }
+}
+
+function renderBoard() {
+  const today = new Date().toISOString().slice(0, 10);
+  const people = db.prepare("SELECT person, MAX(received_ms) m FROM rows GROUP BY person ORDER BY m DESC").all();
+  const rows = [];
+  for (const p of people) {
+    const last = db.prepare("SELECT body FROM rows WHERE person = :p ORDER BY received_ms DESC LIMIT 1").get({ p: p.person });
+    const version = JSON.parse(last.body).app_version ?? "pre-0.9.4";
+    const agg = (kind) =>
+      db.prepare("SELECT json_extract(body,'$.name') n, SUM(json_extract(body,'$.runs')) r FROM rows WHERE person = :p AND kind = :k AND day = :d GROUP BY n ORDER BY r DESC")
+        .all({ p: p.person, k: kind, d: today });
+    const sc = agg("shortcut");
+    const co = agg("connector");
+    rows.push({
+      person: p.person,
+      version,
+      ageMin: Math.round((Date.now() - p.m) / 60000),
+      shortcuts: sc.reduce((a, x) => a + x.r, 0),
+      connectors: co.reduce((a, x) => a + x.r, 0),
+      scDetail: sc.map((x) => `${x.n} ×${x.r}`).join(", "),
+      coDetail: co.map((x) => `${x.n || "unknown"} ×${x.r}`).join(", "),
+    });
+  }
+  rows.sort((a, b) => b.shortcuts - a.shortcuts || b.connectors - a.connectors || a.ageMin - b.ageMin);
+  const esc = (v) => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
+  const tr = rows.map((r, i) => `<tr class="${r.ageMin > 60 ? "stale" : ""}">
+    <td>${i + 1}</td><td class="who">${esc(r.person)}</td><td>${esc(r.version)}</td>
+    <td class="num">${r.ageMin < 60 ? r.ageMin + "m" : (r.ageMin / 60).toFixed(1) + "h"}</td>
+    <td class="num big">${r.shortcuts}</td><td class="det">${esc(r.scDetail) || "—"}</td>
+    <td class="num big">${r.connectors}</td><td class="det">${esc(r.coDetail) || "—"}</td>
+  </tr>`).join("");
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta http-equiv="refresh" content="30"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Houdini Board · ${today}</title><style>
+body{font-family:"Helvetica Neue",system-ui,sans-serif;background:#0A0A0A;color:#FAF7F0;margin:0;padding:32px}
+h1{font-size:20px;letter-spacing:.08em;text-transform:uppercase;margin:0 0 4px}
+.sub{color:#D6FF3D;font-size:13px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;margin-bottom:24px}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th{color:#D6FF3D;text-align:left;font-size:11px;letter-spacing:.1em;text-transform:uppercase;padding:8px 12px;border-bottom:2px solid #333}
+td{padding:9px 12px;border-bottom:1px solid #1e1e1e;vertical-align:top}
+.who{font-weight:800}.num{font-variant-numeric:tabular-nums}.big{font-weight:800;font-size:16px}
+.det{color:#999;max-width:320px}.stale td{opacity:.4}
+</style></head><body>
+<h1>Houdini — today's board</h1>
+<div class="sub">${today} · auto-refreshes every 30s</div>
+<table><tr><th>#</th><th>person</th><th>version</th><th>last push</th><th>shortcuts</th><th>detail</th><th>connectors</th><th>detail</th></tr>${tr}</table>
+</body></html>`;
 }
 
 function log(msg) {
