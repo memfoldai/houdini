@@ -110,7 +110,12 @@ impl Ingestor {
                     if *seen_fp == fp {
                         continue;
                     }
-                    if now_ms.saturating_sub(*last_parsed) < self.reparse_cooldown_ms {
+                    let effective_cooldown = if self.reparse_cooldown_ms == 0 {
+                        0
+                    } else {
+                        self.reparse_cooldown_ms.max((fp.1 / 256) as i64)
+                    };
+                    if now_ms.saturating_sub(*last_parsed) < effective_cooldown {
                         continue;
                     }
                 }
