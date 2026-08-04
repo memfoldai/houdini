@@ -218,6 +218,22 @@ impl Store {
         Ok(Self { conn })
     }
 
+    pub fn append_session_turns(
+        &self,
+        s: &SessionUpsert,
+        turns: &[(Role, String, i64)],
+    ) -> rusqlite::Result<usize> {
+        let tx = self.conn.unchecked_transaction()?;
+        let (id, existing) = self.upsert_session(s)?;
+        let mut added = 0;
+        for (i, (role, text, ts)) in turns.iter().enumerate() {
+            self.add_turn(id, existing + i as i64, *role, text, *ts)?;
+            added += 1;
+        }
+        tx.commit()?;
+        Ok(added)
+    }
+
     pub fn upsert_session(&self, s: &SessionUpsert) -> rusqlite::Result<(i64, i64)> {
         self.conn.execute(
             "INSERT INTO sessions

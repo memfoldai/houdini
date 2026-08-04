@@ -22,6 +22,20 @@ impl Adapter for ClaudeCode {
 
     fn parse_file(&self, path: &Path) -> Option<IngestedSession> {
         let body = fs::read_to_string(path).ok()?;
+        self.parse_str(&body)
+    }
+
+    fn parse_appended(&self, tail: &str) -> Option<IngestedSession> {
+        self.parse_str(tail)
+    }
+
+    fn supports_appended(&self) -> bool {
+        true
+    }
+}
+
+impl ClaudeCode {
+    fn parse_str(&self, body: &str) -> Option<IngestedSession> {
 
         let mut turns: Vec<IngestedTurn> = Vec::new();
         let mut session_id: Option<String> = None;
@@ -88,11 +102,7 @@ impl Adapter for ClaudeCode {
         if turns.is_empty() {
             return None;
         }
-        let external_id = session_id.or_else(|| {
-            path.file_stem()
-                .and_then(|s| s.to_str())
-                .map(str::to_string)
-        })?;
+        let external_id = session_id?;
         let started = turns.iter().map(|t| t.ts_ms).min().unwrap_or(0);
         let ended = turns.iter().map(|t| t.ts_ms).max().unwrap_or(started);
 
