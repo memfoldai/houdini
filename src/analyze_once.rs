@@ -52,6 +52,10 @@ pub fn run() {
         .map(|d| d.as_millis() as i64)
         .unwrap_or_default();
 
+    let forgiven = analytics_job::run_label_amnesty(&store);
+    if forgiven > 0 {
+        println!("amnesty: {forgiven} parked turn(s) re-queued");
+    }
     println!("labeling up to {limit} turn(s)…");
     match analytics_job::run_once(&store, &labeler, limit, now_ms) {
         Ok(report) => {

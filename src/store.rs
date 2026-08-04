@@ -552,9 +552,6 @@ impl Store {
         )
     }
 
-    /// Forgives every parked turn so it re-enters the candidate queue. Used
-    /// once after an outage that failed whole backlogs for reasons that were
-    /// never the turns' fault (e.g. the proxy retiring the configured model).
     pub fn clear_all_label_failures(&self) -> rusqlite::Result<usize> {
         self.conn.execute("DELETE FROM label_failures", [])
     }

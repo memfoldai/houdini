@@ -6,12 +6,9 @@ use std::process::{Command, Stdio};
 pub const PROMPT_VERSION: i64 = 4;
 
 pub const DEFAULT_BASE_URL: &str = "https://litellm.memfold.ai";
-pub const DEFAULT_MODEL: &str = "gpt-5.5-2026-04-23";
+pub const DEFAULT_MODEL: &str = "gpt-5.6-sol-fast";
 
-/// Model names the proxy has retired (the bare gpt-5.5 alias vanished on
-/// 2026-08-02 and every labeling call 400'd fleet-wide). A stored config
-/// carrying one of these is migrated to DEFAULT_MODEL at load.
-pub const RETIRED_MODELS: &[&str] = &["gpt-5.5"];
+pub const SUPERSEDED_DEFAULT_MODELS: &[&str] = &["gpt-5.5", "gpt-5.5-2026-04-23"];
 pub const DEFAULT_BATCH_LIMIT_HINT: i64 = 25;
 
 const REQUEST_TIMEOUT_S: u64 = 90;

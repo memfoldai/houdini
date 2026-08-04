@@ -295,24 +295,9 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         log::info!("re-scanning the last {} day(s) once to backfill new signals", INITIAL_BACKFILL_MS / 86_400_000);
     }
 
-    // One-time amnesty for turns parked by the 2026-08-02 proxy outage: the
-    // configured model was retired server-side, every labeling call 400'd, and
-    // whole backlogs burned their retry budget through no fault of their own.
-    // Level-gated so it runs once; the migrated model then labels them fine.
-    const AMNESTY_LEVEL: i64 = 1;
-    const AMNESTY_KEY: &str = "label_failure_amnesty_level";
-    let amnesty_seen = store
-        .get_setting(AMNESTY_KEY)
-        .ok()
-        .flatten()
-        .and_then(|v| v.parse::<i64>().ok())
-        .unwrap_or(0);
-    if amnesty_seen < AMNESTY_LEVEL {
-        let forgiven = store.clear_all_label_failures().unwrap_or(0);
-        let _ = store.set_setting(AMNESTY_KEY, &AMNESTY_LEVEL.to_string());
-        if forgiven > 0 {
-            log::info!("labeling amnesty: {forgiven} parked turn(s) will retry under the migrated model");
-        }
+    let forgiven = houdini::analytics_job::run_label_amnesty(&store);
+    if forgiven > 0 {
+        log::info!("labeling amnesty: {forgiven} parked turn(s) will retry under the migrated model");
     }
 
     // Resume from where the last scan finished so nothing written while the app

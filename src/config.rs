@@ -179,10 +179,7 @@ pub fn load_or_init(config_file: &Path) -> std::io::Result<AppConfig> {
         let bytes = fs::read(config_file)?;
         match serde_json::from_slice::<AppConfig>(&bytes) {
             Ok(mut cfg) => {
-                // Config migration: a stored model the proxy has retired would
-                // 400 on every labeling call, so rewrite it to the current
-                // default before the labeler is built.
-                if crate::analytics::RETIRED_MODELS.contains(&cfg.analytics_model.as_str()) {
+                if crate::analytics::SUPERSEDED_DEFAULT_MODELS.contains(&cfg.analytics_model.as_str()) {
                     cfg.analytics_model = d_analytics_model();
                 }
                 write_config(config_file, &cfg)?;
@@ -275,23 +272,48 @@ mod tests {
     }
 
     #[test]
-    fn a_retired_analytics_model_is_migrated_on_load() {
-        let dir = std::env::temp_dir().join(format!("houdini-retired-{}", std::process::id()));
+    fn superseded_analytics_models_are_migrated_on_load() {
+        assert!(
+            !crate::analytics::SUPERSEDED_DEFAULT_MODELS.contains(&crate::analytics::DEFAULT_MODEL),
+            "the current default must never be listed as superseded"
+        );
+        for (i, old_model) in crate::analytics::SUPERSEDED_DEFAULT_MODELS.iter().enumerate() {
+            let dir =
+                std::env::temp_dir().join(format!("houdini-superseded-{}-{i}", std::process::id()));
+            fs::create_dir_all(&dir).unwrap();
+            let cf = dir.join("config.json");
+            fs::write(
+                &cf,
+                format!(r#"{{"install_id":"keep-me","analytics_model":"{old_model}"}}"#),
+            )
+            .unwrap();
+            let cfg = load_or_init(&cf).expect("superseded-model config must load");
+            assert_eq!(
+                cfg.analytics_model,
+                crate::analytics::DEFAULT_MODEL,
+                "a former default must converge on the current one or labeling 400s"
+            );
+            let reread = fs::read_to_string(&cf).unwrap();
+            assert!(
+                reread.contains(crate::analytics::DEFAULT_MODEL),
+                "migrated value persisted"
+            );
+            fs::remove_dir_all(&dir).ok();
+        }
+
+        let dir = std::env::temp_dir().join(format!("houdini-custom-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let cf = dir.join("config.json");
         fs::write(
             &cf,
-            r#"{"install_id":"keep-me","analytics_model":"gpt-5.5"}"#,
+            r#"{"install_id":"keep-me","analytics_model":"zai-glm-4.7"}"#,
         )
         .unwrap();
-        let cfg = load_or_init(&cf).expect("retired-model config must load");
+        let cfg = load_or_init(&cf).expect("custom-model config must load");
         assert_eq!(
-            cfg.analytics_model,
-            crate::analytics::DEFAULT_MODEL,
-            "the proxy retired gpt-5.5; a stored config must migrate or every label call 400s"
+            cfg.analytics_model, "zai-glm-4.7",
+            "a hand-picked model is never trampled"
         );
-        let reread = fs::read_to_string(&cf).unwrap();
-        assert!(!reread.contains("\"gpt-5.5\""), "migrated value persisted");
         fs::remove_dir_all(&dir).ok();
     }
 

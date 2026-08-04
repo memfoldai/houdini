@@ -4,6 +4,24 @@ use crate::taxonomy::TAXONOMY_VERSION;
 
 pub const DEFAULT_BATCH_LIMIT: i64 = 25;
 
+pub const AMNESTY_LEVEL: i64 = 2;
+const AMNESTY_KEY: &str = "label_failure_amnesty_level";
+
+pub fn run_label_amnesty(store: &Store) -> usize {
+    let seen = store
+        .get_setting(AMNESTY_KEY)
+        .ok()
+        .flatten()
+        .and_then(|v| v.parse::<i64>().ok())
+        .unwrap_or(0);
+    if seen >= AMNESTY_LEVEL {
+        return 0;
+    }
+    let forgiven = store.clear_all_label_failures().unwrap_or(0);
+    let _ = store.set_setting(AMNESTY_KEY, &AMNESTY_LEVEL.to_string());
+    forgiven
+}
+
 /// Earlier turns handed to the labeler so a follow-up like "now the other one"
 /// is readable. The published method uses up to ten preceding messages.
 const CONTEXT_TURNS: i64 = 6;
