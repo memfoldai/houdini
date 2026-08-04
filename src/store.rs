@@ -721,6 +721,34 @@ impl Store {
 
     /// Detected delegations rolled up per day, driving tool, and driven tool —
     /// the deterministic "Alma drove Claude Code" signal for the export.
+    pub fn connector_spans(&self) -> rusqlite::Result<Vec<UsageSpan>> {
+        self.usage_spans("connector")
+    }
+
+    pub fn shortcut_spans(&self) -> rusqlite::Result<Vec<UsageSpan>> {
+        self.usage_spans("shortcut")
+    }
+
+    fn usage_spans(&self, tool: &str) -> rusqlite::Result<Vec<UsageSpan>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT strftime('%Y-%m-%d', ts / 1000, 'unixepoch') AS day,
+                    COALESCE(app, ''), action, COUNT(*)
+             FROM actions
+             WHERE tool = ?1
+             GROUP BY day, app, action
+             ORDER BY day DESC",
+        )?;
+        let rows = stmt.query_map(params![tool], |r| {
+            Ok(UsageSpan {
+                day: r.get(0)?,
+                app: r.get(1)?,
+                action: r.get(2)?,
+                runs: r.get(3)?,
+            })
+        })?;
+        rows.collect()
+    }
+
     pub fn delegation_spans(&self) -> rusqlite::Result<Vec<DelegationSpan>> {
         let mut stmt = self.conn.prepare(
             "SELECT strftime('%Y-%m-%d', d.occurred_ms / 1000, 'unixepoch') AS day,
@@ -869,6 +897,13 @@ pub struct SessionSpan {
 }
 
 #[derive(Debug, Clone)]
+pub struct UsageSpan {
+    pub day: String,
+    pub app: String,
+    pub action: String,
+    pub runs: i64,
+}
+
 pub struct DelegationSpan {
     pub day: String,
     pub tool: String,
@@ -1042,6 +1077,41 @@ mod tests {
             spans.iter().all(|d| d.driven_tool != "codex"),
             "the codex row was replaced away on re-parse"
         );
+    }
+
+    #[test]
+    fn usage_spans_roll_up_connectors_and_shortcuts_by_day() {
+        let s = Store::open_in_memory().unwrap();
+        let mk = |ext: &'static str,
+                  tool: &'static str,
+                  app: Option<&'static str>,
+                  action: &'static str,
+                  ts: i64| ActionRecord {
+            ext_id: ext,
+            source: "almaclaw",
+            session_id: "s1",
+            actor: crate::attribution::Actor::Agent,
+            app,
+            tool,
+            action,
+            kind: "mutating",
+            target_redacted: None,
+            ts_ms: ts,
+        };
+        let d = 1_784_726_765_000;
+        s.insert_action(&mk("a", "connector", Some("calendar"), "calendar.find", d)).unwrap();
+        s.insert_action(&mk("b", "connector", Some("calendar"), "calendar.find", d + 1000)).unwrap();
+        s.insert_action(&mk("c", "connector", Some("gogweb"), "email.send", d)).unwrap();
+        s.insert_action(&mk("d", "shortcut", Some("app-runtime"), "annotate", d)).unwrap();
+        s.insert_action(&mk("e", "bdc__cua", None, "click", d)).unwrap();
+
+        let conn = s.connector_spans().unwrap();
+        assert_eq!(conn.len(), 2);
+        let cal = conn.iter().find(|u| u.app == "calendar").unwrap();
+        assert_eq!((cal.action.as_str(), cal.runs), ("calendar.find", 2));
+        let sc = s.shortcut_spans().unwrap();
+        assert_eq!(sc.len(), 1);
+        assert_eq!((sc[0].action.as_str(), sc[0].runs), ("annotate", 1));
     }
 
     #[test]

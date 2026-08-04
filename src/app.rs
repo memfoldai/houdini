@@ -29,6 +29,7 @@ use houdini::config::{self, AppConfig, Paths};
 use houdini::export;
 use houdini::ingest::Ingestor;
 use houdini::ingest_actions::ActionIngestor;
+use houdini::ingest_hook_events::HookEventIngestor;
 use houdini::store::{ActivityStats, Store, INGEST_SINCE_KEY, PAUSE_UNTIL_KEY};
 use houdini::webingest;
 
@@ -84,6 +85,7 @@ struct Runtime {
     store: Rc<Store>,
     ingestor: RefCell<Ingestor>,
     action_ingestor: RefCell<ActionIngestor>,
+    hook_ingestor: HookEventIngestor,
     install_id: String,
     person: String,
     device_name: String,
@@ -281,7 +283,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
     // separate Claude Code runs from chat drives and passive reads/lookups,
     // and to keep prose-free sessions so their stale rows get cleared;
     // replace-on-reparse repopulates every session with the refined counts.
-    const REINGEST_LEVEL: i64 = 4;
+    const REINGEST_LEVEL: i64 = 5;
     const REINGEST_KEY: &str = "reingest_feature_level";
     let seen_level = store
         .get_setting(REINGEST_KEY)
@@ -321,6 +323,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
 
     let ingestor = Ingestor::new(home.clone(), ingest_since_ms);
     let action_ingestor = ActionIngestor::new(home.clone(), ingest_since_ms);
+    let hook_ingestor = HookEventIngestor::new(home.clone());
     let transcripts_changed = Arc::new(AtomicBool::new(false));
     let watcher = start_watcher(
         &home,
@@ -348,6 +351,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
         store,
         ingestor: RefCell::new(ingestor),
         action_ingestor: RefCell::new(action_ingestor),
+        hook_ingestor,
         install_id: cfg.install_id.clone(),
         person: cfg.person.clone(),
         device_name: cfg.device_name.clone(),
@@ -544,7 +548,7 @@ fn tick(rt: &Rc<Runtime>) {
                     stats.sessions
                 );
             }
-            let acted = rt.action_ingestor.borrow_mut().poll(&rt.store);
+            let acted = rt.action_ingestor.borrow_mut().poll(&rt.store) + rt.hook_ingestor.poll(&rt.store);
             if acted > 0 {
                 log::info!("attributed {acted} new agent action(s)");
             }

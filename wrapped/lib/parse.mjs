@@ -6,6 +6,8 @@ import { readFileSync } from "node:fs";
 export const CELL = "analytics_cell";
 export const SPAN = "session_span";
 export const DELEGATION = "delegation";
+export const CONNECTOR = "connector";
+export const SHORTCUT = "shortcut";
 
 // A cell's identity is its full dimension tuple. Re-uploading a device's export
 // as more of its history gets labeled produces the same tuple with larger
@@ -44,6 +46,7 @@ export function rowKey(r) {
   if (r.kind === CELL) return `${CELL}:${cellKey(r)}`;
   if (r.kind === SPAN) return `${SPAN}:${spanKey(r)}`;
   if (r.kind === DELEGATION) return `${DELEGATION}:${delegKey(r)}`;
+  if (r.kind === CONNECTOR || r.kind === SHORTCUT) return `${r.kind}:${usageKey(r)}`;
   return null;
 }
 
@@ -51,6 +54,10 @@ export function rowKey(r) {
 // (Claude Code) on a day. Detected from the transcript, so re-upload replaces.
 function delegKey(r) {
   return [r.device, r.person, r.day, r.tool, r.driven_tool].join("");
+}
+
+function usageKey(r) {
+  return [r.device, r.person, r.day, r.name, r.detail].join("");
 }
 
 function coerceCell(r) {
@@ -98,6 +105,7 @@ export function collect(rows) {
   const cells = new Map();
   const spans = new Map();
   const delegations = new Map();
+  const usage = new Map();
   let skipped = 0;
   for (const r of rows) {
     if (!r || typeof r !== "object") {
@@ -107,12 +115,26 @@ export function collect(rows) {
     if (r.kind === CELL) cells.set(cellKey(r), coerceCell(r));
     else if (r.kind === SPAN) spans.set(spanKey(r), coerceSpan(r));
     else if (r.kind === DELEGATION) delegations.set(delegKey(r), coerceDelegation(r));
+    else if (r.kind === CONNECTOR || r.kind === SHORTCUT) usage.set(`${r.kind}:${usageKey(r)}`, coerceUsage(r));
   }
   return {
     cells: [...cells.values()],
     spans: [...spans.values()],
     delegations: [...delegations.values()],
+    usage: [...usage.values()],
     skipped,
+  };
+}
+
+function coerceUsage(r) {
+  return {
+    kind: String(r.kind),
+    device: String(r.device ?? ""),
+    person: String(r.person ?? ""),
+    day: String(r.day ?? ""),
+    name: String(r.name ?? ""),
+    detail: String(r.detail ?? ""),
+    runs: Number(r.runs ?? 0),
   };
 }
 

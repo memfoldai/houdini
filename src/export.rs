@@ -199,6 +199,20 @@ struct DelegationRow<'a> {
 }
 
 #[derive(serde::Serialize)]
+struct UsageRow<'a> {
+    schema: &'a str,
+    app_version: &'static str,
+    kind: &'a str,
+    device: &'a str,
+    person: &'a str,
+    device_name: &'a str,
+    day: &'a str,
+    name: &'a str,
+    detail: &'a str,
+    runs: i64,
+}
+
+#[derive(serde::Serialize)]
 struct CandidateRow<'a> {
     schema: &'a str,
     app_version: &'static str,
@@ -271,6 +285,28 @@ pub fn export_analytics(
             longest_minutes: span.longest_minutes,
         };
         write_row(&mut out, &row)?;
+    }
+
+    for (kind, spans) in [
+        ("connector", store.connector_spans().map_err(io_err)?),
+        ("shortcut", store.shortcut_spans().map_err(io_err)?),
+    ] {
+        for u in spans {
+            let row = UsageRow {
+                schema: SCHEMA,
+                app_version: env!("CARGO_PKG_VERSION"),
+                kind,
+                device: identity.install_id,
+                person: identity.person,
+                device_name: identity.device_name,
+                day: &u.day,
+                name: if kind == "connector" { &u.app } else { &u.action },
+                detail: if kind == "connector" { &u.action } else { &u.app },
+                runs: u.runs,
+            };
+            serde_json::to_writer(&mut out, &row)?;
+            out.write_all(b"\n")?;
+        }
     }
 
     for d in store.delegation_spans().map_err(io_err)? {

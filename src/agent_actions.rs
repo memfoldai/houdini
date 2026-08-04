@@ -75,7 +75,7 @@ pub fn parse_session(body: &str) -> Vec<AgentAction> {
                 continue;
             }
             let args = block.get("arguments").cloned().unwrap_or(Value::Null);
-            let Some((action, app, target, kind)) = normalize(name, &args) else {
+            let Some((tool, action, app, target, kind)) = normalize(name, &args) else {
                 continue;
             };
 
@@ -94,7 +94,7 @@ pub fn parse_session(body: &str) -> Vec<AgentAction> {
             out.push(AgentAction {
                 id: call_id,
                 session_id: sid,
-                tool: name.to_string(),
+                tool,
                 action,
                 app,
                 target,
@@ -132,14 +132,50 @@ pub fn persist(store: &Store, source: &str, actions: &[AgentAction]) -> rusqlite
     }
     Ok(added)
 }
-fn normalize(
-    name: &str,
-    args: &Value,
-) -> Option<(String, Option<String>, Option<String>, ActionKind)> {
+pub type Normalized = (String, String, Option<String>, Option<String>, ActionKind);
+
+const CAPABILITY_READ_VERBS: &[&str] = &[
+    "read", "find", "list", "search", "status", "sessions", "info", "get", "state",
+];
+
+fn capability_kind(capability: &str) -> ActionKind {
+    let verb = capability.rsplit(['.', '_']).next().unwrap_or("");
+    if CAPABILITY_READ_VERBS.contains(&verb) {
+        ActionKind::ReadOnly
+    } else {
+        ActionKind::Mutating
+    }
+}
+
+pub fn normalize_app_runtime_args(args: &Value) -> Option<Normalized> {
+    let action = string_field(args, &["action"]).unwrap_or_default();
+    if !action.is_empty() && action != "execute_connector" {
+        return None;
+    }
+    let capability = string_field(args, &["capability"])?;
+    let connector = string_field(args, &["connectorId", "connector_id"]);
+    let query = string_field(args, &["query", "text", "task"]);
+    if capability == "shortcut.run" {
+        let shortcut = query.clone()?;
+        return Some((
+            "shortcut".to_string(),
+            shortcut,
+            connector,
+            query,
+            ActionKind::Mutating,
+        ));
+    }
+    let kind = capability_kind(&capability);
+    Some(("connector".to_string(), capability, connector, query, kind))
+}
+
+fn normalize(name: &str, args: &Value) -> Option<Normalized> {
     match name {
+        "app_runtime" => normalize_app_runtime_args(args),
         "bdc__run_applescript" => {
             let script = args.get("script").and_then(Value::as_str).unwrap_or("");
             Some((
+                name.to_string(),
                 "run_applescript".to_string(),
                 applescript_app(script),
                 Some(script.trim().to_string()),
@@ -159,7 +195,7 @@ fn normalize(
             } else {
                 ActionKind::Mutating
             };
-            Some((driver.to_string(), app, target, kind))
+            Some((name.to_string(), driver.to_string(), app, target, kind))
         }
         _ if name.starts_with("browser") => {
             let action = string_field(args, &["action"])
@@ -175,7 +211,7 @@ fn normalize(
             } else {
                 ActionKind::Mutating
             };
-            Some((action, app, url, kind))
+            Some((name.to_string(), action, app, url, kind))
         }
         _ => None,
     }
@@ -242,6 +278,28 @@ mod tests {
 {"type":"message","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-5","content":[{"type":"toolCall","id":"tc2","name":"bdc__cua","arguments":{"tool":"type_text","args":{"appName":"Mail","element_index":7,"value":"Hello there"}}}],"timestamp":1783670402000}}
 {"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"tc3","name":"bdc__run_applescript","arguments":{"script":"tell application \"Safari\"\n  open location \"https://drive.google.com\"\nend tell"}}],"timestamp":1783670403000}}
 "#;
+
+    #[test]
+    fn connectors_and_shortcuts_are_extracted_lookups_are_not() {
+        let sample = r#"
+{"type":"session","id":"cx","timestamp":"2026-08-03T10:00:00.000Z"}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"c1","name":"app_runtime","arguments":{"action":"execute_connector","connectorId":"calendar","capability":"calendar.find","query":"standup"}}],"timestamp":"2026-08-03T10:00:01.000Z"}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"c2","name":"app_runtime","arguments":{"action":"execute_connector","connectorId":"gogweb","capability":"email.send","query":"weekly notes"}}],"timestamp":"2026-08-03T10:00:02.000Z"}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"c3","name":"app_runtime","arguments":{"action":"execute_connector","connectorId":"app-runtime","capability":"shortcut.run","query":"annotate"}}],"timestamp":"2026-08-03T10:00:03.000Z"}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"c4","name":"app_runtime","arguments":{"action":"resolve_capability","capability":"calendar.find"}}],"timestamp":"2026-08-03T10:00:04.000Z"}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","id":"c5","name":"app_runtime","arguments":{"action":"list_capabilities","query":"models"}}],"timestamp":"2026-08-03T10:00:05.000Z"}}
+"#;
+        let actions = parse_session(sample);
+        assert_eq!(actions.len(), 3, "two connector runs and one shortcut; lookups skipped");
+        assert_eq!(actions[0].tool, "connector");
+        assert_eq!(actions[0].action, "calendar.find");
+        assert_eq!(actions[0].app.as_deref(), Some("calendar"));
+        assert_eq!(actions[0].kind, ActionKind::ReadOnly);
+        assert_eq!(actions[1].action, "email.send");
+        assert_eq!(actions[1].kind, ActionKind::Mutating);
+        assert_eq!(actions[2].tool, "shortcut");
+        assert_eq!(actions[2].action, "annotate", "the shortcut is named by its query");
+    }
 
     #[test]
     fn extracts_native_actions_with_app_and_kind() {

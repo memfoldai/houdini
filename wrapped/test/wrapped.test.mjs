@@ -67,6 +67,16 @@ test("persona cards carry each person's own receipts, no award cards remain", ()
   assert.match(yap.line, /40/, "the joke is their own number");
 });
 
+test("connector and shortcut rows are collected and idempotent", () => {
+  const row = { kind: "connector", device: "d", person: "p", day: "2026-07-21", name: "almanac-calendar", detail: "calendar.find", runs: 3 };
+  const again = { ...row, runs: 8 };
+  const sc = { kind: "shortcut", device: "d", person: "p", day: "2026-07-21", name: "annotate", detail: "app-runtime", runs: 2 };
+  const { usage } = collect([row, again, sc]);
+  assert.equal(usage.length, 2, "re-upload overwrites, never duplicates");
+  assert.equal(usage.find((u) => u.kind === "connector").runs, 8);
+  assert.equal(usage.find((u) => u.kind === "shortcut").name, "annotate");
+});
+
 test("delegation rows drive droveClaudeCode deterministically, ignoring other tools", () => {
   const rows = [
     span({ person: "aa", total_minutes: 30 }),
