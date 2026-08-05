@@ -327,6 +327,14 @@ impl Store {
             })
     }
 
+    pub fn local_midnight_ms(&self) -> rusqlite::Result<i64> {
+        self.conn.query_row(
+            "SELECT CAST(strftime('%s', date('now', 'localtime') || ' 00:00:00', 'utc') AS INTEGER) * 1000",
+            [],
+            |r| r.get(0),
+        )
+    }
+
     pub fn activity_stats(&self, since_ms: i64) -> rusqlite::Result<ActivityStats> {
         let interactions: i64 = self.conn.query_row(
             "SELECT COUNT(*) FROM sessions WHERE ended_at >= ?1",

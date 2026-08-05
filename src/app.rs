@@ -506,7 +506,11 @@ fn install_tray(rt: &Rc<Runtime>) {
     let clock = rt.clock();
     let stats = rt
         .store
-        .activity_stats(clock.wall_ms - RECENT_WINDOW_MS)
+        .activity_stats(
+            rt.store
+                .local_midnight_ms()
+                .unwrap_or(clock.wall_ms - RECENT_WINDOW_MS),
+        )
         .unwrap_or_default();
     paint(rt, Glyph::Idle);
     refresh_menu(rt, Glyph::Idle, clock.wall_ms, &stats);
@@ -587,7 +591,11 @@ fn tick(rt: &Rc<Runtime>) {
 
     let stats = rt
         .store
-        .activity_stats(clock.wall_ms - RECENT_WINDOW_MS)
+        .activity_stats(
+            rt.store
+                .local_midnight_ms()
+                .unwrap_or(clock.wall_ms - RECENT_WINDOW_MS),
+        )
         .unwrap_or_default();
     let glyph = glyph_for(rt, clock.wall_ms, &stats);
     paint(rt, glyph);
@@ -887,7 +895,11 @@ fn set_pause(rt: &Rc<Runtime>, until: Option<i64>, why: &str) {
     };
     let stats = rt
         .store
-        .activity_stats(clock.wall_ms - RECENT_WINDOW_MS)
+        .activity_stats(
+            rt.store
+                .local_midnight_ms()
+                .unwrap_or(clock.wall_ms - RECENT_WINDOW_MS),
+        )
         .unwrap_or_default();
     paint(rt, glyph);
     refresh_menu(rt, glyph, clock.wall_ms, &stats);
