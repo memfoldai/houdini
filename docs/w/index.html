@@ -33,8 +33,11 @@ const msg = (m, s) => { document.getElementById("msg").textContent = m; document
     if (!/^https:\/\/[a-z0-9.-]+\.trycloudflare\.com$/.test(base)) throw new Error("bad discovery value");
     const q = new URLSearchParams(location.search);
     const week = q.get("week");
+    const page = q.get("page");
     q.delete("week");
-    const target = base + "/v1/wrapped/" + (week ?? "") + (q.toString() ? "?" + q.toString() : "");
+    q.delete("page");
+    const path = page === "board" ? "/v1/board" : "/v1/wrapped/" + (week ?? "");
+    const target = base + path + (q.toString() ? "?" + q.toString() : "");
     msg("opening the wrapped…");
     location.replace(target);
   } catch (e) {
