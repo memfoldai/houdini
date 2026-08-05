@@ -110,17 +110,15 @@ function weight(cell) {
   return cell.turns > 0 ? cell.turns : Math.max(cell.sessions, 1);
 }
 
-// Cell hours are UTC but the team lives in IST (UTC+5:30), so night/morning
-// buckets and the peak-hour label are shifted +5:30 before they mean anything.
-// UTC 19-23 = 00:30-05:29 IST (after midnight); UTC 1-4 = 06:30-10:29 IST.
-const LATE_HOURS = new Set([19, 20, 21, 22, 23]);
-const EARLY_HOURS = new Set([1, 2, 3, 4]);
+// Since Houdini 0.9.12 every device buckets days and hours in ITS OWN local
+// time, so hours here are already the human's clock — no offset shifting.
+const LATE_HOURS = new Set([0, 1, 2, 3, 4]);
+const EARLY_HOURS = new Set([6, 7, 8, 9]);
 
-function hourLabel(utcHour) {
-  const h = (utcHour + 5) % 24;
+function hourLabel(h) {
   const period = h < 12 ? "AM" : "PM";
   const twelve = h % 12 === 0 ? 12 : h % 12;
-  return `${twelve}:30 ${period}`;
+  return `${twelve} ${period}`;
 }
 
 export function compute(cells, spans, delegations = []) {

@@ -110,7 +110,7 @@ export function buildCards(m, opts = {}) {
     heroText: m.peakHourLabel,
     // When the peak genuinely lands in the six o'clock hour, the 6-7 meme
     // writes itself; any other hour gets the plain line.
-    sub: m.peakHourLabel.startsWith("6:30")
+    sub: m.peakHourLabel.startsWith("6 ")
       ? "the six-seven window. we don't make the rules."
       : "the collective lock-in hour. calendars fear it.",
   });

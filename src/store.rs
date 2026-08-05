@@ -647,8 +647,8 @@ impl Store {
 
     pub fn label_cells(&self, taxonomy_version: i64) -> rusqlite::Result<Vec<LabelCell>> {
         let mut stmt = self.conn.prepare(
-            "SELECT strftime('%Y-%m-%d', t.ts / 1000, 'unixepoch') AS day,
-                    CAST(strftime('%H', t.ts / 1000, 'unixepoch') AS INTEGER) AS hour,
+            "SELECT strftime('%Y-%m-%d', t.ts / 1000, 'unixepoch', 'localtime') AS day,
+                    CAST(strftime('%H', t.ts / 1000, 'unixepoch', 'localtime') AS INTEGER) AS hour,
                     s.tool, s.provider, s.surface, s.model,
                     l.intent, l.domain, l.depth, l.delegation, l.delegate_tool,
                     COUNT(*), COUNT(DISTINCT l.session_id), SUM(LENGTH(t.redacted_text))
@@ -699,7 +699,7 @@ impl Store {
                  WHERE gap > 0 AND gap <= ?1
                  GROUP BY session_id
              )
-             SELECT strftime('%Y-%m-%d', s.started_at / 1000, 'unixepoch') AS day,
+             SELECT strftime('%Y-%m-%d', s.started_at / 1000, 'unixepoch', 'localtime') AS day,
                     s.tool,
                     COUNT(*),
                     SUM(COALESCE(a.active_ms, 0)) / 60000,
@@ -759,7 +759,7 @@ impl Store {
 
     fn usage_spans(&self, tool: &str) -> rusqlite::Result<Vec<UsageSpan>> {
         let mut stmt = self.conn.prepare(
-            "SELECT strftime('%Y-%m-%d', ts / 1000, 'unixepoch') AS day,
+            "SELECT strftime('%Y-%m-%d', ts / 1000, 'unixepoch', 'localtime') AS day,
                     COALESCE(NULLIF(app, ''), 'unknown'), action, COUNT(*)
              FROM actions
              WHERE tool = ?1
@@ -779,7 +779,7 @@ impl Store {
 
     pub fn delegation_spans(&self) -> rusqlite::Result<Vec<DelegationSpan>> {
         let mut stmt = self.conn.prepare(
-            "SELECT strftime('%Y-%m-%d', d.occurred_ms / 1000, 'unixepoch') AS day,
+            "SELECT strftime('%Y-%m-%d', d.occurred_ms / 1000, 'unixepoch', 'localtime') AS day,
                     s.tool, d.driven_tool, SUM(d.turns)
              FROM session_deleg d JOIN sessions s ON s.id = d.session_id
              GROUP BY day, s.tool, d.driven_tool

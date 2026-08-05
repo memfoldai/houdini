@@ -48,7 +48,7 @@ const ACTIVE_WINDOW_MS: i64 = 6_000;
 
 const HEARTBEAT_MS: i64 = 30_000;
 
-const UPDATE_CHECK_MS: i64 = 6 * 60 * 60 * 1000;
+const UPDATE_CHECK_MS: i64 = 60 * 60 * 1000;
 
 const ANALYTICS_RETRY_MS: i64 = 15 * 60 * 1000;
 
@@ -285,7 +285,7 @@ fn build_runtime(paths: &Paths, cfg: &AppConfig) -> Rc<Runtime> {
     // separate Claude Code runs from chat drives and passive reads/lookups,
     // and to keep prose-free sessions so their stale rows get cleared;
     // replace-on-reparse repopulates every session with the refined counts.
-    const REINGEST_LEVEL: i64 = 5;
+    const REINGEST_LEVEL: i64 = 6;
     const REINGEST_KEY: &str = "reingest_feature_level";
     let seen_level = store
         .get_setting(REINGEST_KEY)

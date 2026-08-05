@@ -54,6 +54,7 @@ pub fn export_snapshot(
     dir: &Path,
 ) -> std::io::Result<PathBuf> {
     let device = identity.install_id;
+    let almanac = almanac_version();
     fs::create_dir_all(dir)?;
     export_actions(store, device, dir)?;
     export_analytics(store, identity, dir)?;
@@ -143,6 +144,7 @@ pub struct ExportIdentity<'a> {
 struct AnalyticsCellRow<'a> {
     schema: &'a str,
     app_version: &'static str,
+    almanac_version: Option<&'a str>,
     kind: &'a str,
     device: String,
     person: String,
@@ -171,6 +173,7 @@ struct AnalyticsCellRow<'a> {
 struct SessionSpanRow<'a> {
     schema: &'a str,
     app_version: &'static str,
+    almanac_version: Option<&'a str>,
     kind: &'a str,
     device: String,
     person: String,
@@ -187,6 +190,7 @@ struct SessionSpanRow<'a> {
 struct DelegationRow<'a> {
     schema: &'a str,
     app_version: &'static str,
+    almanac_version: Option<&'a str>,
     kind: &'a str,
     device: String,
     person: String,
@@ -202,6 +206,7 @@ struct DelegationRow<'a> {
 struct UsageRow<'a> {
     schema: &'a str,
     app_version: &'static str,
+    almanac_version: Option<&'a str>,
     kind: &'a str,
     device: &'a str,
     person: &'a str,
@@ -216,6 +221,7 @@ struct UsageRow<'a> {
 struct CandidateRow<'a> {
     schema: &'a str,
     app_version: &'static str,
+    almanac_version: Option<&'a str>,
     kind: &'a str,
     device: String,
     taxonomy_version: i64,
@@ -226,12 +232,34 @@ struct CandidateRow<'a> {
     last_seen_ms: i64,
 }
 
+fn almanac_version() -> Option<String> {
+    for app in ["Almanac Combined", "Almanac", "OpenClaw"] {
+        let out = std::process::Command::new("/usr/libexec/PlistBuddy")
+            .args([
+                "-c",
+                "Print :CFBundleShortVersionString",
+                &format!("/Applications/{app}.app/Contents/Info.plist"),
+            ])
+            .output();
+        if let Ok(out) = out {
+            if out.status.success() {
+                let v = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                if !v.is_empty() {
+                    return Some(v);
+                }
+            }
+        }
+    }
+    None
+}
+
 pub fn export_analytics(
     store: &Store,
     identity: &ExportIdentity,
     dir: &Path,
 ) -> std::io::Result<PathBuf> {
     let device = identity.install_id;
+    let almanac = almanac_version();
     fs::create_dir_all(dir)?;
     let path = dir.join("analytics.jsonl");
     let mut out = BufWriter::new(File::create(&path)?);
@@ -243,6 +271,7 @@ pub fn export_analytics(
         let row = AnalyticsCellRow {
             schema: SCHEMA,
             app_version: env!("CARGO_PKG_VERSION"),
+            almanac_version: almanac.as_deref(),
             kind: "analytics_cell",
             device: device.to_string(),
             person: identity.person.to_string(),
@@ -273,6 +302,7 @@ pub fn export_analytics(
         let row = SessionSpanRow {
             schema: SCHEMA,
             app_version: env!("CARGO_PKG_VERSION"),
+            almanac_version: almanac.as_deref(),
             kind: "session_span",
             device: device.to_string(),
             person: identity.person.to_string(),
@@ -295,6 +325,7 @@ pub fn export_analytics(
             let row = UsageRow {
                 schema: SCHEMA,
                 app_version: env!("CARGO_PKG_VERSION"),
+            almanac_version: almanac.as_deref(),
                 kind,
                 device: identity.install_id,
                 person: identity.person,
@@ -313,6 +344,7 @@ pub fn export_analytics(
         let row = DelegationRow {
             schema: SCHEMA,
             app_version: env!("CARGO_PKG_VERSION"),
+            almanac_version: almanac.as_deref(),
             kind: "delegation",
             device: device.to_string(),
             person: identity.person.to_string(),
@@ -332,6 +364,7 @@ pub fn export_analytics(
         let row = CandidateRow {
             schema: SCHEMA,
             app_version: env!("CARGO_PKG_VERSION"),
+            almanac_version: almanac.as_deref(),
             kind: "label_candidate",
             device: device.to_string(),
             taxonomy_version: candidate.taxonomy_version,

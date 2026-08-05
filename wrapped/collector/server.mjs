@@ -210,13 +210,22 @@ function archive() {
   }
 }
 
+function localDay(d = new Date()) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
 function renderBoard() {
-  const today = new Date().toISOString().slice(0, 10);
+  const today = localDay();
   const people = db.prepare("SELECT person, MAX(received_ms) m FROM rows GROUP BY person ORDER BY m DESC").all();
   const rows = [];
   for (const p of people) {
     const last = db.prepare("SELECT body FROM rows WHERE person = :p ORDER BY received_ms DESC LIMIT 1").get({ p: p.person });
-    const version = JSON.parse(last.body).app_version ?? "pre-0.9.4";
+    const lastBody = JSON.parse(last.body);
+    const version = lastBody.app_version ?? "pre-0.9.4";
+    const almanac = lastBody.almanac_version ?? "—";
     const agg = (kind) =>
       db.prepare("SELECT json_extract(body,'$.name') n, SUM(json_extract(body,'$.runs')) r FROM rows WHERE person = :p AND kind = :k AND day = :d GROUP BY n ORDER BY r DESC")
         .all({ p: p.person, k: kind, d: today });
@@ -225,6 +234,7 @@ function renderBoard() {
     rows.push({
       person: p.person,
       version,
+      almanac,
       ageMin: Math.round((Date.now() - p.m) / 60000),
       shortcuts: sc.reduce((a, x) => a + x.r, 0),
       connectors: co.reduce((a, x) => a + x.r, 0),
@@ -235,7 +245,7 @@ function renderBoard() {
   rows.sort((a, b) => b.shortcuts - a.shortcuts || b.connectors - a.connectors || a.ageMin - b.ageMin);
   const esc = (v) => String(v ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
   const tr = rows.map((r, i) => `<tr class="${r.ageMin > 60 ? "stale" : ""}">
-    <td>${i + 1}</td><td class="who">${esc(r.person)}</td><td>${esc(r.version)}</td>
+    <td>${i + 1}</td><td class="who">${esc(r.person)}</td><td>${esc(r.version)}</td><td>${esc(r.almanac)}</td>
     <td class="num">${r.ageMin < 60 ? r.ageMin + "m" : (r.ageMin / 60).toFixed(1) + "h"}</td>
     <td class="num big">${r.shortcuts}</td><td class="det">${esc(r.scDetail) || "—"}</td>
     <td class="num big">${r.connectors}</td><td class="det">${esc(r.coDetail) || "—"}</td>
@@ -254,7 +264,7 @@ td{padding:9px 12px;border-bottom:1px solid #1e1e1e;vertical-align:top}
 </style></head><body>
 <h1>Houdini — today's board</h1>
 <div class="sub">${today} · auto-refreshes every 30s</div>
-<table><tr><th>#</th><th>person</th><th>version</th><th>last push</th><th>shortcuts</th><th>detail</th><th>connectors</th><th>detail</th></tr>${tr}</table>
+<table><tr><th>#</th><th>person</th><th>houdini</th><th>almanac</th><th>last push</th><th>shortcuts</th><th>detail</th><th>connectors</th><th>detail</th></tr>${tr}</table>
 </body></html>`;
 }
 

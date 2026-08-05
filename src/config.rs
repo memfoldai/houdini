@@ -71,8 +71,10 @@ fn d_analytics_model() -> String {
 }
 
 fn d_analytics_interval_ms() -> u64 {
-    60 * 60 * 1000
+    15 * 60 * 1000
 }
+
+const SUPERSEDED_ANALYTICS_INTERVALS_MS: &[u64] = &[60 * 60 * 1000];
 
 fn d_analytics_batch_limit() -> i64 {
     crate::analytics_job::DEFAULT_BATCH_LIMIT
@@ -181,6 +183,9 @@ pub fn load_or_init(config_file: &Path) -> std::io::Result<AppConfig> {
             Ok(mut cfg) => {
                 if crate::analytics::SUPERSEDED_DEFAULT_MODELS.contains(&cfg.analytics_model.as_str()) {
                     cfg.analytics_model = d_analytics_model();
+                }
+                if SUPERSEDED_ANALYTICS_INTERVALS_MS.contains(&cfg.analytics_interval_ms) {
+                    cfg.analytics_interval_ms = d_analytics_interval_ms();
                 }
                 write_config(config_file, &cfg)?;
                 return Ok(cfg);

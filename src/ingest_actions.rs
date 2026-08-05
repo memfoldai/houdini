@@ -37,7 +37,12 @@ impl ActionIngestor {
         let base = env_nonempty("OPENCLAW_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| self.home.clone());
-        HOMES.iter().map(|h| base.join(h)).collect()
+        let mut roots: Vec<PathBuf> = HOMES.iter().map(|h| base.join(h)).collect();
+        let app_support = self.home.join("Library/Application Support");
+        for container in ["Almanac Combined", "Almanac", "OpenClaw", "almanac"] {
+            roots.push(app_support.join(container).join(".openclaw"));
+        }
+        roots
     }
     pub fn watch_dirs(&self) -> Vec<PathBuf> {
         self.roots()
