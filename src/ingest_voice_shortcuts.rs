@@ -37,8 +37,105 @@ impl VoiceShortcutIngestor {
             .collect()
     }
 
-    pub fn poll(&mut self, store: &Store) -> usize {
+    fn narrator_paths(&self) -> Vec<PathBuf> {
+        [".almanac/narrator.log"]
+            .iter()
+            .map(|p| self.home.join(p))
+            .filter(|p| p.exists())
+            .collect()
+    }
+
+    fn poll_narrator(&mut self, store: &Store) -> usize {
+        let now_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
         let mut added = 0;
+        for path in self.narrator_paths() {
+            let Ok(md) = fs::metadata(&path) else { continue };
+            let size = md.len();
+            let cursor_key = format!("voice_narrator_log_cursor:{}", path.display());
+            let stored = store
+                .get_setting(&cursor_key)
+                .ok()
+                .flatten()
+                .and_then(|v| v.parse::<u64>().ok());
+            let Some(mut start) = stored else {
+                let _ = store.set_setting(&cursor_key, &size.to_string());
+                continue;
+            };
+            if size < start {
+                start = size;
+                let _ = store.set_setting(&cursor_key, &size.to_string());
+                continue;
+            }
+            if size == start {
+                continue;
+            }
+            let Ok(mut f) = fs::File::open(&path) else { continue };
+            if f.seek(SeekFrom::Start(start)).is_err() {
+                continue;
+            }
+            let mut body = String::new();
+            if f.read_to_string(&mut body).is_err() {
+                continue;
+            }
+            if !body.ends_with('\n') {
+                match body.rfind('\n') {
+                    Some(cut) => body.truncate(cut + 1),
+                    None => body.clear(),
+                }
+            }
+            let mut line_off = start;
+            for line in body.lines() {
+                let this_off = line_off;
+                line_off += line.len() as u64 + 1;
+                let Some(run) = parse_gate_line(line) else {
+                    continue;
+                };
+                let sc_ext = format!("narr\u{1f}{this_off}\u{1f}shortcut");
+                let target = redact::redact_deterministic(&run.arg).text;
+                let rec = ActionRecord {
+                    ext_id: &sc_ext,
+                    source: SOURCE,
+                    session_id: "voice",
+                    actor: Actor::Human,
+                    app: Some("voice"),
+                    tool: "shortcut",
+                    action: &run.shortcut,
+                    kind: ActionKind::Mutating.as_str(),
+                    target_redacted: Some(&target),
+                    ts_ms: now_ms,
+                };
+                if store.insert_action(&rec).unwrap_or(false) {
+                    added += 1;
+                }
+                for (i, (step, connector)) in run.steps.iter().enumerate() {
+                    let ext = format!("narr\u{1f}{this_off}\u{1f}conn{i}");
+                    let rec = ActionRecord {
+                        ext_id: &ext,
+                        source: SOURCE,
+                        session_id: "voice",
+                        actor: Actor::Agent,
+                        app: Some(connector),
+                        tool: "connector",
+                        action: step,
+                        kind: ActionKind::Mutating.as_str(),
+                        target_redacted: None,
+                        ts_ms: now_ms,
+                    };
+                    if store.insert_action(&rec).unwrap_or(false) {
+                        added += 1;
+                    }
+                }
+            }
+            let _ = store.set_setting(&cursor_key, &(start + body.len() as u64).to_string());
+        }
+        added
+    }
+
+    pub fn poll(&mut self, store: &Store) -> usize {
+        let mut added = self.poll_narrator(store);
         for path in self.trace_paths() {
             let Ok(md) = fs::metadata(&path) else { continue };
             let mtime = md
@@ -123,6 +220,39 @@ impl VoiceShortcutIngestor {
     }
 }
 
+struct GateRun {
+    shortcut: String,
+    arg: String,
+    steps: Vec<(String, String)>,
+}
+
+fn parse_gate_line(line: &str) -> Option<GateRun> {
+    let rest = line.strip_prefix("[voice/action-gate] action gate: ")?;
+    let (shortcut, rest) = rest.split_once(' ')?;
+    let rest = rest.strip_prefix('"')?;
+    let (arg, rest) = rest.split_once('"')?;
+    let (_, rest) = rest.split_once("\u{2192} ")?;
+    let (status, rest) = rest.split_once(' ').unwrap_or((rest, ""));
+    if status != "ok" {
+        return None;
+    }
+    let mut steps = Vec::new();
+    let mut pending_step: Option<String> = None;
+    for tok in rest.split_whitespace() {
+        if let Some(c) = tok.strip_prefix("command=") {
+            let step = pending_step.take().unwrap_or_else(|| shortcut.to_string());
+            steps.push((step, c.to_string()));
+        } else if !tok.starts_with('(') && !tok.starts_with("status=") && !tok.ends_with(')') && tok.contains('.') {
+            pending_step = Some(tok.to_string());
+        }
+    }
+    Some(GateRun {
+        shortcut: shortcut.to_string(),
+        arg: arg.to_string(),
+        steps,
+    })
+}
+
 struct VoiceRun {
     ext_id: String,
     session_key: String,
@@ -169,6 +299,34 @@ mod tests {
 {"ts":"2026-08-03T16:33:53.161Z","pid":97933,"proc":"narrator","cat":"action-gate","msg":"acting","sessionKey":"agent:main:main","runId":1,"tool":"visualise","argumentPreview":"visualize how this works"}
 {"ts":"2026-08-03T16:35:00.000Z","pid":97933,"proc":"narrator","cat":"action-gate","msg":"executed","sessionKey":"agent:main:main","runId":2,"tool":"schedule","command":"shortcut schedule tomorrow 4pm","status":"ok","execMs":900}
 "#;
+
+    #[test]
+    fn narrator_gate_lines_yield_shortcut_and_connector_actions_from_eof() {
+        let dir = std::env::temp_dir().join(format!("narr-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join(".almanac")).unwrap();
+        let log = dir.join(".almanac/narrator.log");
+        std::fs::write(&log, "[voice/action-gate] old line before first sight\n").unwrap();
+
+        let store = Store::open_in_memory().unwrap();
+        let mut ing = VoiceShortcutIngestor::new(dir.clone());
+        assert_eq!(ing.poll(&store), 0, "first sight only records the EOF cursor");
+
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new().append(true).open(&log).unwrap();
+        writeln!(f, "[voice/action-gate] action gate: visualise \"how transformers work\" \u{2192} ok (exec=19281ms, run=3) visualise.visualise status=ok command=mcp-bridge").unwrap();
+        writeln!(f, "[voice/action-gate] action gate: schedule \"tomorrow 4pm\" \u{2192} error (exec=100ms, run=4)").unwrap();
+        drop(f);
+        assert_eq!(ing.poll(&store), 2, "one shortcut + one connector; the errored run is skipped");
+        assert_eq!(ing.poll(&store), 0, "cursor advanced; nothing re-added");
+
+        let sc = store.shortcut_spans().unwrap();
+        assert_eq!(sc.len(), 1);
+        assert_eq!(sc[0].action, "visualise");
+        let conn = store.connector_spans().unwrap();
+        assert_eq!(conn.len(), 1);
+        assert_eq!((conn[0].app.as_str(), conn[0].action.as_str()), ("mcp-bridge", "visualise.visualise"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 
     #[test]
     fn executed_voice_runs_become_human_shortcut_actions_once() {
