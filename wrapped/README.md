@@ -48,17 +48,33 @@ ingest → export → wrapped end to end).
 
 ## The metrics
 
-A general, Spotify-style recap first — team-first, one idea per card,
-superlatives so nobody is "last": total engaged time, prompts sent, top tool,
-tools used, what the team worked on, research-vs-doing, peak hour, busiest day,
-longest session, nested-AI handoffs, the most-prolific reveal, a top-5 podium,
-and a unique per-person badge for everyone. Then two team-specific trophies as
-the finale:
+One idea per card, each one a number the rows can defend. Alma leads, because
+Alma is what the team steers by:
 
-- **🏆 The Alma × Claude Code Award** — most Claude Code run through Alma
-  (`tool == openclaw && delegate_tool == claude_code`, by turns).
-- **🔬 The Alma × Research Award** — most research through Alma
-  (`tool == openclaw && shape == asking`, by turns).
+- **Volume** — shortcut runs for the week, charted per day.
+- **Repertoire and reach** — shortcuts ranked by runs, then re-ranked by how many
+  distinct people ran them. The two orders rarely match, and that gap is the
+  point: a shortcut can be enormous for one person and unknown to everyone else.
+- **Trend** — four Mon–Sun buckets, so "a lot" is stated against history instead
+  of asserted; the current bucket is highlighted.
+- **What changed** — when Alma drove coding agents in an earlier bucket and none
+  this week, that collapse gets its own card. Drive counts come from the
+  transcript's own tool calls, not from a model's label.
+- **Trigger and shape** — the share of runs started by voice, and Alma's session
+  count set against its total clock minutes.
+- **Surface area** — connector calls bucketed into capability families, carrying
+  runs AND distinct people, so one person's run at a family cannot read as
+  team-wide adoption.
+- **Debuts** — shortcuts whose first-ever run landed inside the week.
+- **The board** — everyone by Alma actions (shortcut runs + connector calls).
+
+Alma is measured in ACTIONS, never in prompts: a voice shortcut leaves a run,
+not a labeled turn, so its prompt share is near zero even on a week when the
+whole team used it. That prompt count still appears in the closing ledger, as
+context rather than as the verdict.
+
+Personas, badges, and trophies are gone: they ranked people on invented axes
+instead of reporting what happened.
 
 Engaged time is gap-aware: an idle gap over 30 minutes (a step-away, a sleep, a
 weekend) ends a work burst and does not count, so a CLI transcript resumed over

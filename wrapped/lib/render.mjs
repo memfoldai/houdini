@@ -64,6 +64,28 @@ function body(card) {
         .join("");
       return `<ul class="ranked">${rows}</ul>`;
     }
+    case "bars": {
+      // Vertical columns share one scale so day-to-day height is readable as a
+      // ratio; the max is floored at 1 so an all-zero week can't divide by zero.
+      const max = Math.max(...card.bars.map((b) => b.value), 1);
+      const cols = card.bars
+        .map(
+          (b, i) =>
+            `<li style="--i:${i}"${b.on ? ' data-on="1"' : ""}><span class="bar-val">${esc(b.value)}</span><i style="--h:${Math.max(2, Math.round((b.value / max) * 100))}%"></i><span class="bar-label">${esc(b.label)}</span></li>`,
+        )
+        .join("");
+      return `<ul class="bars">${cols}</ul>`;
+    }
+    case "counts": {
+      const max = Math.max(...card.rows.map((r) => r.value), 1);
+      const rows = card.rows
+        .map(
+          (r, i) =>
+            `<li style="--i:${i}"><div class="ct-head"><span class="ct-label">${esc(r.label)}</span><span class="ct-val"><span class="num" data-to="${r.value}">0</span>${r.meta ? `<small>${esc(r.meta)}</small>` : ""}</span></div><div class="ct-track"><i style="--w:${Math.max(3, Math.round((r.value / max) * 100))}%"></i></div></li>`,
+        )
+        .join("");
+      return `<ul class="counts">${rows}</ul>`;
+    }
     case "podium": {
       const rows = card.rows
         .map(
@@ -181,8 +203,12 @@ p,div,span,li,ol,button{overflow-wrap:break-word;word-break:normal;hyphens:none}
 }
 .card.title .kicker{display:flex;align-items:center;gap:2.4cqmin}
 .card.title .kicker::after{content:"";flex:1;height:2px;background:color-mix(in srgb,var(--accent) 55%,transparent)}
+/* Component selectors are ELEMENT-QUALIFIED on purpose: every section carries
+   its card kind as a class alongside "card", so a bare .bars/.counts/.ranked
+   rule would style the whole card as well as the list inside it — and an
+   explicit height there collapses the card down to chart height. */
 /* ranked breakdown (categories) */
-.ranked{list-style:none;display:flex;flex-direction:column;gap:3.2cqmin;margin-top:1cqmin}
+ul.ranked{list-style:none;display:flex;flex-direction:column;gap:3.2cqmin;margin-top:1cqmin}
 .ranked li{display:flex;flex-direction:column;gap:1.4cqmin}
 .rk-head{display:flex;align-items:baseline;justify-content:space-between;gap:1ch;font-weight:800}
 .rk-label{font-size:4.6cqmin;letter-spacing:.01em;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -190,8 +216,29 @@ p,div,span,li,ol,button{overflow-wrap:break-word;word-break:normal;hyphens:none}
 .rk-track{height:3.4cqmin;border-radius:999px;background:color-mix(in srgb,var(--ink) 16%,transparent);overflow:hidden}
 .rk-track i{display:block;height:100%;width:0;border-radius:999px;background:var(--accent);transition:width .9s cubic-bezier(.2,.8,.2,1)}
 .card.active .rk-track i{width:var(--w)}
+/* bars: a week or a month as columns. Heights animate up from the baseline on
+   activation; the current bucket is filled with the accent, the rest sit in a
+   muted ink so "this week" reads without a legend. */
+ul.bars{list-style:none;display:flex;align-items:flex-end;gap:2cqmin;height:44cqmin;margin-top:1cqmin}
+.bars li{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;gap:1.4cqmin;height:100%}
+.bars .bar-val{font-size:3.6cqmin;font-weight:900;font-variant-numeric:tabular-nums}
+.bars i{display:block;width:100%;height:0;border-radius:1.2cqmin 1.2cqmin 0 0;background:color-mix(in srgb,var(--ink) 30%,transparent);transition:height .7s cubic-bezier(.2,.8,.2,1);transition-delay:calc(var(--i) * .06s)}
+.bars li[data-on] i{background:var(--accent)}
+.card.active .bars i{height:var(--h)}
+.bars .bar-label{font-size:3.2cqmin;font-weight:800;letter-spacing:.06em;text-transform:uppercase;opacity:.72;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+/* counts: ranked rows carrying a raw number plus a secondary reading (how many
+   people), so volume and reach can't be mistaken for each other. */
+ul.counts{list-style:none;display:flex;flex-direction:column;gap:2.4cqmin;margin-top:1cqmin}
+.counts li{display:flex;flex-direction:column;gap:1.1cqmin}
+.ct-head{display:flex;align-items:baseline;justify-content:space-between;gap:1.5ch;font-weight:800}
+.ct-label{font-size:4.3cqmin;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ct-val{font-size:5.2cqmin;flex:none;display:flex;align-items:baseline;gap:.6ch}
+.ct-val small{font-size:.5em;font-weight:700;opacity:.66;letter-spacing:.02em}
+.ct-track{height:2.6cqmin;border-radius:999px;background:color-mix(in srgb,var(--ink) 14%,transparent);overflow:hidden}
+.ct-track i{display:block;height:100%;width:0;border-radius:999px;background:var(--accent);transition:width .8s cubic-bezier(.2,.8,.2,1);transition-delay:calc(var(--i) * .05s)}
+.card.active .ct-track i{width:var(--w)}
 /* podium */
-.podium{list-style:none;display:flex;flex-direction:column;gap:1.7cqmin}
+ol.podium{list-style:none;display:flex;flex-direction:column;gap:1.7cqmin}
 .podium li{display:flex;align-items:center;gap:2.2cqmin;font-weight:800;font-size:5.4cqmin;opacity:0;transform:translateY(8px);transition:opacity .45s ease,transform .45s ease;transition-delay:calc(var(--i) * .05s)}
 .card.active .podium li{opacity:1;transform:none}
 .podium .rank{width:1.5em;color:var(--accent);flex:none;font-variant-numeric:tabular-nums}
@@ -235,7 +282,7 @@ p,div,span,li,ol,button{overflow-wrap:break-word;word-break:normal;hyphens:none}
 @keyframes rise{from{opacity:0;transform:translateY(26px)}to{opacity:1;transform:none}}
 @media (prefers-reduced-motion: reduce){
   .card{transition:none}
-  .rk-track i,.podium li{transition:none}
+  .rk-track i,.ct-track i,.bars i,.podium li{transition:none}
   .podium li{opacity:1;transform:none}
   .card.title.active .mast-line,.card.title.active .kicker,.card.title.active .sub{animation:none}
 }

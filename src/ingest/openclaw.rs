@@ -253,28 +253,46 @@ fn parse_ts(value: Option<&Value>) -> Option<i64> {
     }
 }
 
+/// Alma writes a spawned subagent's task as a `user` message on the subagent's
+/// own session. It is composed by the agent, not typed or spoken by a human,
+/// and it quotes the human's original ask verbatim — so counting it would both
+/// invent a prompt and double-count the real one.
+const SUBAGENT_ENVELOPE: &str = "[Subagent Context]";
+
+/// `content` is a bare string on older transcripts and an array of typed blocks
+/// on current ones. Both shapes carry the same prose, so read text blocks the
+/// same way for either role; a reader that only understood the string form
+/// silently dropped every turn Alma wrote after the format changed.
+fn content_text(message: &Value) -> String {
+    match message.get("content") {
+        Some(Value::String(s)) => s.trim().to_string(),
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+            .filter_map(|b| b.get("text").and_then(Value::as_str))
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
 fn user_text(message: &Value) -> Option<String> {
-    let raw = message.get("content").and_then(Value::as_str)?;
+    let raw = content_text(message);
+    if raw.is_empty() || raw.contains(SUBAGENT_ENVELOPE) {
+        return None;
+    }
     let inner = raw
         .split_once("## Inbound user message")
         .map(|(_, rest)| rest)
-        .unwrap_or(raw);
+        .unwrap_or(&raw);
     let cleaned = inner.split("\n##").next().unwrap_or(inner).trim();
     (!cleaned.is_empty()).then(|| cleaned.to_string())
 }
 
 fn assistant_text(message: &Value) -> String {
-    let Some(blocks) = message.get("content").and_then(Value::as_array) else {
-        return String::new();
-    };
-    blocks
-        .iter()
-        .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
-        .filter_map(|b| b.get("text").and_then(Value::as_str))
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
+    content_text(message)
 }
 
 #[cfg(test)]
@@ -287,6 +305,30 @@ mod tests {
 {"type":"message","id":"a","timestamp":"2026-07-15T13:04:24.380Z","message":{"role":"user","content":"[Wed 2026-07-15] ## Inbound user message\nAdd an image to the slide\n\n## Narrator context\nfoo","timestamp":"2026-07-15T13:04:24.380Z"}}
 {"type":"message","id":"b","timestamp":"2026-07-15T13:04:26.000Z","message":{"role":"assistant","provider":"anthropic","model":"claude-sonnet-5","content":[{"type":"text","text":"Done, added the image."}],"timestamp":"2026-07-15T13:04:26.000Z"}}
 "#;
+
+    #[test]
+    fn block_shaped_user_content_is_read_and_subagent_envelopes_are_not_prompts() {
+        // Alma switched user `content` from a bare string to typed blocks; the
+        // old reader returned None for the array and lost every human prompt.
+        const SAMPLE: &str = r#"{"type":"session","version":3,"id":"s1","timestamp":"2026-08-04T08:55:07.532Z"}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"[Tue 2026-08-04] ## Inbound user message\nDraw this as a diagram\n\n## Narrator context\nignore me"}],"timestamp":"2026-08-04T08:55:08.000Z"}}
+{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"On it."}],"timestamp":"2026-08-04T08:55:09.000Z"}}
+{"type":"message","message":{"role":"user","content":[{"type":"text","text":"[Subagent Context] You are running as a subagent (depth 1/1).\n\n## Objective\nThe user asked (verbatim): \"visualize\""}],"timestamp":"2026-08-04T08:55:10.000Z"}}
+"#;
+        let dir = std::env::temp_dir().join(format!("oc-blocks-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("s1.jsonl");
+        std::fs::write(&path, SAMPLE).unwrap();
+        let sess = OpenClaw.parse_file(&path).expect("session parses");
+        let users: Vec<_> = sess
+            .turns
+            .iter()
+            .filter(|t| t.role == Role::User)
+            .map(|t| t.text.as_str())
+            .collect();
+        assert_eq!(users, vec!["Draw this as a diagram"], "block content is read, envelope is not a prompt");
+        assert_eq!(sess.turns.iter().filter(|t| t.role == Role::Assistant).count(), 1);
+    }
 
     #[test]
     fn discovers_the_packaged_app_container_not_only_home_dotdirs() {

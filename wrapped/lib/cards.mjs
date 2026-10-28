@@ -1,31 +1,32 @@
-import { assignSuperlatives } from "./superlatives.mjs";
+import { assignPersonas } from "./personas.mjs";
 
 const int = (n) => Math.round(n).toLocaleString("en-US");
 const plural = (n, one, many) => (n === 1 ? one : many);
-
-function hours(minutes) {
-  if (minutes >= 60) return { heroNumber: Math.round(minutes / 60), heroUnit: plural(Math.round(minutes / 60), "hour", "hours") };
-  return { heroNumber: minutes, heroUnit: plural(minutes, "minute", "minutes") };
-}
 
 function firstName(person) {
   return person.split(/[\s._-]+/)[0] || person;
 }
 
-// Fixed narrative order (the research's canonical arc): a general, Spotify-style
-// team recap first — volume, tools, vibes, the reveal, the podium, everyone's
-// superlative — with the two Alma trophies saved as the special finale. Cards
-// with no data drop out so a quiet week never renders an empty block. Copy is
-// second-person, short, and casual on purpose; the number is the joke.
+// Below this share the cross-tool chart is left out entirely (see its use).
+const ALMA_SHARE_FLOOR = 15;
+
+const WEEKDAYS = { Mon: "Monday", Tue: "Tuesday", Wed: "Wednesday", Thu: "Thursday", Fri: "Friday", Sat: "Saturday", Sun: "Sunday" };
+
+// The arc: the whole team's AI week first (volume, which AI, what for, when),
+// then Alma in detail because that is what the team steers by, then one card
+// per person. Every card states a number the rows can defend, and a card whose
+// evidence is missing drops out rather than hedge.
 export function buildCards(m, opts = {}) {
   const team = opts.team ?? "Houdini";
+  const history = opts.history ?? null;
+  const a = m.alma;
   const cards = [];
 
   cards.push({
     kind: "title",
     kicker: opts.weekLabel ?? "",
     heroText: team,
-    sub: "your team's week with AI. the receipts are in.",
+    sub: "your team's week with AI. every number below is counted, not guessed.",
   });
 
   if (m.peopleCount === 0) {
@@ -34,20 +35,10 @@ export function buildCards(m, opts = {}) {
       kicker: "nothing yet",
       heroNumber: 0,
       heroUnit: "prompts",
-      sub: "quiet week so far. once everyone's devices check in, this fills up.",
+      sub: "no devices reported this week.",
     });
-    cards.push({ kind: "summary", kicker: opts.weekLabel ?? "", heroText: team, grid: summaryGrid(m), sub: "check back once everyone's been cooking." });
+    cards.push({ kind: "summary", kicker: opts.weekLabel ?? "", heroText: team, grid: summaryGrid(m), sub: "check back once the devices check in." });
     return cards;
-  }
-
-  if (m.totalMinutes > 0) {
-    const jobs = Math.round(m.workWeeks);
-    cards.push({
-      kind: "stat",
-      kicker: "time spent with AI",
-      ...hours(m.totalMinutes),
-      sub: jobs >= 2 ? `as a team. that's ${int(jobs)} entire work weeks in seven days. be so fr.` : "as a team. respectable. suspicious, but respectable.",
-    });
   }
 
   if (m.totalTurns > 0) {
@@ -56,42 +47,30 @@ export function buildCards(m, opts = {}) {
       kicker: "prompts sent",
       heroNumber: m.totalTurns,
       heroUnit: plural(m.totalTurns, "prompt", "prompts"),
-      sub: "all fired at the clankers. the group chat could never.",
+      sub: `across ${m.peopleCount} ${plural(m.peopleCount, "person", "people")} and every AI on their machines.`,
     });
   }
 
-  if (m.topTool) {
+  if (m.totalMinutes > 0) {
     cards.push({
       kind: "stat",
-      kicker: "the team's ride or die",
-      heroText: m.topTool.name,
-      sub: "opened more than the fridge. and this team opens the fridge a lot.",
+      kicker: "time inside the tools",
+      heroNumber: m.totalHours,
+      heroUnit: plural(m.totalHours, "hour", "hours"),
+      sub: "measured from session transcripts, idle gaps removed.",
     });
   }
 
-  if (m.toolShare.length > 1) {
+  // Alma's own requests are still under-counted upstream, so this ranking only
+  // earns a slide once Alma is unambiguously a big share of the week. Below that
+  // the chart would argue about a number the rows cannot yet settle.
+  const almaRequests = m.requestShare.find((t) => t.tool === "openclaw");
+  if (m.requestShare.length > 1 && (almaRequests?.pct ?? 0) >= ALMA_SHARE_FLOOR) {
     cards.push({
       kind: "ranked",
       kicker: "which AI got used the most",
-      rows: m.toolShare.slice(0, 5).map((t) => ({ label: t.name, pct: t.pct })),
-      sub: "how the team's prompts split across every AI.",
-    });
-  }
-
-  if (m.alma.categories.length) {
-    cards.push({
-      kind: "ranked",
-      kicker: "what the team ran Alma for",
-      rows: m.alma.categories.map((c) => ({ label: c.label, pct: c.pct })),
-      sub: `Alma got ${m.alma.share}% of the team's prompts. here's where they went.`,
-    });
-  } else {
-    cards.push({
-      kind: "stat",
-      kicker: "the Alma report",
-      heroNumber: m.alma.share,
-      heroUnit: "% of prompts",
-      sub: "Alma barely got a look this week. it's right there, people.",
+      rows: m.requestShare.slice(0, 5).map((t) => ({ label: t.name, pct: t.pct })),
+      sub: `${int(m.totalRequests)} requests across the team — every prompt typed, and every shortcut said out loud.`,
     });
   }
 
@@ -100,53 +79,132 @@ export function buildCards(m, opts = {}) {
       kind: "ranked",
       kicker: "what the team used AI for",
       rows: m.domainRank.slice(0, 5).map((d) => ({ label: d.label, pct: d.pct })),
-      sub: "what the team was actually working on. mostly.",
+      sub: "by prompt, across every tool.",
     });
+  }
+
+  if (m.totalTurns > 0) {
+    cards.push({
+      kind: "stat",
+      kicker: "the team's busiest hour",
+      heroText: m.peakHourLabel,
+      sub: "more prompts land in this hour than any other, on everyone's own clock.",
+    });
+  }
+
+  if (a.actions === 0) {
+    cards.push({ kind: "summary", kicker: opts.weekLabel ?? "", heroText: team, grid: summaryGrid(m), sub: "the week, itemized." });
+    return cards;
   }
 
   cards.push({
     kind: "stat",
-    kicker: "the team's rush hour",
-    heroText: m.peakHourLabel,
-    // When the peak genuinely lands in the six o'clock hour, the 6-7 meme
-    // writes itself; any other hour gets the plain line.
-    sub: m.peakHourLabel.startsWith("6 ")
-      ? "the six-seven window. we don't make the rules."
-      : "the collective lock-in hour. calendars fear it.",
+    kicker: "shortcuts run through Alma",
+    heroNumber: a.shortcutRuns,
+    heroUnit: plural(a.shortcutRuns, "run", "runs"),
+    sub: `${a.distinctShortcuts} different shortcuts, ${a.peopleUsing} ${plural(a.peopleUsing, "person", "people")}, seven days.`,
   });
 
-  if (m.busyDay) {
+  if (a.byDay.some((d) => d.shortcuts > 0)) {
+    const peak = a.byDay.reduce((x, d) => (d.shortcuts > x.shortcuts ? d : x));
+    cards.push({
+      kind: "bars",
+      kicker: "shortcut runs, by day",
+      bars: a.byDay.map((d) => ({ label: d.label, value: d.shortcuts })),
+      sub: `${WEEKDAYS[peak.label] ?? peak.label} was the peak with ${peak.shortcuts}.${coverageNote(m.coverage, a.byDay.at(-1))}`,
+    });
+  }
+
+  if (a.byName.length) {
+    cards.push({
+      kind: "counts",
+      kicker: "most-run shortcuts",
+      rows: a.byName.slice(0, 8).map((s) => ({ label: s.key, value: s.runs, meta: `${s.people} ${plural(s.people, "person", "people")}` })),
+      sub: "counted by runs. the small number is how many people ran it.",
+    });
+
+    const broad = a.byReach[0];
+    cards.push({
+      kind: "counts",
+      kicker: "widest reach",
+      rows: a.byReach.slice(0, 8).map((s) => ({ label: s.key, value: s.people, meta: `${s.runs} ${plural(s.runs, "run", "runs")}` })),
+      sub: `${broad.key} reached ${broad.people} of ${a.peopleUsing}. reach and volume are not the same list.`,
+    });
+  }
+
+  if (a.sessions > 0) {
     cards.push({
       kind: "stat",
-      kicker: "busiest day",
-      heroText: m.busyDay.label,
-      sub: "carried the week like a group project with one working member.",
+      kicker: "Alma sessions",
+      heroNumber: a.sessions,
+      heroUnit: plural(a.sessions, "session", "sessions"),
+      sub: `${a.minutes} minutes of clock time between them. for ${a.oneShotPeople} of ${a.peopleWithSessions} people the longest one all week was two minutes or less.`,
     });
   }
 
-  const board = m.byMinutes.filter((p) => p.minutes > 0);
-  if (board.length > 1) {
+  if (a.capabilities.length) {
     cards.push({
-      kind: "podium",
-      kicker: "the whole team, by AI hours",
-      rows: board.map((p, i) => ({
-        rank: i + 1,
-        name: firstName(p.person),
-        value: Math.round(p.minutes / 60) || 0,
-        unit: "h",
-      })),
-      sub: "the full leaderboard. no hiding. we all saw it.",
+      kind: "counts",
+      kicker: "what Alma reached into",
+      rows: a.capabilities.slice(0, 8).map((c) => ({ label: c.key, value: c.runs, meta: `${c.people} ${plural(c.people, "person", "people")}` })),
+      sub: "connector calls by capability. one person can run up a whole family alone, so watch the small number.",
     });
   }
 
-  for (const s of assignSuperlatives(m.people)) {
+  if (history?.debuts?.length) {
+    const n = history.debuts.length;
     cards.push({
-      kind: "person",
-      personName: firstName(s.person),
-      badge: s.badge,
-      line: s.line,
-      chips: s.chips,
+      kind: "counts",
+      kicker: "new shortcuts this week",
+      rows: history.debuts.slice(0, 8).map((d) => ({ label: d.key, value: d.runs, meta: `${d.people} ${plural(d.people, "person", "people")}` })),
+      sub: `${n} ${plural(n, "shortcut", "shortcuts")} ran for the first time ever${n > 8 ? ", showing the eight most-run" : ""}.`,
     });
+  }
+
+  // Dictation is a separate product (push-to-talk speech to text). Its weekly
+  // aggregates ride in as a sidecar so the wrapped can show where the team is
+  // actually talking to its machines, not just typing at them.
+  const d = opts.dictation;
+  if (d && d.words > 0) {
+    cards.push({
+      kind: "stat",
+      kicker: "words spoken to the machine",
+      heroNumber: d.words,
+      heroUnit: "words dictated",
+      sub: `about ${d.speechMinutes} minutes of talking, at${d.wpm ? ` roughly ${d.wpm} words a minute` : " a steady clip"}. the team would rather say it than type it.`,
+    });
+    if (d.apps?.length) {
+      cards.push({
+        kind: "counts",
+        kicker: "where the team dictates",
+        rows: d.apps.slice(0, 8).map((x) => ({ label: x.label, value: x.value, meta: "words" })),
+        sub: "which apps the spoken words landed in. notes and Claude do most of the listening.",
+      });
+    }
+    if (d.lengths?.length) {
+      cards.push({
+        kind: "bars",
+        kicker: "how much they say per go",
+        bars: d.lengths.map((x) => ({ label: x.label, value: x.value })),
+        sub: "one dictation, sized from a quick quip to a full rant. most land around a single line.",
+      });
+    }
+    if (d.declinedNoField > 0) {
+      cards.push({
+        kind: "stat",
+        kicker: "talking to the void",
+        heroNumber: d.declinedNoField,
+        heroUnit: "times",
+        sub: "someone hit dictate with no text box in focus, so the words went nowhere. the void is a bad listener.",
+      });
+    }
+  }
+
+  // A week can ship hand-written personas (someone read the data and wrote the
+  // cards); they replace the rule-driven set wholesale rather than mixing.
+  const personas = opts.personas?.length ? opts.personas : assignPersonas(m.people);
+  for (const p of personas) {
+    cards.push({ kind: "person", personName: firstName(p.person), badge: p.badge, line: p.line });
   }
 
   cards.push({
@@ -154,19 +212,31 @@ export function buildCards(m, opts = {}) {
     kicker: opts.weekLabel ?? "",
     heroText: team,
     grid: summaryGrid(m),
-    sub: "the week, itemized. screenshot it before anyone starts denying things.",
+    sub: "the week, itemized.",
   });
 
   return cards;
 }
 
+// A device uploads its whole export in one push, so a person with no rows on
+// the closing days either did nothing or stopped checking in. The rows cannot
+// tell those apart, so the chart says so instead of implying a quiet weekend.
+function coverageNote(coverage, lastDay) {
+  if (!coverage?.quiet?.length) return "";
+  const n = coverage.quiet.length;
+  const day = WEEKDAYS[lastDay?.label] ?? "the last day";
+  return ` ${n} of ${coverage.total} ${plural(coverage.total, "device", "devices")} last checked in before ${day}, so the closing days are a floor, not a total.`;
+}
+
 function summaryGrid(m) {
+  const a = m.alma;
   const grid = [
-    { label: "AI time", value: `${m.totalHours}h` },
     { label: "Prompts", value: int(m.totalTurns) },
+    { label: "AI time", value: `${int(m.totalHours)}h` },
     { label: "People", value: int(m.peopleCount) },
   ];
-  if (m.topTool) grid.push({ label: "Top tool", value: m.topTool.name });
-  grid.push({ label: "Peak", value: m.peakHourLabel });
+  if (m.topTool) grid.push({ label: "Top AI", value: m.topTool.name });
+  if (a.shortcutRuns > 0) grid.push({ label: "Shortcut runs", value: int(a.shortcutRuns) });
+  if (a.connectorRuns > 0) grid.push({ label: "Connector calls", value: int(a.connectorRuns) });
   return grid;
 }

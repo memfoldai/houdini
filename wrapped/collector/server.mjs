@@ -7,11 +7,11 @@
 import { createServer } from "node:http";
 import { DatabaseSync } from "node:sqlite";
 import { timingSafeEqual } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 import { collect, parseNdjson, rowKey } from "../lib/parse.mjs";
-import { weekWindow, filterToWeek, compute, lastWeekArg } from "../lib/metrics.mjs";
+import { weekWindow, filterToWeek, compute, lastWeekArg, almaHistory } from "../lib/metrics.mjs";
 import { buildCards } from "../lib/cards.mjs";
 import { renderHtml } from "../lib/render.mjs";
 
@@ -51,6 +51,11 @@ const upsert = db.prepare(`INSERT INTO rows (key, kind, day, person, device, rec
 // push. A chunked uploader would break this contract; the device sends one body.
 const pruneStale = db.prepare("DELETE FROM rows WHERE device = :device AND received_ms < :received");
 const selectWindow = db.prepare("SELECT body FROM rows WHERE day >= :start AND day <= :end ORDER BY day");
+// "New this week" is a claim about all of history, not about the reported
+// window, so debut detection reads every shortcut row ever stored. These rows
+// are a few hundred at most — far cheaper than being wrong about a debut.
+const selectShortcuts = db.prepare("SELECT body FROM rows WHERE kind = 'shortcut'");
+const selectLastPush = db.prepare("SELECT person, MAX(received_ms) AS ms FROM rows WHERE person IS NOT NULL GROUP BY person");
 
 // Length is compared first because timingSafeEqual throws on a mismatch; an
 // empty configured token means the endpoint is disabled (fail closed), never
@@ -131,14 +136,34 @@ function windowRows(window) {
 
 function renderWrapped(weekArg) {
   const window = weekWindow(new Date(), weekArg ?? lastWeekArg());
-  const { cells, spans, delegations } = windowRows(window);
-  const wc = filterToWeek(cells, window);
-  const ws = filterToWeek(spans, window);
-  const wd = filterToWeek(delegations, window);
-  const metrics = compute(wc, ws, wd);
-  const cards = buildCards(metrics, { team: TEAM_NAME, weekLabel: window.label });
+  const { cells, spans, usage } = windowRows(window);
+  const pushes = new Map(selectLastPush.all().map((r) => [r.person, localDay(new Date(r.ms))]));
+  const metrics = compute(filterToWeek(cells, window), filterToWeek(spans, window), filterToWeek(usage, window), window, pushes);
+  const history = almaHistory(collect(selectShortcuts.all().map((r) => JSON.parse(r.body))).usage, window);
+  const cards = buildCards(metrics, { team: TEAM_NAME, weekLabel: window.label, history, personas: curatedPersonas(window), dictation: weekSidecar(window, "dictation") });
   return { window, metrics, html: renderHtml(cards, { team: TEAM_NAME, weekLabel: window.label }) };
 }
+
+// Hand-written personas for a week live beside the archived wrapped, named by
+// the week's Monday. Present → they replace the generated set for that week.
+function curatedPersonas(window) {
+  return weekSidecar(window, "personas");
+}
+
+// A per-week JSON file living beside the archived wrapped, named
+// `<kind>-<Monday>.json`. Present and valid means it is used; anything wrong
+// falls back to undefined so a bad file never takes the whole wrapped down.
+function weekSidecar(window, kind) {
+  const path = join(WRAPPED_DIR, `${kind}-${window.start}.json`);
+  if (!existsSync(path)) return undefined;
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    log(`${kind} sidecar unreadable, skipping: ${e.message}`);
+    return undefined;
+  }
+}
+
 
 const server = createServer(async (req, res) => {
   try {
